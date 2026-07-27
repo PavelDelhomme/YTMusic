@@ -8,7 +8,7 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 .PHONY: help install dev dev-server dev-client build start deploy-local \
 	clean-vite icons docker-dev docker-dev-down docker-build \
 	mobile-qr mobile-hint mobile-adb mobile-install-adb test-register-adb \
-	update-apps status status-watch logs ports kill-dev \
+	update-apps status status-watch logs logs-tail logs-watch ports kill-dev \
 	push-dev push-prod deploy-hint seed-users
 
 help: ## Affiche cette aide
@@ -31,14 +31,18 @@ install: ## Installe les dépendances (workspaces server + client)
 seed-users: ## Crée/maj paul@ + dev@ (SEED_PASSWORD dans .env)
 	cd $(ROOT) && node scripts/seed-users.mjs
 
-dev: ## Lance API + Vite (web/PWA) en parallèle
-	cd $(ROOT) && npm run dev
+dev: ## Lance API + Vite (web/PWA) — logs aussi dans logs/ytmusic-dev.log
+	@mkdir -p $(ROOT)/logs
+	@echo "📝 Logs → $(ROOT)/logs/ytmusic-dev.log  ·  suivi : make logs"
+	cd $(ROOT) && npm run dev 2>&1 | tee -a $(ROOT)/logs/ytmusic-dev.log
 
 dev-server: ## API seule (port 8787)
-	cd $(ROOT) && npm run dev:server
+	@mkdir -p $(ROOT)/logs
+	cd $(ROOT) && npm run dev:server 2>&1 | tee -a $(ROOT)/logs/ytmusic-server.log
 
 dev-client: ## Frontend Vite seul (port 5173)
-	cd $(ROOT) && npm run dev:client
+	@mkdir -p $(ROOT)/logs
+	cd $(ROOT) && npm run dev:client 2>&1 | tee -a $(ROOT)/logs/ytmusic-client.log
 
 build: ## Build production du client (PWA)
 	cd $(ROOT) && npm run build
@@ -186,21 +190,19 @@ status-watch: ## Rafraîchit make status en boucle (INTERVAL=4)
 	@chmod +x $(ROOT)/scripts/status-watch.sh 2>/dev/null || true
 	@INTERVAL="$(or $(INTERVAL),4)" CLEAR="$(or $(CLEAR),1)" bash $(ROOT)/scripts/status-watch.sh
 
-logs: ## Logs Docker ytmusic (+ mailhog) en temps réel — Ctrl+C
-	@echo "📋 Logs YTMusic (docker compose)"
-	@echo "================================"
-	@echo "⏹️  Ctrl+C pour quitter"
-	@echo "🔧 LOGS_TAIL=$${LOGS_TAIL:-200}  (ex. LOGS_TAIL=500 make logs)"
-	@echo ""
-	@cd $(ROOT) && \
-	  if [ -f docker-compose.dev.yml ]; then \
-	    docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f --tail=$${LOGS_TAIL:-200} 2>/dev/null \
-	    || docker compose -f docker-compose.dev.yml logs -f --tail=$${LOGS_TAIL:-200} 2>/dev/null \
-	    || (echo "⚠️  Conteneurs arrêtés ? → make docker-dev" && exit 1); \
-	  else \
-	    docker compose logs -f --tail=$${LOGS_TAIL:-200} 2>/dev/null \
-	    || (echo "⚠️  Conteneurs arrêtés ? → make docker-dev" && exit 1); \
-	  fi
+logs: ## Logs récents puis suivi temps réel (Docker ou local) — Ctrl+C
+	@chmod +x $(ROOT)/scripts/ops/logs.sh $(ROOT)/scripts/ops/color-logs.sh 2>/dev/null || true
+	@LOGS_SINCE="$(or $(LOGS_SINCE),24h)" LOGS_TAIL="$(or $(LOGS_TAIL),500)" \
+	  bash $(ROOT)/scripts/ops/logs.sh follow
+
+logs-tail: ## Dernières lignes de logs puis quitte (LOGS_TAIL=200)
+	@chmod +x $(ROOT)/scripts/ops/logs.sh $(ROOT)/scripts/ops/color-logs.sh 2>/dev/null || true
+	@LOGS_TAIL="$(or $(LOGS_TAIL),200)" bash $(ROOT)/scripts/ops/logs.sh tail
+
+logs-watch: ## Logs avec reconnexion auto (surtout Docker) — Ctrl+C
+	@chmod +x $(ROOT)/scripts/ops/logs.sh $(ROOT)/scripts/ops/color-logs.sh 2>/dev/null || true
+	@LOGS_SINCE="$(or $(LOGS_SINCE),24h)" LOGS_TAIL="$(or $(LOGS_TAIL),500)" \
+	  bash $(ROOT)/scripts/ops/logs.sh watch
 
 ports: ## Affiche qui écoute 5173 / 8787
 	@ss -tlnp 2>/dev/null | grep -E ':5173|:8787' || netstat -tlnp 2>/dev/null | grep -E '5173|8787' || true
