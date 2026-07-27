@@ -384,6 +384,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  ytmStatus: () =>
+    req<{ account: any; oauth: any }>('/api/ytm/status'),
+  ytmConnectCookie: (cookie: string) =>
+    req<{ ok: boolean; account: any }>('/api/ytm/connect/cookie', {
+      method: 'POST',
+      body: JSON.stringify({ cookie }),
+    }),
+  ytmConnectOauth: () =>
+    req<{ ok: boolean; verificationUrl: string; userCode: string; expiresIn: number }>(
+      '/api/ytm/connect/oauth',
+      { method: 'POST', body: '{}' },
+    ),
+  ytmOauthStatus: () => req<{ status: string; error?: string; userCode?: string }>('/api/ytm/oauth/status'),
+  ytmSync: () =>
+    req<{ ok: boolean; stats: any; library: LibraryData; account: any }>('/api/ytm/sync', {
+      method: 'POST',
+      body: '{}',
+    }),
+  ytmDisconnect: () => req<{ ok: boolean; account: any }>('/api/ytm/disconnect', { method: 'DELETE' }),
   offlineStart: (kind: string, targetId: string) =>
     req<{ jobId: string; total: number }>('/api/offline/start', {
       method: 'POST',

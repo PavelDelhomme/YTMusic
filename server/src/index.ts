@@ -92,6 +92,17 @@ import {
   generateTotpSetup,
 } from './totp.js';
 import './platform.js';
+import {
+  disconnectYtm,
+  getYtmAccountPublic,
+  saveYtmCookie,
+} from './ytm-account.js';
+import {
+  clearYtmSession,
+  getYtmOauthStatus,
+  startYtmDeviceOauth,
+  syncYtmLibrary,
+} from './ytm-sync.js';
 import { findUserByEmail, createUser, publicUser, updateUserProfile, findUserById, isAdminUser } from './db.js';
 import { detachSocket, getHubPublic, handleSessionMessage } from './sessions.js';
 import type { Track } from './types.js';
@@ -799,6 +810,72 @@ app.post('/api/import', ensureUser, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: String((err as Error).message || err) });
   }
+});
+
+app.get('/api/ytm/status', authRequired, (req, res) => {
+  if (req.user?.isGuest) {
+    res.status(400).json({ error: 'Crée un compte pour lier YouTube Music' });
+    return;
+  }
+  res.json({
+    account: getYtmAccountPublic(req.userId!),
+    oauth: getYtmOauthStatus(req.userId!),
+  });
+});
+
+app.post('/api/ytm/connect/cookie', authRequired, (req, res) => {
+  try {
+    if (req.user?.isGuest) {
+      res.status(400).json({ error: 'Crée un compte pour lier YouTube Music' });
+      return;
+    }
+    clearYtmSession(req.userId!);
+    saveYtmCookie(req.userId!, String(req.body?.cookie || ''));
+    res.json({ ok: true, account: getYtmAccountPublic(req.userId!) });
+  } catch (err) {
+    res.status(400).json({ error: String((err as Error).message || err) });
+  }
+});
+
+app.post('/api/ytm/connect/oauth', authRequired, async (req, res) => {
+  try {
+    if (req.user?.isGuest) {
+      res.status(400).json({ error: 'Crée un compte pour lier YouTube Music' });
+      return;
+    }
+    const started = await startYtmDeviceOauth(req.userId!);
+    res.json({ ok: true, ...started });
+  } catch (err) {
+    res.status(400).json({ error: String((err as Error).message || err) });
+  }
+});
+
+app.get('/api/ytm/oauth/status', authRequired, (req, res) => {
+  res.json(getYtmOauthStatus(req.userId!));
+});
+
+app.post('/api/ytm/sync', authRequired, async (req, res) => {
+  try {
+    if (req.user?.isGuest) {
+      res.status(400).json({ error: 'Crée un compte pour synchroniser' });
+      return;
+    }
+    const result = await syncYtmLibrary(req.userId!);
+    res.json({
+      ok: true,
+      stats: result.stats,
+      library: result.library,
+      account: getYtmAccountPublic(req.userId!),
+    });
+  } catch (err) {
+    res.status(400).json({ error: String((err as Error).message || err) });
+  }
+});
+
+app.delete('/api/ytm/disconnect', authRequired, (req, res) => {
+  clearYtmSession(req.userId!);
+  disconnectYtm(req.userId!);
+  res.json({ ok: true, account: getYtmAccountPublic(req.userId!) });
 });
 
 app.get('/api/offline', ensureUser, handleOfflineStatus);
