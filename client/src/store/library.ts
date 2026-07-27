@@ -6,7 +6,7 @@ type LibraryState = LibraryData & {
   refresh: () => Promise<void>;
   applyLibrary: (lib: LibraryData) => void;
   toggleLike: (track: Track) => Promise<void>;
-  createPlaylist: (name: string, description?: string) => Promise<void>;
+  createPlaylist: (name: string, description?: string) => Promise<import('../api').LibraryPlaylist | void>;
   deletePlaylist: (id: string) => Promise<void>;
   addToPlaylist: (playlistId: string, track: Track) => Promise<void>;
   recordPlay: (track: Track) => Promise<void>;
@@ -43,8 +43,9 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   },
 
   createPlaylist: async (name, description = '') => {
-    await api.createPlaylist(name, description);
+    const pl = await api.createPlaylist(name, description);
     await get().refresh();
+    return pl;
   },
 
   deletePlaylist: async (id) => {

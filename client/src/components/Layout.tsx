@@ -4,6 +4,8 @@ import {
   Download,
   Home,
   Library,
+  ListMusic,
+  Plus,
   Search,
   Settings2,
   Upload,
@@ -15,7 +17,7 @@ import { QueuePanel } from './QueuePanel';
 import { AuthModal } from './AuthModal';
 import { DevicePicker } from './DevicePicker';
 import { InstallBanner } from './InstallBanner';
-import { NowPlaying } from './NowPlaying';
+import { NowPlaying, type NowPlayingTab } from './NowPlaying';
 import { BrandLogo } from './BrandLogo';
 import { useLibrary } from '../store/library';
 import { usePlayer, wireRemotePlayer } from '../store/player';
@@ -46,6 +48,10 @@ export function Layout() {
   const [authOpen, setAuthOpen] = useState(false);
   const [devicesOpen, setDevicesOpen] = useState(false);
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
+  const [nowPlayingTab, setNowPlayingTab] = useState<NowPlayingTab>('queue');
+  const playlists = useLibrary((s) => s.playlists);
+  const likedPlaylists = useLibrary((s) => s.likedPlaylists);
+  const createPlaylist = useLibrary((s) => s.createPlaylist);
   const bindAudio = usePlayer((s) => s.bindAudio);
   const hydrate = usePlayer((s) => s.hydrate);
   const setProgress = usePlayer((s) => s.setProgress);
@@ -98,7 +104,7 @@ export function Layout() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-yt-bg">
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-56 shrink-0 flex-col border-r border-yt-border bg-yt-bg px-3 py-4 lg:flex">
+        <aside className="hidden w-60 shrink-0 flex-col border-r border-yt-border bg-yt-bg px-3 py-4 lg:flex">
           <div className="mb-6 flex items-center gap-2 px-2">
             <BrandLogo className="h-8 w-8 shrink-0" />
             <span className="font-display text-lg font-semibold tracking-tight">YTMusic</span>
@@ -121,7 +127,65 @@ export function Layout() {
             ))}
           </nav>
 
-          <div className="mt-auto border-t border-yt-border pt-3">
+          <div className="mt-4 flex min-h-0 flex-1 flex-col border-t border-yt-border pt-4">
+            <button
+              type="button"
+              onClick={() => {
+                const name = window.prompt('Nom de la playlist');
+                if (!name?.trim()) return;
+                void createPlaylist(name.trim()).then((pl) => {
+                  if (pl?.id) navigate(`/local-playlist/${pl.id}`);
+                });
+              }}
+              className="mb-2 flex w-full items-center justify-center gap-2 rounded-full border border-yt-border bg-yt-elevated px-3 py-2 text-sm font-medium text-white hover:bg-yt-hover"
+            >
+              <Plus className="h-4 w-4" /> Nouvelle playlist
+            </button>
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+              <NavLink
+                to="/library"
+                className="mb-0.5 flex items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-yt-muted hover:bg-yt-hover hover:text-white"
+              >
+                <ListMusic className="h-4 w-4 shrink-0 text-yt-red" />
+                <div className="min-w-0">
+                  <div className="truncate font-medium text-white">Musique « J&apos;aime »</div>
+                  <div className="truncate text-[11px] text-yt-muted">Titres aimés</div>
+                </div>
+              </NavLink>
+              {playlists.map((p) => (
+                <NavLink
+                  key={p.id}
+                  to={`/local-playlist/${p.id}`}
+                  className={({ isActive }) =>
+                    `mb-0.5 block rounded-lg px-2 py-2 text-left text-sm transition ${
+                      isActive ? 'bg-yt-elevated text-white' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
+                    }`
+                  }
+                >
+                  <div className="truncate font-medium text-white">{p.name}</div>
+                  <div className="truncate text-[11px] text-yt-muted">
+                    {p.tracks.length} titres · {user?.name || 'Toi'}
+                  </div>
+                </NavLink>
+              ))}
+              {likedPlaylists.slice(0, 20).map((p: any) => (
+                <NavLink
+                  key={`liked-pl-${p.id}`}
+                  to={`/playlist/${p.id}`}
+                  className={({ isActive }) =>
+                    `mb-0.5 block rounded-lg px-2 py-2 text-left text-sm transition ${
+                      isActive ? 'bg-yt-elevated text-white' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
+                    }`
+                  }
+                >
+                  <div className="truncate font-medium text-white">{p.title || p.name}</div>
+                  <div className="truncate text-[11px] text-yt-muted">Playlist sauvegardée</div>
+                </NavLink>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-2 border-t border-yt-border pt-3">
             <NavLink
               to="/profile"
               className={({ isActive }) =>
@@ -236,35 +300,42 @@ export function Layout() {
           </main>
         </div>
 
-        <QueuePanel />
+        {!nowPlayingOpen && <QueuePanel />}
       </div>
 
-      <nav className="fixed bottom-[76px] left-0 right-0 z-30 flex overflow-x-auto border-t border-yt-border bg-yt-surface lg:hidden">
-        {links.map(({ to, label, icon: Icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            className={({ isActive }) =>
-              `flex min-w-[4.5rem] flex-1 flex-col items-center gap-1 py-2 text-[10px] ${
-                isActive ? 'text-white' : 'text-yt-muted'
-              }`
-            }
-          >
-            <Icon className="h-5 w-5" />
-            {label}
-          </NavLink>
-        ))}
-      </nav>
+      {!nowPlayingOpen && (
+        <nav className="fixed bottom-[76px] left-0 right-0 z-30 flex overflow-x-auto border-t border-yt-border bg-yt-surface lg:hidden">
+          {links.map(({ to, label, icon: Icon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === '/'}
+              className={({ isActive }) =>
+                `flex min-w-[4.5rem] flex-1 flex-col items-center gap-1 py-2 text-[10px] ${
+                  isActive ? 'text-white' : 'text-yt-muted'
+                }`
+              }
+            >
+              <Icon className="h-5 w-5" />
+              {label}
+            </NavLink>
+          ))}
+        </nav>
+      )}
 
       <PlayerBar
+        expanded={nowPlayingOpen}
         onOpenDevices={() => setDevicesOpen(true)}
-        onExpand={() => setNowPlayingOpen(true)}
+        onExpand={(tab) => {
+          setNowPlayingTab(tab || 'queue');
+          setNowPlayingOpen(true);
+        }}
+        onCollapse={() => setNowPlayingOpen(false)}
       />
       <NowPlaying
         open={nowPlayingOpen}
+        initialTab={nowPlayingTab}
         onClose={() => setNowPlayingOpen(false)}
-        onOpenDevices={() => setDevicesOpen(true)}
       />
       <InstallBanner />
       <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
