@@ -16,6 +16,7 @@ import { AuthModal } from './AuthModal';
 import { DevicePicker } from './DevicePicker';
 import { InstallBanner } from './InstallBanner';
 import { NowPlaying } from './NowPlaying';
+import { BrandLogo } from './BrandLogo';
 import { useLibrary } from '../store/library';
 import { usePlayer, wireRemotePlayer } from '../store/player';
 import { useAuth } from '../store/auth';
@@ -99,11 +100,7 @@ export function Layout() {
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-56 shrink-0 flex-col border-r border-yt-border bg-yt-bg px-3 py-4 lg:flex">
           <div className="mb-6 flex items-center gap-2 px-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-yt-red">
-              <svg viewBox="0 0 24 24" className="h-4 w-4 fill-white">
-                <path d="M8 5v14l11-7L8 5z" />
-              </svg>
-            </div>
+            <BrandLogo className="h-8 w-8 shrink-0" />
             <span className="font-display text-lg font-semibold tracking-tight">YTMusic</span>
           </div>
           <nav className="flex flex-col gap-1">

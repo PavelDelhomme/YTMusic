@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react';
-import { Download, MonitorSmartphone, Share2, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Download, MonitorSmartphone, Share2, Smartphone, X } from 'lucide-react';
+import { BrandLogo } from './BrandLogo';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 };
+
+type Platform = 'ios' | 'android' | 'windows' | 'mac' | 'linux' | 'other';
 
 function isStandalone() {
   const mq = window.matchMedia('(display-mode: standalone)').matches;
@@ -13,27 +16,84 @@ function isStandalone() {
   return mq || ios || twa;
 }
 
-function isIos() {
-  return /iphone|ipad|ipod/i.test(navigator.userAgent);
+function detectPlatform(): Platform {
+  const ua = navigator.userAgent;
+  if (/iphone|ipad|ipod/i.test(ua)) return 'ios';
+  if (/android/i.test(ua)) return 'android';
+  if (/windows/i.test(ua)) return 'windows';
+  if (/macintosh|mac os x/i.test(ua)) return 'mac';
+  if (/linux/i.test(ua)) return 'linux';
+  return 'other';
 }
 
-function isMobile() {
-  return /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
+function installSteps(platform: Platform): { title: string; steps: string[] } {
+  switch (platform) {
+    case 'ios':
+      return {
+        title: 'iPhone / iPad (Safari)',
+        steps: [
+          'Ouvre YTMusic dans Safari (pas Chrome).',
+          'Appuie sur Partager (carré avec flèche).',
+          'Choisis « Sur l’écran d’accueil » → Ajouter.',
+        ],
+      };
+    case 'android':
+      return {
+        title: 'Android (Chrome)',
+        steps: [
+          'Ouvre le menu ⋮ en haut à droite.',
+          '« Installer l’application » ou « Ajouter à l’écran d’accueil ».',
+          'Confirme — l’icône YTMusic apparaît sur l’écran d’accueil.',
+        ],
+      };
+    case 'windows':
+      return {
+        title: 'Windows (Edge / Chrome)',
+        steps: [
+          'Cherche l’icône ⊕ / « Installer » dans la barre d’adresse.',
+          'Ou menu ⋮ → Applications → « Installer YTMusic ».',
+          'Edge : … → Applications → Installer ce site en tant qu’application.',
+        ],
+      };
+    case 'mac':
+      return {
+        title: 'macOS (Chrome / Edge / Safari)',
+        steps: [
+          'Chrome/Edge : icône ⊕ dans la barre d’adresse → Installer.',
+          'Ou menu ⋮ → Enregistrer et partager → Installer YTMusic.',
+          'Safari : Fichier → Ajouter au Dock (macOS Sonoma+).',
+        ],
+      };
+    case 'linux':
+      return {
+        title: 'Linux (Chrome / Chromium / Edge)',
+        steps: [
+          'Icône ⊕ / Installer dans la barre d’adresse.',
+          'Ou menu ⋮ → Installer YTMusic…',
+          'L’app apparaît dans ton lanceur d’applications.',
+        ],
+      };
+    default:
+      return {
+        title: 'Navigateur compatible',
+        steps: [
+          'Utilise Chrome, Edge ou Chromium.',
+          'Menu → Installer l’application / Ajouter à l’écran d’accueil.',
+        ],
+      };
+  }
 }
 
-function isDesktop() {
-  return !isMobile();
-}
-
-/** Bannière d’install : uniquement si l’app n’est PAS déjà installée (tous hosts). */
+/** Bannière d’install PWA — uniquement si pas déjà installée. */
 export function InstallBanner() {
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
   const [visible, setVisible] = useState(false);
-  const [iosHint, setIosHint] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
+  const platform = useMemo(() => detectPlatform(), []);
+  const guide = useMemo(() => installSteps(platform), [platform]);
   const dismissedKey = `ytm_install_dismissed:${location.host}`;
 
   useEffect(() => {
-    // Déjà en mode app (Edge/Chrome installé, PWA iOS, etc.) → ne rien proposer
     if (isStandalone()) return;
     if (localStorage.getItem(dismissedKey) === '1') return;
 
@@ -41,93 +101,107 @@ export function InstallBanner() {
       e.preventDefault();
       setDeferred(e as BeforeInstallPromptEvent);
       setVisible(true);
+      setShowGuide(false);
     };
     window.addEventListener('beforeinstallprompt', onBip);
 
-    // iOS : pas d’event BIP → hint manuel
-    if (isIos()) {
-      const t = setTimeout(() => setVisible(true), 3000);
-      return () => {
-        clearTimeout(t);
-        window.removeEventListener('beforeinstallprompt', onBip);
-      };
-    }
+    const onInstalled = () => {
+      localStorage.setItem(dismissedKey, '1');
+      setVisible(false);
+    };
+    window.addEventListener('appinstalled', onInstalled);
 
-    // Desktop / Android : attendre BIP ; sinon hint soft après délai (Edge/Chrome)
+    // Montrer la bannière même sans BIP (iOS / Firefox / Safari) avec guide clair
+    const delay = platform === 'ios' ? 2500 : platform === 'android' ? 3500 : 5000;
     const t = setTimeout(() => {
       if (!isStandalone()) setVisible(true);
-    }, isDesktop() ? 6000 : 4000);
+    }, delay);
 
     return () => {
       clearTimeout(t);
       window.removeEventListener('beforeinstallprompt', onBip);
+      window.removeEventListener('appinstalled', onInstalled);
     };
-  }, [dismissedKey]);
+  }, [dismissedKey, platform]);
 
   if (!visible || isStandalone()) return null;
 
   const dismiss = () => {
     localStorage.setItem(dismissedKey, '1');
     setVisible(false);
-    setIosHint(false);
+    setShowGuide(false);
   };
 
   const install = async () => {
     if (deferred) {
-      await deferred.prompt();
-      const choice = await deferred.userChoice;
-      if (choice.outcome === 'accepted') {
-        localStorage.setItem(dismissedKey, '1');
-        setVisible(false);
+      try {
+        await deferred.prompt();
+        const choice = await deferred.userChoice;
+        if (choice.outcome === 'accepted') {
+          localStorage.setItem(dismissedKey, '1');
+          setVisible(false);
+        }
+      } catch {
+        setShowGuide(true);
       }
       setDeferred(null);
       return;
     }
-    setIosHint(true);
+    setShowGuide((v) => !v);
   };
 
-  const hostHint = location.host || 'cet appareil';
+  const isPhone = platform === 'ios' || platform === 'android';
 
   return (
     <div className="fixed bottom-[92px] left-3 right-3 z-40 mx-auto max-w-lg animate-fade-up md:left-auto md:right-4">
       <div className="rounded-2xl border border-yt-border bg-yt-surface/95 p-4 shadow-2xl backdrop-blur-md">
         <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-yt-red">
-            {isMobile() ? (
-              <Download className="h-5 w-5 text-white" />
-            ) : (
-              <MonitorSmartphone className="h-5 w-5 text-white" />
-            )}
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl">
+            <BrandLogo className="h-11 w-11" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="font-display text-sm font-semibold">
-              {isMobile() ? 'Installer sur mobile' : 'Installer sur cet ordinateur'}
+              {isPhone ? 'Installer l’app mobile' : 'Installer sur cet ordinateur'}
             </div>
             <p className="mt-0.5 text-xs text-yt-muted">
-              {hostHint} — plein écran, hors-ligne, comme une vraie app.
+              {guide.title} · {location.host} — gratuit, sans pubs, ton compte.
             </p>
-            {iosHint && (
-              <p className="mt-2 rounded-lg bg-yt-elevated px-2.5 py-2 text-[11px] leading-relaxed text-yt-muted">
-                {isIos() ? (
-                  <>
-                    iPhone/iPad : <Share2 className="inline h-3 w-3" /> Partager → « Sur l&apos;écran
-                    d&apos;accueil ».
-                  </>
-                ) : (
-                  <>
-                    Edge / Chrome : menu ⋮ → « Applications » → « Installer YTMusic » (ou icône ⊕ dans
-                    la barre d&apos;adresse).
-                  </>
+
+            {showGuide && (
+              <ol className="mt-3 list-decimal space-y-1.5 rounded-xl bg-yt-elevated px-3 py-2.5 pl-5 text-[11px] leading-relaxed text-yt-muted">
+                {guide.steps.map((s) => (
+                  <li key={s}>{s}</li>
+                ))}
+                {platform === 'ios' && (
+                  <li className="flex items-center gap-1">
+                    Bouton <Share2 className="inline h-3 w-3" /> obligatoire dans Safari.
+                  </li>
                 )}
-              </p>
+              </ol>
             )}
+
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => void install()}
-                className="rounded-full bg-white px-3.5 py-1.5 text-xs font-medium text-black"
+                className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-1.5 text-xs font-medium text-black"
               >
-                {deferred ? 'Installer' : 'Comment installer'}
+                {deferred ? (
+                  <>
+                    <Download className="h-3.5 w-3.5" /> Installer maintenant
+                  </>
+                ) : showGuide ? (
+                  'Masquer le guide'
+                ) : (
+                  <>
+                    {isPhone ? (
+                      <Smartphone className="h-3.5 w-3.5" />
+                    ) : (
+                      <MonitorSmartphone className="h-3.5 w-3.5" />
+                    )}
+                    Comment installer
+                  </>
+                )}
               </button>
               <button
                 type="button"

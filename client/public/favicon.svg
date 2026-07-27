@@ -1,4 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <rect width="64" height="64" rx="14" fill="#FF0033"/>
-  <path d="M26 20v24l20-12L26 20z" fill="#fff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <!-- YouTube Music style: red disc + note/play mark (not the YouTube TV rectangle) -->
+  <circle cx="256" cy="256" r="256" fill="#FF0033"/>
+  <g fill="#fff">
+    <!-- Note head (play triangle fused with note) -->
+    <path d="M196 152v208c0 8 6 14 14 14 3 0 6-1 9-3l148-92c7-4 11-12 11-20s-4-16-11-20L219 147c-3-2-6-3-9-3-8 0-14 6-14 14z"/>
+    <!-- Stem hint for musical note identity -->
+    <rect x="338" y="148" width="28" height="120" rx="10"/>
+    <ellipse cx="352" cy="140" rx="36" ry="28" transform="rotate(-25 352 140)"/>
+  </g>
 </svg>

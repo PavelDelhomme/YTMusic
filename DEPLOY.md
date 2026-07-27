@@ -43,6 +43,8 @@ Mobile = **même PWA** que le web (pas de Play Store) : mise à jour via service
 
 ## 3. DNS OVH
 
+Voir le guide détaillé : [`docs/DNS-ET-INSTALL.md`](docs/DNS-ET-INSTALL.md).
+
 Dans la zone `delhomme.ovh`, ajoute :
 
 | Type | Nom | Cible |
@@ -50,6 +52,8 @@ Dans la zone `delhomme.ovh`, ajoute :
 | A ou CNAME | `ytmusic` | IP du VPS (ou CNAME vers le même host que nextcloud) |
 
 Ex. `ytmusic.delhomme.ovh` → `95.111.227.204` (adapte si ton IP a changé).
+
+Ensuite NPM → `ytmusic:8787` + SSL + websockets. Commandes : `make help`, `make mobile-hint`, `make update-apps`.
 
 ---
 

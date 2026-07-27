@@ -178,38 +178,99 @@ function recordStarted(track: Track) {
   void useLibrary.getState().recordPlay(track);
 }
 
-async function playLocal(track: Track, state: PlayerState) {
+/** Génération pour ignorer les play() obsolètes si l’utilisateur saute vite */
+let playGeneration = 0;
+const prefetchCache = new Map<string, string>();
+
+async function resolveCachedUrl(trackId: string) {
+  const hit = prefetchCache.get(trackId);
+  if (hit) return hit;
+  const src = await resolvePlayUrl(trackId);
+  prefetchCache.set(trackId, src);
+  // garder un cache petit
+  if (prefetchCache.size > 12) {
+    const first = prefetchCache.keys().next().value;
+    if (first) prefetchCache.delete(first);
+  }
+  return src;
+}
+
+function prefetchTrack(trackId: string | undefined) {
+  if (!trackId || !isPlayable({ id: trackId } as Track)) return;
+  if (prefetchCache.has(trackId)) return;
+  void resolvePlayUrl(trackId)
+    .then((src) => {
+      prefetchCache.set(trackId, src);
+    })
+    .catch(() => undefined);
+}
+
+async function playLocal(track: Track, state: PlayerState, gen: number) {
   const audio = state.audioEl;
   if (!audio) return;
-  const meta = await api.track(track.id).catch(() => undefined);
+
+  // Stream d’abord (fluide), métadonnées en parallèle
+  const srcPromise = resolveCachedUrl(track.id);
+  const metaPromise = api.track(track.id).catch(() => undefined);
+
+  // Enrichissement rapide local (thumbs) pendant le fetch stream
   let enriched = track;
-  if (meta?.track) {
-    enriched = {
-      ...meta.track,
-      ...track,
-      artists: mergeArtists(track.artists, meta.track.artists),
-      thumbnails:
-        track.thumbnails?.length
-          ? track.thumbnails
-          : meta.track.thumbnails?.length
-            ? meta.track.thumbnails
-            : [{ url: `https://i.ytimg.com/vi/${track.id}/hq720.jpg`, width: 1280, height: 720 }],
-    };
-    usePlayer.setState({ current: enriched });
-  } else if (!track.thumbnails?.length && /^[a-zA-Z0-9_-]{11}$/.test(track.id)) {
+  if (!track.thumbnails?.length && /^[a-zA-Z0-9_-]{11}$/.test(track.id)) {
     enriched = {
       ...track,
       thumbnails: [
         { url: `https://i.ytimg.com/vi/${track.id}/hq720.jpg`, width: 1280, height: 720 },
       ],
     };
-    usePlayer.setState({ current: enriched });
+    if (gen === playGeneration) usePlayer.setState({ current: enriched });
   }
-  const src = await resolvePlayUrl(enriched.id);
+
+  const src = await srcPromise;
+  if (gen !== playGeneration) return;
+
   if (audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
   audio.src = src;
   audio.volume = state.volume;
-  await audio.play();
+  // démarrer dès que possible
+  let playPromise: Promise<void>;
+  try {
+    playPromise = audio.play();
+  } catch {
+    return;
+  }
+
+  const meta = await metaPromise;
+  if (gen !== playGeneration) {
+    try {
+      audio.pause();
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  if (meta?.track) {
+    enriched = {
+      ...meta.track,
+      ...enriched,
+      artists: mergeArtists(enriched.artists, meta.track.artists),
+      thumbnails:
+        enriched.thumbnails?.length
+          ? enriched.thumbnails
+          : meta.track.thumbnails?.length
+            ? meta.track.thumbnails
+            : enriched.thumbnails,
+    };
+    usePlayer.setState({ current: enriched });
+  }
+
+  try {
+    await playPromise;
+  } catch {
+    if (gen !== playGeneration) return;
+    throw new Error('Lecture bloquée ou interrompue');
+  }
+  if (gen !== playGeneration) return;
+
   setupMediaSession(enriched, {
     play: () => {
       void audio.play();
@@ -319,8 +380,14 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       lyrics: null,
     });
 
+    const gen = ++playGeneration;
+    // précharge la piste suivante pendant qu’on démarre celle-ci
+    const nextIdx = (idx >= 0 ? idx : 0) + 1;
+    if (nextQueue[nextIdx]) prefetchTrack(nextQueue[nextIdx].id);
+
     try {
-      await playLocal(track, get());
+      await playLocal(track, get(), gen);
+      if (gen !== playGeneration) return;
       // Historique avec métadonnées enrichies (miniatures incluses)
       recordStarted(get().current || track);
       set({ isPlaying: true, isLoading: false });
