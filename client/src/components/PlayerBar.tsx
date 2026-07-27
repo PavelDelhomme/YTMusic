@@ -1,4 +1,4 @@
-import type { SyntheticEvent } from 'react';
+import type { PointerEvent as ReactPointerEvent, SyntheticEvent } from 'react';
 import {
   Cast,
   ChevronDown,
@@ -20,14 +20,8 @@ import { useLibrary } from '../store/library';
 import { useSession } from '../store/session';
 import { ArtistLinks } from './ArtistLinks';
 import { CoverImage } from './CoverImage';
+import { formatClock } from '../lib/time';
 import type { NowPlayingTab } from './NowPlaying';
-
-function fmt(s: number) {
-  if (!Number.isFinite(s)) return '0:00';
-  const m = Math.floor(s / 60);
-  const sec = Math.floor(s % 60);
-  return `${m}:${sec.toString().padStart(2, '0')}`;
-}
 
 /** Empêche le clic de remonter jusqu’au footer (qui ouvre le Now Playing). */
 function stop(e: SyntheticEvent) {
@@ -39,11 +33,14 @@ export function PlayerBar({
   onExpand,
   expanded = false,
   onCollapse,
+  compactEmpty = false,
 }: {
   onOpenDevices?: () => void;
   onExpand?: (tab?: NowPlayingTab) => void;
   expanded?: boolean;
   onCollapse?: () => void;
+  /** Masque le bandeau vide sur mobile (nav collée en bas). */
+  compactEmpty?: boolean;
 }) {
   const {
     current,
@@ -61,6 +58,9 @@ export function PlayerBar({
     setVolume,
     toggleShuffle,
     cycleRepeat,
+    audioEl,
+    queue,
+    queueIndex,
   } = usePlayer();
   const { isLiked, toggleLike } = useLibrary();
   const isActivePlayer = useSession((s) => s.isActivePlayer);
@@ -69,6 +69,12 @@ export function PlayerBar({
   const activeName = devices.find((d) => d.id === activePlayerId)?.name;
 
   if (!current) {
+    if (compactEmpty) {
+      // Pas de lecteur fantôme sur mobile : la nav prend le bas d’écran
+      return (
+        <footer className="pointer-events-none fixed bottom-0 left-0 right-0 z-40 hidden h-0 lg:block" aria-hidden />
+      );
+    }
     return (
       <footer className="fixed bottom-0 left-0 right-0 z-50 border-t border-yt-border bg-black px-4 py-4 text-center text-sm text-yt-muted">
         Sélectionne un titre pour commencer
@@ -76,13 +82,37 @@ export function PlayerBar({
     );
   }
 
+  const upcomingCount = Math.max(0, queue.length - queueIndex - 1);
   const expand = (tab?: NowPlayingTab) => onExpand?.(tab);
+  const effectiveDuration =
+    duration > 0 ? duration : Number.isFinite(audioEl?.duration) ? Number(audioEl?.duration) : 0;
+  const pct = effectiveDuration > 0 ? Math.min(100, (progress / effectiveDuration) * 100) : 0;
+
+  const seekFromClientX = (el: HTMLElement, clientX: number) => {
+    const dur = effectiveDuration > 0 ? effectiveDuration : Number(audioEl?.duration) || 0;
+    if (!(dur > 0)) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    seek(ratio * dur);
+  };
+
+  const onSeekPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
+    stop(e);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    seekFromClientX(e.currentTarget, e.clientX);
+  };
+
+  const onSeekMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    stop(e);
+    seekFromClientX(e.currentTarget, e.clientX);
+  };
 
   return (
     <footer
       className="fixed bottom-0 left-0 right-0 z-50 cursor-pointer border-t border-white/10 bg-black"
       onClick={() => {
-        // Même action que la flèche ↑ : ouvrir À suivre / Paroles / Similaires
         if (expanded) return;
         expand('queue');
       }}
@@ -94,7 +124,7 @@ export function PlayerBar({
         </div>
       )}
       <div className="mx-auto grid max-w-[1600px] grid-cols-1 items-center gap-2 px-3 py-2 md:grid-cols-[1.1fr_1.3fr_1.1fr] md:gap-4 md:px-5 md:py-2.5">
-        {/* Prev / play / next / temps — ne pas expand */}
+        {/* Prev / play / next / temps */}
         <div className="flex items-center gap-1 sm:gap-2" onClick={stop}>
           <button type="button" onClick={() => void prev()} className="rounded-full p-2 text-white hover:bg-white/10">
             <SkipBack className="h-5 w-5 fill-white" />
@@ -111,20 +141,23 @@ export function PlayerBar({
             <SkipForward className="h-5 w-5 fill-white" />
           </button>
           <span className="ml-1 hidden whitespace-nowrap text-[11px] text-yt-muted sm:inline">
-            {fmt(progress)} / {fmt(duration)}
+            {formatClock(progress)} / {formatClock(effectiveDuration)}
           </span>
         </div>
 
-        {/* Cover / titre / artiste : stop (pas d’expand) ; zones vides du footer → expand */}
+        {/* Cover + titre → expand ; artiste + like → stop */}
         <div className="flex min-w-0 items-center gap-3">
-          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md md:h-14 md:w-14" onClick={stop} onKeyDown={stop}>
+          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md md:h-14 md:w-14">
             <CoverImage item={current} size={120} rounded="md" />
           </div>
-          <div className="min-w-0 flex-1" onClick={stop} onKeyDown={stop}>
+          <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-medium">{current.title}</div>
-            <div className="truncate text-xs text-yt-muted">
+            <div className="truncate text-xs text-yt-muted" onClick={stop} onKeyDown={stop}>
               <ArtistLinks track={current} />
               {current.album?.name ? <span className="text-yt-muted"> · {current.album.name}</span> : null}
+              {upcomingCount > 0 ? (
+                <span className="text-yt-muted"> · {upcomingCount} à suivre</span>
+              ) : null}
             </div>
           </div>
           <button
@@ -211,18 +244,32 @@ export function PlayerBar({
         </div>
       </div>
 
-      <div className="px-0" onClick={stop}>
-        <input
-          type="range"
-          min={0}
-          max={duration || 0}
-          step={0.1}
-          value={progress}
-          onChange={(e) => seek(Number(e.target.value))}
-          className="progress-range h-1 w-full cursor-pointer appearance-none bg-transparent"
-          style={{
-            background: `linear-gradient(to right, #ff0033 ${(progress / (duration || 1)) * 100}%, #3a3a3a 0%)`,
-          }}
+      {/* Seek : barre custom (évite le bug range max=0 → seek à 0) */}
+      <div
+        className="group relative h-3 w-full cursor-pointer px-0"
+        onClick={stop}
+        onPointerDown={onSeekPointer}
+        onPointerMove={onSeekMove}
+        role="slider"
+        aria-valuemin={0}
+        aria-valuemax={effectiveDuration || 0}
+        aria-valuenow={progress}
+        aria-label="Position du morceau"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          stop(e);
+          const dur = effectiveDuration;
+          if (!(dur > 0)) return;
+          if (e.key === 'ArrowRight') seek(Math.min(dur, progress + 5));
+          if (e.key === 'ArrowLeft') seek(Math.max(0, progress - 5));
+        }}
+      >
+        <div className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 bg-[#3a3a3a]">
+          <div className="h-full bg-[#ff0033]" style={{ width: `${pct}%` }} />
+        </div>
+        <div
+          className="absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-white opacity-0 shadow transition group-hover:opacity-100"
+          style={{ left: `calc(${pct}% - 6px)` }}
         />
       </div>
     </footer>

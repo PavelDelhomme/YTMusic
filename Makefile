@@ -8,6 +8,7 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 .PHONY: help install dev dev-server dev-client build start deploy-local \
 	clean-vite icons docker-dev docker-dev-down docker-build \
 	mobile-qr mobile-hint mobile-adb mobile-install-adb test-register-adb \
+	android-sync android-build android-install android-prod \
 	update-apps status status-watch logs logs-tail logs-watch ports kill-dev \
 	push-dev push-prod deploy-hint seed-users
 
@@ -20,7 +21,8 @@ help: ## Affiche cette aide
 	@echo ""
 	@echo "  Domaine prod  : https://ytmusic.delhomme.ovh"
 	@echo "  Dev local     : http://localhost:5173  (API :8787)"
-	@echo "  Mobile LAN    : make mobile-install-adb DEVICE=R5CT7263YJL"
+	@echo "  Mobile APK    : make android-install DEVICE=R5CT7263YJL"
+	@echo "  Mobile PWA    : make mobile-install-adb DEVICE=R5CT7263YJL"
 	@echo "  Ops           : make status · status-watch · logs"
 	@echo "  Branches      : feat/* depuis dev → merge prod"
 	@echo ""
@@ -77,26 +79,18 @@ docker-dev-down: ## Stoppe les conteneurs dev
 docker-build: ## Build image Docker locale
 	cd $(ROOT) && npm run docker:build
 
-mobile-hint: ## Affiche comment installer l’app mobile (PWA)
+mobile-hint: ## Affiche comment installer l’app mobile (APK + PWA)
 	@echo ""
-	@echo "  Installer YTMusic sur téléphone (même Wi‑Fi en local)"
-	@echo "  ----------------------------------------------------"
-	@echo "  1. make dev   (ou ouvre https://ytmusic.delhomme.ovh)"
-	@echo "  2. Sur le téléphone, ouvre l’URL LAN / le domaine"
-	@echo "  3. Bannière « Installer » ou :"
-	@echo "     Android Chrome → ⋮ → Installer l’application"
-	@echo "     iPhone Safari  → Partager → Sur l’écran d’accueil"
-	@echo "  4. Connecte-toi avec ton compte app (email / passkey)"
-	@echo "  5. Mises à jour = recharger l’app (service worker auto)"
+	@echo "  YTMusic sur téléphone Android"
+	@echo "  -----------------------------"
+	@echo "  Vraie app (APK Capacitor, UI embarquée + audio arrière-plan) :"
+	@echo "    make android-install              # API locale :8787"
+	@echo "    make android-prod                 # API ytmusic.delhomme.ovh"
+	@echo "    VITE_API_ORIGIN=http://IP:8787 make android-install"
 	@echo ""
-	@echo "  USB ADB (recommandé en local) :"
-	@echo "    make mobile-install-adb   # reverse + Chrome + bannière Installer"
-	@echo "    make mobile-adb           # ouvrir seulement (sans force install)"
+	@echo "  PWA (optionnel, navigateur) :"
+	@echo "    make mobile-install-adb"
 	@echo ""
-	@echo "  QR / URLs : page Admin ou Profil dans l’app"
-	@echo "  make mobile-qr  → URLs LAN Wi‑Fi"
-	@echo ""
-
 # DEVICE=R5CT7263YJL par défaut (Samsung branché)
 DEVICE ?= R5CT7263YJL
 
@@ -116,6 +110,23 @@ mobile-adb: ## Ouvre YTMusic sur le device (adb reverse + Chrome)
 mobile-install-adb: ## Installe la PWA sur le device (reverse + Chrome ?install=1)
 	@chmod +x $(ROOT)/scripts/mobile-install-adb.sh
 	@DEVICE="$(DEVICE)" bash $(ROOT)/scripts/mobile-install-adb.sh install
+
+android-sync: ## Sync Capacitor (sans rebuild APK)
+	@chmod +x $(ROOT)/scripts/android-install.sh
+	@DEVICE="$(DEVICE)" VITE_API_ORIGIN="$(VITE_API_ORIGIN)" bash $(ROOT)/scripts/android-install.sh sync
+
+android-build: ## Compile l’APK Android (UI embarquée)
+	@chmod +x $(ROOT)/scripts/android-install.sh
+	@DEVICE="$(DEVICE)" VITE_API_ORIGIN="$(or $(VITE_API_ORIGIN),http://127.0.0.1:8787)" bash $(ROOT)/scripts/android-install.sh build
+
+android-install: ## Build + installe l’APK native (ADB) — API locale :8787
+	@chmod +x $(ROOT)/scripts/android-install.sh
+	@echo "Astuce : « make dev » ou « make dev-server » pour l’API locale."
+	@DEVICE="$(DEVICE)" VITE_API_ORIGIN="$(or $(VITE_API_ORIGIN),http://127.0.0.1:8787)" bash $(ROOT)/scripts/android-install.sh install
+
+android-prod: ## APK native → API https://ytmusic.delhomme.ovh + install ADB
+	@chmod +x $(ROOT)/scripts/android-install.sh
+	@DEVICE="$(DEVICE)" VITE_API_ORIGIN="https://ytmusic.delhomme.ovh" bash $(ROOT)/scripts/android-install.sh install
 
 test-register-adb: ## Recrée compte + email validation + ouvre le lien sur Android
 	@cd $(ROOT) && \

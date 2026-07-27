@@ -16,6 +16,30 @@ function asText(value: unknown): string {
   return '';
 }
 
+function formatDurationClock(totalSeconds: number): string {
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00';
+  const total = Math.floor(totalSeconds);
+  const s = total % 60;
+  const m = Math.floor(total / 60) % 60;
+  const h = Math.floor(total / 3600);
+  const ss = s.toString().padStart(2, '0');
+  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${ss}`;
+  return `${m}:${ss}`;
+}
+
+/** Corrige les textes type `164:16` → `2:44:16`. */
+function normalizeDurationText(raw: string): string {
+  const parts = raw.trim().split(':').map((p) => Number(p));
+  if (parts.some((n) => !Number.isFinite(n))) return raw;
+  if (parts.length === 3) return formatDurationClock(parts[0] * 3600 + parts[1] * 60 + parts[2]);
+  if (parts.length === 2) {
+    const [m, s] = parts;
+    if (m >= 60) return formatDurationClock(m * 60 + s);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+  return raw;
+}
+
 /** Collect every possible thumbnail array from a YT Music node */
 export function extractThumbs(...sources: any[]): Thumb[] {
   const out: Thumb[] = [];
@@ -245,8 +269,17 @@ export function mapListItem(item: any, fallbackThumbs?: Thumb[]): Track | null {
   }
   if (!title) title = 'Sans titre';
 
-  const durationText = item.duration?.text || asText(item.duration);
-  const durationSeconds = item.duration?.seconds;
+  const durationTextRaw = item.duration?.text || asText(item.duration);
+  const durationSeconds =
+    typeof item.duration?.seconds === 'number'
+      ? item.duration.seconds
+      : undefined;
+  let duration = durationTextRaw || undefined;
+  if (typeof durationSeconds === 'number') {
+    duration = formatDurationClock(durationSeconds);
+  } else if (duration) {
+    duration = normalizeDurationText(duration);
+  }
   const type = inferType(String(id), item);
 
   let artists = artistsFrom(item);
@@ -272,7 +305,7 @@ export function mapListItem(item: any, fallbackThumbs?: Thumb[]): Track | null {
     album: item.album
       ? { name: String(item.album.name), id: item.album.id }
       : undefined,
-    duration: durationText || undefined,
+    duration,
     durationSeconds,
     thumbnails,
     type,

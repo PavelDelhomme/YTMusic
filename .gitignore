@@ -11,3 +11,11 @@ logs/
 desktop/node_modules/
 *.db
 *.db-*
+client/android/.gradle/
+client/android/app/build/
+client/android/build/
+client/android/capacitor-cordova-android-plugins/build/
+client/android/local.properties
+client/capacitor.config.json
+*.apk
+*.aab

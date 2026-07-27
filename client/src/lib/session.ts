@@ -1,5 +1,6 @@
-import { getToken } from '../api';
+import { apiOrigin, getToken } from '../api';
 import type { Track } from '../api';
+import { Capacitor } from '@capacitor/core';
 
 export type DeviceType = 'web' | 'mobile' | 'desktop' | 'tv';
 
@@ -55,6 +56,13 @@ export function setDeviceName(name: string) {
 }
 
 function guessDefaultName() {
+  try {
+    if (Capacitor.isNativePlatform()) {
+      return Capacitor.getPlatform() === 'android' ? 'Android · YTMusic' : 'iOS · YTMusic';
+    }
+  } catch {
+    /* ignore */
+  }
   const ua = navigator.userAgent;
   if (/TV|SmartTV|WebOS|Tizen/i.test(ua)) return 'Télé';
   if (/Mobile|Android|iPhone/i.test(ua)) return 'Téléphone';
@@ -63,6 +71,11 @@ function guessDefaultName() {
 }
 
 export function guessDeviceType(): DeviceType {
+  try {
+    if (Capacitor.isNativePlatform()) return 'mobile';
+  } catch {
+    /* ignore */
+  }
   const ua = navigator.userAgent;
   if (/TV|SmartTV|WebOS|Tizen/i.test(ua) || location.pathname.startsWith('/tv')) return 'tv';
   if (/Mobile|Android|iPhone/i.test(ua)) return 'mobile';
@@ -91,15 +104,21 @@ export class SessionSocket {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;
     }
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const host = location.host;
-    // In vite dev, proxy /ws to API; fallback direct to 8787 if needed
     const token = getToken() || '';
     const qs = new URLSearchParams({
       device: this.deviceId,
       token,
     });
-    const url = `${proto}://${host}/ws?${qs}`;
+    const origin = apiOrigin();
+    let url: string;
+    if (origin) {
+      const u = new URL(origin);
+      const proto = u.protocol === 'https:' ? 'wss' : 'ws';
+      url = `${proto}://${u.host}/ws?${qs}`;
+    } else {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      url = `${proto}://${location.host}/ws?${qs}`;
+    }
     const ws = new WebSocket(url);
     this.ws = ws;
 

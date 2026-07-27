@@ -48,6 +48,8 @@ export function QueuePanel() {
                   track={track}
                   index={i}
                   queue={queue}
+                  queueIndex={i}
+                  draggable
                   onPlay={() => void playAt(i)}
                 />
               </div>

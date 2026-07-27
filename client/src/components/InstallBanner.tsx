@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Download, MonitorSmartphone, Share2, Smartphone, X } from 'lucide-react';
 import { BrandLogo } from './BrandLogo';
+import { isNativeApp } from '../lib/native';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -10,6 +11,7 @@ type BeforeInstallPromptEvent = Event & {
 type Platform = 'ios' | 'android' | 'windows' | 'mac' | 'linux' | 'other';
 
 function isStandalone() {
+  if (isNativeApp()) return true;
   const mq = window.matchMedia('(display-mode: standalone)').matches;
   const ios = (window.navigator as any).standalone === true;
   const twa = document.referrer.includes('android-app://');
@@ -94,7 +96,8 @@ export function InstallBanner() {
   const dismissedKey = `ytm_install_dismissed:${location.host}`;
 
   useEffect(() => {
-    if (isStandalone()) return;
+    // APK Capacitor / app déjà installée → jamais de bannière PWA
+    if (isNativeApp() || isStandalone()) return;
     const forceInstall = new URLSearchParams(location.search).get('install') === '1';
     if (!forceInstall && localStorage.getItem(dismissedKey) === '1') return;
     if (forceInstall) {
@@ -137,7 +140,7 @@ export function InstallBanner() {
     };
   }, [dismissedKey, platform]);
 
-  if (!visible || isStandalone()) return null;
+  if (isNativeApp() || !visible || isStandalone()) return null;
 
   const dismiss = () => {
     localStorage.setItem(dismissedKey, '1');

@@ -105,7 +105,15 @@ export function HomePage() {
         {quickTracks.length > 0 && (
           <button
             type="button"
-            onClick={() => void playQueue(quickTracks as Track[], 0)}
+            onClick={() => {
+              // Mélange préférentiel : départ aléatoire dans le pool « pour toi »
+              const pool = [...quickTracks];
+              for (let i = pool.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [pool[i], pool[j]] = [pool[j], pool[i]];
+              }
+              void playQueue(pool as Track[], 0);
+            }}
             className="inline-flex items-center gap-2 rounded-full bg-yt-red px-5 py-2.5 text-sm font-medium"
           >
             <Play className="h-4 w-4 fill-white" /> Lecture rapide

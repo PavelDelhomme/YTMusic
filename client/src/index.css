@@ -74,6 +74,27 @@ body {
   animation: fade-up 0.35s ease-out both;
 }
 
+/* Shell app native (Capacitor) — moins « navigateur » */
+html.native-app,
+html.native-app body {
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html.native-app input,
+html.native-app textarea,
+html.native-app [contenteditable] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+html.native-app ::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 .progress-range {
   -webkit-appearance: none;
   appearance: none;

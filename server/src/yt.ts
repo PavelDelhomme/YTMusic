@@ -4,6 +4,18 @@ import type { AlbumMeta, ArtistMeta, PlaylistMeta, Shelf, Track } from './types.
 
 let yt: Innertube | null = null;
 
+/** `m:ss` ou `h:mm:ss` si ≥ 1 h (évite `164:16`). */
+function formatDurationClock(totalSeconds: number): string {
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00';
+  const total = Math.floor(totalSeconds);
+  const s = total % 60;
+  const m = Math.floor(total / 60) % 60;
+  const h = Math.floor(total / 3600);
+  const ss = s.toString().padStart(2, '0');
+  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${ss}`;
+  return `${m}:${ss}`;
+}
+
 export async function getYT(): Promise<Innertube> {
   if (yt) return yt;
   yt = await Innertube.create({
@@ -318,9 +330,7 @@ export async function getTrack(videoId: string) {
     artists,
     album,
     durationSeconds: basic.duration,
-    duration: basic.duration
-      ? new Date(basic.duration * 1000).toISOString().substring(14, 19)
-      : undefined,
+    duration: basic.duration != null ? formatDurationClock(basic.duration) : undefined,
     thumbnails,
     type: 'song',
   };
@@ -392,14 +402,36 @@ export async function getArtistRadio(artistId: string): Promise<Track[]> {
   return radio;
 }
 
-export async function getLyrics(videoId: string): Promise<string | null> {
+export async function getLyrics(videoId: string): Promise<{
+  lyrics: string | null;
+  timed: { startMs: number; text: string }[] | null;
+}> {
   const innertube = await getYT();
   try {
     const lyrics = await innertube.music.getLyrics(videoId);
-    if (!lyrics) return null;
-    return String((lyrics as any).description?.text || (lyrics as any).description || '');
+    if (!lyrics) return { lyrics: null, timed: null };
+    const anyL = lyrics as any;
+    const text = String(anyL.description?.text || anyL.description || anyL.lyrics?.text || '');
+    const timedSrc =
+      anyL.lyrics?.lines ||
+      anyL.timed_lyrics ||
+      anyL.timedLyrics ||
+      anyL.contents?.timed_lyrics?.lines ||
+      [];
+    const timed: { startMs: number; text: string }[] = [];
+    if (Array.isArray(timedSrc)) {
+      for (const line of timedSrc) {
+        const startMs = Number(line.start_time_ms ?? line.startMs ?? line.start_ms ?? line.tStartMs ?? NaN);
+        const lineText = String(line.text || line.lyric_line || line.snippet?.text || '').trim();
+        if (Number.isFinite(startMs) && lineText) timed.push({ startMs, text: lineText });
+      }
+    }
+    return {
+      lyrics: text || (timed.length ? timed.map((l) => l.text).join('\n') : null),
+      timed: timed.length ? timed : null,
+    };
   } catch {
-    return null;
+    return { lyrics: null, timed: null };
   }
 }
 

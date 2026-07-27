@@ -4,6 +4,7 @@ import { api } from '../api';
 import { usePlayer } from '../store/player';
 import {
   Disc3,
+  GripVertical,
   Heart,
   Library,
   ListEnd,
@@ -17,6 +18,7 @@ import { useLibrary } from '../store/library';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArtistLinks } from './ArtistLinks';
 import { CoverImage } from './CoverImage';
+import { formatTrackDuration } from '../lib/time';
 
 type Props = {
   track: Track;
@@ -25,23 +27,28 @@ type Props = {
   showAlbum?: boolean;
   /** Remplace le comportement de lecture (ex. file d'attente) */
   onPlay?: () => void;
+  /** Index dans la file pour drag & drop */
+  queueIndex?: number;
+  draggable?: boolean;
 };
 
 function isPlayable(t: Track) {
   return t.type === 'song' || t.type === 'video' || t.type === 'unknown' || /^[a-zA-Z0-9_-]{11}$/.test(t.id);
 }
 
-export function TrackRow({ track, index, queue, showAlbum, onPlay }: Props) {
+export function TrackRow({ track, index, queue, showAlbum, onPlay, queueIndex, draggable }: Props) {
   const play = usePlayer((s) => s.play);
   const addNext = usePlayer((s) => s.addNext);
   const addToQueue = usePlayer((s) => s.addToQueue);
   const startMix = usePlayer((s) => s.startMix);
+  const moveInQueue = usePlayer((s) => s.moveInQueue);
   const current = usePlayer((s) => s.current);
   const isPlaying = usePlayer((s) => s.isPlaying);
   const { isLiked, toggleLike, playlists, addToPlaylist, hasAlbum, applyLibrary } = useLibrary();
   const [menu, setMenu] = useState(false);
   const [busy, setBusy] = useState(false);
   const [enriched, setEnriched] = useState<Track>(track);
+  const [dragging, setDragging] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const active = current?.id === track.id;
@@ -113,8 +120,33 @@ export function TrackRow({ track, index, queue, showAlbum, onPlay }: Props) {
     <div
       className={`group grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-yt-hover ${
         active ? 'bg-yt-hover/80' : ''
-      }`}
+      } ${dragging ? 'opacity-50' : ''} ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
+      draggable={Boolean(draggable && typeof queueIndex === 'number')}
+      onDragStart={(e) => {
+        if (typeof queueIndex !== 'number') return;
+        setDragging(true);
+        e.dataTransfer.setData('text/queue-index', String(queueIndex));
+        e.dataTransfer.effectAllowed = 'move';
+      }}
+      onDragEnd={() => setDragging(false)}
+      onDragOver={(e) => {
+        if (!draggable || typeof queueIndex !== 'number') return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      }}
+      onDrop={(e) => {
+        if (!draggable || typeof queueIndex !== 'number') return;
+        e.preventDefault();
+        const from = Number(e.dataTransfer.getData('text/queue-index'));
+        if (!Number.isFinite(from) || from === queueIndex) return;
+        moveInQueue(from, queueIndex);
+      }}
     >
+      {draggable ? (
+        <span className="hidden text-yt-muted sm:inline" title="Glisser pour réordonner">
+          <GripVertical className="h-4 w-4" />
+        </span>
+      ) : null}
       <button
         type="button"
         onClick={open}
@@ -161,7 +193,9 @@ export function TrackRow({ track, index, queue, showAlbum, onPlay }: Props) {
       </div>
 
       <div className="flex items-center gap-1">
-        <span className="mr-2 hidden text-xs text-yt-muted sm:inline">{track.duration || ''}</span>
+        <span className="mr-2 hidden text-xs text-yt-muted sm:inline">
+          {formatTrackDuration(track)}
+        </span>
         <button
           type="button"
           title={liked ? 'Retirer des titres aimés' : "J'aime"}
