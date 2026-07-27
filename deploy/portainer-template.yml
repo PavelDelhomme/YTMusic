@@ -2,22 +2,43 @@
 # Title: YTMusic
 # Description: YouTube Music self-hosted (API + PWA) derrière Nginx Proxy Manager
 # Platform: Linux / Compose
+#
+# NPM Proxy Host (comme taskflow.delhomme.ovh → taskflow:3003) :
+#   Domain : ytmusic.delhomme.ovh
+#   Scheme : http
+#   Forward Hostname : ytmusic
+#   Forward Port : 8787
+#   SSL : Let's Encrypt + Force SSL + Websockets ON
+# Réseau : nginx-proxy-manager_npm-network (external)
 
 version: "3.8"
 
 services:
   ytmusic:
-    image: ghcr.io/paveldelhomme/ytmusic:latest
+    image: ${YTMUSIC_IMAGE:-ghcr.io/paveldelhomme/ytmusic:latest}
     container_name: ytmusic
     restart: unless-stopped
     environment:
       NODE_ENV: production
       PORT: "8787"
-      JWT_SECRET: "CHANGE_ME_openssl_rand_hex_32"
-      ADMIN_EMAILS: "toi@example.com"
-      GOOGLE_CLIENT_ID: ""
-      WEBAUTHN_RP_ID: "ytmusic.delhomme.ovh"
-      WEBAUTHN_ORIGIN: "https://ytmusic.delhomme.ovh"
+      APP_ENV: ${APP_ENV:-production}
+      APP_URL: ${APP_URL:-https://ytmusic.delhomme.ovh}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-14d}
+      AUTH_COOKIE_MS: ${AUTH_COOKIE_MS:-34560000000}
+      COOKIE_SECURE: "1"
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-admin@example.com,dev@example.com}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-ytmusic.delhomme.ovh}
+      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-https://ytmusic.delhomme.ovh}
+      SMTP_HOST: ${SMTP_HOST:-ssl0.ovh.net}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_SECURE: ${SMTP_SECURE:-1}
+      SMTP_USE_SSL: ${SMTP_USE_SSL:-1}
+      SMTP_USER: ${SMTP_USER:-noreply@example.com}
+      SMTP_PASS: ${SMTP_PASS:?set SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM:-YTMusic <noreply@example.com>}
+      SMTP_REPLY_TO: ${SMTP_REPLY_TO:-noreply@example.com}
     volumes:
       - ytmusic_data:/app/data
     networks:
@@ -29,6 +50,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 25s
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
 
 volumes:
   ytmusic_data:

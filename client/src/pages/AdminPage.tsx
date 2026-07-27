@@ -34,6 +34,10 @@ export function AdminPage() {
     w_bandit: 0.1,
     w_satisf: 0.1,
   });
+  const [smtp, setSmtp] = useState<any>(null);
+  const [smtpTestTo, setSmtpTestTo] = useState(user?.email || '');
+  const [smtpResult, setSmtpResult] = useState<string>('');
+  const [smtpBusy, setSmtpBusy] = useState(false);
 
   const refresh = useCallback(() => {
     void api
@@ -52,6 +56,13 @@ export function AdminPage() {
       .then((r) => setMails(r.mails || []))
       .catch(() => undefined);
     void api
+      .adminSmtp()
+      .then((r) => {
+        setSmtp(r);
+        if (!smtpTestTo && (r as any)?.smtp) setSmtpTestTo(user?.email || '');
+      })
+      .catch(() => undefined);
+    void api
       .adminReco()
       .then((r) => {
         setReco(r);
@@ -68,7 +79,7 @@ export function AdminPage() {
         }
       })
       .catch(() => undefined);
-  }, [levelFilter]);
+  }, [levelFilter, recoMode, user?.email]);
 
   useEffect(() => {
     refresh();
@@ -139,6 +150,107 @@ export function AdminPage() {
           sub={stats ? `${stats.errors24 || 0} erreurs · ${stats.total || 0} total` : ''}
         />
       </div>
+
+      <section className="mb-6 rounded-2xl border border-yt-border bg-yt-surface p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <Mail className="h-5 w-5 text-yt-red" />
+          <h3 className="font-display text-lg font-semibold">SMTP · maily.ovh</h3>
+        </div>
+        <p className="mb-3 text-sm text-yt-muted">
+          Envoi via OVH MX Plan (<code className="text-white">noreply@example.com</code>) — validation
+          d’inscription, tests. Voir <code className="text-white">docs/SMTP-MAILY.md</code>.
+        </p>
+        <dl className="mb-4 grid gap-2 text-sm sm:grid-cols-2">
+          <div>
+            <dt className="text-xs text-yt-muted">Mode</dt>
+            <dd className="font-medium">{smtp?.smtp?.mode || '…'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-yt-muted">Host</dt>
+            <dd className="font-medium">
+              {smtp?.smtp?.host || '—'}
+              {smtp?.smtp?.port ? `:${smtp.smtp.port}` : ''}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-yt-muted">From</dt>
+            <dd className="truncate font-medium">{smtp?.smtp?.from || '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-yt-muted">APP_URL</dt>
+            <dd className="truncate font-medium">{smtp?.appUrl || '—'}</dd>
+          </div>
+        </dl>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="min-w-[12rem] flex-1 text-xs text-yt-muted">
+            Destinataire test
+            <input
+              value={smtpTestTo}
+              onChange={(e) => setSmtpTestTo(e.target.value)}
+              placeholder="dev@example.com"
+              className="mt-1 w-full rounded-xl border border-yt-border bg-yt-bg px-3 py-2 text-sm text-white"
+            />
+          </label>
+          <button
+            type="button"
+            disabled={smtpBusy}
+            className="rounded-full bg-yt-red px-4 py-2 text-sm font-medium disabled:opacity-50"
+            onClick={() => {
+              setSmtpBusy(true);
+              setSmtpResult('');
+              void api
+                .adminSmtpTest(smtpTestTo || undefined)
+                .then((r) => {
+                  setSmtpResult(
+                    r.ok
+                      ? `OK · ${r.mode}${r.sent ? ` · envoyé à ${smtpTestTo}` : ' · verify() OK'}`
+                      : `Échec · ${r.error || 'inconnu'}`,
+                  );
+                  refresh();
+                })
+                .catch((e) => setSmtpResult(String(e.message || e)))
+                .finally(() => setSmtpBusy(false));
+            }}
+          >
+            {smtpBusy ? 'Envoi…' : 'Tester SMTP'}
+          </button>
+        </div>
+        {smtpResult && <p className="mt-3 text-sm text-yt-muted">{smtpResult}</p>}
+      </section>
+
+      <section className="mb-6 rounded-2xl border border-yt-border bg-yt-surface p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <Rocket className="h-5 w-5 text-yt-red" />
+          <h3 className="font-display text-lg font-semibold">Déploiement NPM / Portainer</h3>
+        </div>
+        <ol className="list-decimal space-y-2 pl-5 text-sm text-yt-muted">
+          <li>
+            Stack Portainer : image <code className="text-white">ghcr.io/…/ytmusic:latest</code> (ou{' '}
+            <code className="text-white">:dev</code>), réseau{' '}
+            <code className="text-white">nginx-proxy-manager_npm-network</code>, hostname{' '}
+            <code className="text-white">ytmusic</code>.
+          </li>
+          <li>
+            Proxy Host NPM : <code className="text-white">ytmusic.delhomme.ovh</code> →{' '}
+            <code className="text-white">http://ytmusic:8787</code> — SSL Let’s Encrypt, Force SSL,
+            <strong className="text-white"> Websockets ON</strong> (comme taskflow).
+          </li>
+          <li>
+            Env stack : <code className="text-white">JWT_SECRET</code>,{' '}
+            <code className="text-white">SMTP_*</code> (maily.ovh),{' '}
+            <code className="text-white">ADMIN_EMAILS</code>,{' '}
+            <code className="text-white">WEBAUTHN_*</code>.
+          </li>
+          <li>
+            MAJ : push <code className="text-white">prod</code> → CI GHCR → Watchtower / Pull &amp;
+            Redeploy. PWA mobile = même URL (SW auto).
+          </li>
+        </ol>
+        <p className="mt-3 text-xs text-yt-muted">
+          Détail : <code className="text-white">DEPLOY.md</code> ·{' '}
+          <code className="text-white">deploy/portainer-template.yml</code>
+        </p>
+      </section>
 
       <section className="mb-6 rounded-2xl border border-yt-border bg-yt-surface p-5">
         <div className="mb-3 flex items-center gap-2">

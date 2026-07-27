@@ -67,8 +67,12 @@ export function Layout() {
   useEffect(() => {
     wireRemotePlayer();
     void initAuth().then(() => {
-      void refresh();
-      initSession();
+      const u = useAuth.getState().user;
+      const guest = !u || u.isGuest || u.email?.includes('@local.ytmusic');
+      if (!guest) {
+        void refresh();
+        initSession();
+      }
     });
   }, [initAuth, refresh, initSession]);
 
@@ -80,15 +84,21 @@ export function Layout() {
       setNeedsOnboarding(false);
       return;
     }
+    void refresh();
+    initSession();
     void api
       .prefs()
       .then((r) => setNeedsOnboarding(!r.prefs?.onboardingDone))
       .catch(() => undefined);
-  }, [authLoaded, user]);
+  }, [authLoaded, user, refresh, initSession]);
 
   useEffect(() => {
+    const guest = !user || user.isGuest || user.email?.includes('@local.ytmusic');
+    if (guest) {
+      setSuggestions([]);
+      return;
+    }
     if (!q.trim()) {
-      // suggestions à froid = historique + prefs
       const t = setTimeout(() => {
         api
           .suggestions('')
@@ -104,7 +114,7 @@ export function Layout() {
         .catch(() => setSuggestions([]));
     }, 200);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, user]);
 
   useEffect(() => {
     bindAudio(audioRef.current);

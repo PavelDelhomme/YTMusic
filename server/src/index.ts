@@ -1,12 +1,20 @@
-import 'dotenv/config';
+import { config as loadEnv } from 'dotenv';
+import { existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __envDir = dirname(fileURLToPath(import.meta.url));
+const rootEnv = join(__envDir, '..', '..', '.env');
+const serverEnv = join(__envDir, '..', '.env');
+if (existsSync(rootEnv)) loadEnv({ path: rootEnv });
+else if (existsSync(serverEnv)) loadEnv({ path: serverEnv });
+else loadEnv();
+
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import type { Request, Response, NextFunction } from 'express';
 import { createServer } from 'node:http';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
 import { createHash, randomBytes, scryptSync } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import {
@@ -110,7 +118,7 @@ import {
   revokeRefreshToken,
   telemetryStats,
 } from './platform.js';
-import { sendVerificationEmail, getAppEnv } from './mail.js';
+import { sendVerificationEmail, getAppEnv, smtpPublicConfig, testSmtp } from './mail.js';
 import {
   disableTotpForUser,
   enableTotpForUser,
@@ -323,7 +331,7 @@ app.post('/api/auth/2fa/disable', authRequired, (req, res) => {
   }
 });
 
-app.post('/api/telemetry', accountRequired, (req, res) => {
+app.post('/api/telemetry', authOptional, (req, res) => {
   try {
     const b = req.body || {};
     const id = insertTelemetry({
@@ -334,7 +342,7 @@ app.post('/api/telemetry', accountRequired, (req, res) => {
       stack: b.stack ? String(b.stack) : undefined,
       url: b.url ? String(b.url) : undefined,
       userAgent: String(req.headers['user-agent'] || b.userAgent || ''),
-      userId: req.user?.isGuest ? undefined : req.userId,
+      userId: req.user && !req.user.isGuest ? req.userId : undefined,
       deviceId: String(req.headers['x-device-id'] || b.deviceId || ''),
       meta: b.meta,
       batteryLevel: typeof b.batteryLevel === 'number' ? b.batteryLevel : null,
@@ -477,6 +485,20 @@ app.get('/api/admin/telemetry', requireAdmin, (req, res) => {
 
 app.get('/api/admin/mail-outbox', requireAdmin, (_req, res) => {
   res.json({ mails: listMailOutbox(80) });
+});
+
+app.get('/api/admin/smtp', requireAdmin, (_req, res) => {
+  res.json({ smtp: smtpPublicConfig(), env: getAppEnv(), appUrl: process.env.APP_URL || null });
+});
+
+app.post('/api/admin/smtp/test', requireAdmin, async (req, res) => {
+  try {
+    const to = String(req.body?.to || req.user?.email || '').trim();
+    const result = await testSmtp(to || undefined);
+    res.status(result.ok ? 200 : 502).json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String((err as Error).message || err) });
+  }
 });
 
 app.post('/api/admin/build', requireAdmin, (_req, res) => {

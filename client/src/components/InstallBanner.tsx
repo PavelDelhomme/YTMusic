@@ -95,7 +95,11 @@ export function InstallBanner() {
 
   useEffect(() => {
     if (isStandalone()) return;
-    if (localStorage.getItem(dismissedKey) === '1') return;
+    const forceInstall = new URLSearchParams(location.search).get('install') === '1';
+    if (!forceInstall && localStorage.getItem(dismissedKey) === '1') return;
+    if (forceInstall) {
+      localStorage.removeItem(dismissedKey);
+    }
 
     const onBip = (e: Event) => {
       e.preventDefault();
@@ -108,13 +112,22 @@ export function InstallBanner() {
     const onInstalled = () => {
       localStorage.setItem(dismissedKey, '1');
       setVisible(false);
+      // nettoie ?install=1 de l’URL
+      if (forceInstall) {
+        const u = new URL(location.href);
+        u.searchParams.delete('install');
+        history.replaceState({}, '', u.pathname + u.search);
+      }
     };
     window.addEventListener('appinstalled', onInstalled);
 
-    // Montrer la bannière même sans BIP (iOS / Firefox / Safari) avec guide clair
-    const delay = platform === 'ios' ? 2500 : platform === 'android' ? 3500 : 5000;
+    // Montrer tout de suite si ?install=1 (parcours make mobile-install-adb)
+    const delay = forceInstall ? 400 : platform === 'ios' ? 2500 : platform === 'android' ? 2000 : 5000;
     const t = setTimeout(() => {
-      if (!isStandalone()) setVisible(true);
+      if (!isStandalone()) {
+        setVisible(true);
+        if (forceInstall) setShowGuide(true);
+      }
     }, delay);
 
     return () => {

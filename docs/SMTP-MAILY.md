@@ -1,0 +1,46 @@
+# SMTP maily.ovh (OVH MX Plan)
+
+Même socle que JobbingTrack : compte technique **`noreply@example.com`**, serveur OVH.
+
+## Variables
+
+| Variable | Valeur typique |
+|----------|----------------|
+| `SMTP_HOST` | `ssl0.ovh.net` |
+| `SMTP_PORT` | `465` (SSL) ou `587` (STARTTLS) |
+| `SMTP_SECURE` / `SMTP_USE_SSL` | `1` sur port 465 |
+| `SMTP_USER` | `noreply@example.com` |
+| `SMTP_PASS` | mot de passe de la boîte (Portainer / `.env` local **uniquement**) |
+| `SMTP_FROM` | `YTMusic <noreply@example.com>` |
+| `SMTP_REPLY_TO` | `noreply@example.com` |
+| `APP_URL` | URL publique (liens `/verify-email?token=…`) |
+
+Sans `SMTP_HOST` → mails uniquement dans **Admin → outbox** + logs console.
+
+## Local
+
+1. Copie `.env.example` → `.env`
+2. Renseigne `SMTP_PASS` (ou laisse vide pour outbox)
+3. `make seed-users` (crée `paul@` / `dev@` si `SEED_PASSWORD` défini)
+4. `make dev` → Admin → **Tester SMTP** vers `dev@example.com`
+
+Alternative Mailhog : `make docker-dev` puis `SMTP_HOST=localhost` `SMTP_PORT=1025` `SMTP_SECURE=0`.
+
+## Prod (Portainer)
+
+Dans la stack `ytmusic`, injecte les `SMTP_*` (secrets Portainer).  
+NPM : `ytmusic.delhomme.ovh` → `http://ytmusic:8787` + Websockets.
+
+## Inscription / multi-appareils
+
+1. Création compte → email de validation depuis `noreply@example.com`
+2. Login → JWT access + refresh long (cookies / localStorage) → sync biblio, prefs, reco, playlists via le même `userId`
+3. Cast / sessions WS : plusieurs devices du même compte
+
+## Admin
+
+- `GET /api/admin/smtp` — config publique (sans mot de passe)
+- `POST /api/admin/smtp/test` `{ "to": "…" }` — verify + envoi test
+- Outbox : mails stockés même en mode SMTP (audit)
+
+Réf. JobbingTrack : `docs/emails/SMTP_CONFIGURATION.md` (§ OVH maily.ovh).
