@@ -1,3 +1,4 @@
+import type { SyntheticEvent } from 'react';
 import {
   Cast,
   ChevronDown,
@@ -26,6 +27,11 @@ function fmt(s: number) {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
   return `${m}:${sec.toString().padStart(2, '0')}`;
+}
+
+/** Empêche le clic de remonter jusqu’au footer (qui ouvre le Now Playing). */
+function stop(e: SyntheticEvent) {
+  e.stopPropagation();
 }
 
 export function PlayerBar({
@@ -74,26 +80,22 @@ export function PlayerBar({
 
   return (
     <footer
-      className="fixed bottom-0 left-0 right-0 z-50 border-t border-white/10 bg-black"
+      className="fixed bottom-0 left-0 right-0 z-50 cursor-pointer border-t border-white/10 bg-black"
       onClick={() => {
-        if (!expanded) expand('queue');
+        // Même action que la flèche ↑ : ouvrir À suivre / Paroles / Similaires
+        if (expanded) return;
+        expand('queue');
       }}
       role="presentation"
     >
       {!isActivePlayer && activeName && (
-        <div
-          className="border-b border-yt-border/60 px-3 py-1 text-center text-[11px] text-yt-muted"
-          onClick={(e) => e.stopPropagation()}
-        >
+        <div className="border-b border-yt-border/60 px-3 py-1 text-center text-[11px] text-yt-muted" onClick={stop}>
           Lecture sur <span className="text-white">{activeName}</span> — contrôle distant actif
         </div>
       )}
       <div className="mx-auto grid max-w-[1600px] grid-cols-1 items-center gap-2 px-3 py-2 md:grid-cols-[1.1fr_1.3fr_1.1fr] md:gap-4 md:px-5 md:py-2.5">
-        {/* Gauche : contrôles lecture + temps */}
-        <div
-          className="flex items-center gap-1 sm:gap-2"
-          onClick={(e) => e.stopPropagation()}
-        >
+        {/* Prev / play / next / temps — ne pas expand */}
+        <div className="flex items-center gap-1 sm:gap-2" onClick={stop}>
           <button type="button" onClick={() => void prev()} className="rounded-full p-2 text-white hover:bg-white/10">
             <SkipBack className="h-5 w-5 fill-white" />
           </button>
@@ -113,27 +115,22 @@ export function PlayerBar({
           </span>
         </div>
 
-        {/* Centre : infos titre (clic = expand) */}
+        {/* Cover / titre / artiste : stop (pas d’expand) ; zones vides du footer → expand */}
         <div className="flex min-w-0 items-center gap-3">
-          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md md:h-14 md:w-14">
+          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md md:h-14 md:w-14" onClick={stop} onKeyDown={stop}>
             <CoverImage item={current} size={120} rounded="md" />
           </div>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1" onClick={stop} onKeyDown={stop}>
             <div className="truncate text-sm font-medium">{current.title}</div>
-            <div
-              className="truncate text-xs text-yt-muted"
-              onClick={(e) => e.stopPropagation()}
-            >
+            <div className="truncate text-xs text-yt-muted">
               <ArtistLinks track={current} />
-              {current.album?.name ? (
-                <span className="text-yt-muted"> · {current.album.name}</span>
-              ) : null}
+              {current.album?.name ? <span className="text-yt-muted"> · {current.album.name}</span> : null}
             </div>
           </div>
           <button
             type="button"
             onClick={(e) => {
-              e.stopPropagation();
+              stop(e);
               void toggleLike(current);
             }}
             className="shrink-0 rounded-full p-2 text-yt-muted hover:text-white"
@@ -142,11 +139,8 @@ export function PlayerBar({
           </button>
         </div>
 
-        {/* Droite : volume, repeat, shuffle, cast, paroles, file, collapse */}
-        <div
-          className="flex items-center justify-end gap-0.5 sm:gap-1"
-          onClick={(e) => e.stopPropagation()}
-        >
+        {/* Volume, boucle, aléatoire, cast, paroles, file, flèche */}
+        <div className="flex items-center justify-end gap-0.5 sm:gap-1" onClick={stop}>
           <div className="mr-1 hidden items-center gap-2 lg:flex">
             <Volume2 className="h-4 w-4 text-yt-muted" />
             <input
@@ -217,8 +211,7 @@ export function PlayerBar({
         </div>
       </div>
 
-      {/* Progress fine sous la barre (comme YTM) */}
-      <div className="px-0" onClick={(e) => e.stopPropagation()}>
+      <div className="px-0" onClick={stop}>
         <input
           type="range"
           min={0}

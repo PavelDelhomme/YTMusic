@@ -22,7 +22,7 @@ type PlayerState = {
   lyrics: string | null;
   related: Track[];
   hydrated: boolean;
-  play: (track: Track, queue?: Track[], opts?: { preserveQueue?: boolean }) => Promise<void>;
+  play: (track: Track, queue?: Track[], opts?: { preserveQueue?: boolean; noAutoRadio?: boolean }) => Promise<void>;
   playQueue: (tracks: Track[], startIndex?: number) => Promise<void>;
   playAt: (index: number) => Promise<void>;
   toggle: () => void;
@@ -205,6 +205,40 @@ function prefetchTrack(trackId: string | undefined) {
     .catch(() => undefined);
 }
 
+/** Remplit la file avec un radio / similaires si plus rien à suivre (style YTM). */
+async function ensureAutoRadio(seedId: string) {
+  const cur = usePlayer.getState();
+  const upcoming = cur.queue.slice(cur.queueIndex + 1).filter(isPlayable);
+  if (upcoming.length >= 3) {
+    prefetchTrack(upcoming[0]?.id);
+    return;
+  }
+  if (!isPlayable({ id: seedId } as Track)) return;
+  try {
+    const { radio, related } = await api.related(seedId);
+    const pool = (radio.length ? radio : related).filter(
+      (t) => t.id !== seedId && isPlayable(t),
+    );
+    if (!pool.length) return;
+    const state = usePlayer.getState();
+    // Ne pas écraser une file album/playlist déjà longue
+    const remaining = state.queue.slice(state.queueIndex + 1).filter(isPlayable);
+    if (remaining.length >= 3) return;
+    const existing = new Set(state.queue.map((t) => t.id));
+    const extra = pool.filter((t) => !existing.has(t.id)).slice(0, 40);
+    if (!extra.length) return;
+    const queue = [...state.queue.slice(0, state.queueIndex + 1), ...remaining, ...extra];
+    usePlayer.setState({
+      queue,
+      related: related.length ? related : radio,
+    });
+    prefetchTrack(extra[0]?.id);
+    publish();
+  } catch (err) {
+    console.warn('auto-radio', err);
+  }
+}
+
 async function playLocal(track: Track, state: PlayerState, gen: number) {
   const audio = state.audioEl;
   if (!audio) return;
@@ -369,7 +403,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     }
 
     const filtered = (queue || []).filter(isPlayable);
-    const nextQueue = filtered.length ? filtered : queue?.length ? queue : [track];
+    // File = titres jouables seulement ; un seul titre → radio auto ensuite
+    const nextQueue = filtered.length ? filtered : [track];
     const idx = Math.max(0, nextQueue.findIndex((t) => t.id === track.id));
     set({
       current: track,
@@ -381,33 +416,19 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     });
 
     const gen = ++playGeneration;
-    // précharge la piste suivante pendant qu’on démarre celle-ci
     const nextIdx = (idx >= 0 ? idx : 0) + 1;
     if (nextQueue[nextIdx]) prefetchTrack(nextQueue[nextIdx].id);
 
     try {
       await playLocal(track, get(), gen);
       if (gen !== playGeneration) return;
-      // Historique avec métadonnées enrichies (miniatures incluses)
       recordStarted(get().current || track);
       set({ isPlaying: true, isLoading: false });
       publish();
       void get().loadRelated(track.id);
-
-      // Only auto-extend with radio when the queue was a single track (not an album/playlist)
-      if (!opts?.preserveQueue && nextQueue.length < 2) {
-        api
-          .related(track.id)
-          .then(({ radio }) => {
-            const filtered = radio.filter((t) => t.id !== track.id && isPlayable(t));
-            if (!filtered.length) return;
-            const cur = get();
-            // Don't clobber if user already built a bigger queue
-            if (cur.queue.length > 2 || cur.current?.id !== track.id) return;
-            set({ queue: [track, ...filtered], queueIndex: 0 });
-            publish();
-          })
-          .catch(() => undefined);
+      // Toujours proposer une suite si la file est courte (1 titre ou fin proche)
+      if (!opts?.noAutoRadio) {
+        void ensureAutoRadio(track.id);
       }
     } catch (err) {
       console.error(err);
@@ -457,7 +478,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       sendCmd({ action: 'next' });
       return;
     }
-    const { queue, queueIndex, repeat, shuffle } = get();
+    const { queue, queueIndex, repeat, shuffle, current } = get();
     if (!queue.length) return;
     if (repeat === 'one') {
       await get().playAt(queueIndex);
@@ -465,8 +486,19 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     }
     let nextIndex = queueIndex + 1;
     if (nextIndex >= queue.length) {
-      if (repeat === 'all') nextIndex = 0;
-      else return;
+      if (repeat === 'all') {
+        nextIndex = 0;
+      } else {
+        // Fin de file → charger des similaires puis rejouer next
+        if (current?.id) {
+          await ensureAutoRadio(current.id);
+          const q = get().queue;
+          if (get().queueIndex + 1 < q.length) {
+            await get().playAt(get().queueIndex + 1);
+          }
+        }
+        return;
+      }
     }
     if (shuffle) {
       const remaining = queue.filter((_, i) => i !== queueIndex);
@@ -475,11 +507,14 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       if (nextTrack) {
         const newQueue = [queue[queueIndex], ...shuffled];
         set({ queue: newQueue });
-        await get().play(nextTrack, newQueue, { preserveQueue: true });
+        await get().play(nextTrack, newQueue, { preserveQueue: true, noAutoRadio: true });
+        void ensureAutoRadio(nextTrack.id);
         return;
       }
     }
     await get().playAt(nextIndex);
+    const played = get().current;
+    if (played?.id) void ensureAutoRadio(played.id);
   },
 
   prev: async () => {

@@ -75,7 +75,9 @@ make update-apps   # rappel MAJ
 1. **Safari** uniquement
 2. Partager → **Sur l’écran d’accueil**
 
-## Compte
+## PWA déjà installée sur mobile / PC
 
-Créer un compte dans l’app (email + validation) = bibliothèque sync entre appareils.
-Ce n’est **pas** un abonnement YouTube : c’est **ton** serveur.
+Au prochain ouverture de l’app, le service worker (`autoUpdate`) récupère la nouvelle version
+servie par le domaine (prod) ou par Vite (dev LAN). Pas besoin du Play Store.
+
+Pour forcer : fermer l’app → rouvrir, ou vider les données du site.

@@ -7,7 +7,8 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 .PHONY: help install dev dev-server dev-client build start deploy-local \
 	clean-vite icons docker-dev docker-dev-down docker-build \
-	mobile-qr mobile-hint update-apps status ports kill-dev
+	mobile-qr mobile-hint update-apps status ports kill-dev \
+	push-dev push-prod deploy-hint
 
 help: ## Affiche cette aide
 	@echo ""
@@ -18,6 +19,7 @@ help: ## Affiche cette aide
 	@echo ""
 	@echo "  Domaine prod  : https://ytmusic.delhomme.ovh"
 	@echo "  Dev local     : http://localhost:5173  (API :8787)"
+	@echo "  Mobile LAN    : make mobile-qr puis ouvrir l’IP:5173 sur le téléphone"
 	@echo "  Branches      : feat/* depuis dev → merge prod"
 	@echo ""
 
@@ -120,3 +122,39 @@ kill-dev: ## Tue les process sur 5173 et 8787
 	@fuser -k 5173/tcp 2>/dev/null || true
 	@fuser -k 8787/tcp 2>/dev/null || true
 	@echo "Ports libérés"
+
+push-dev: ## Push la branche courante vers origin (intégration)
+	cd $(ROOT) && git push -u origin HEAD
+
+push-prod: ## Merge dev → prod localement puis push (ATTENTION prod)
+	@echo "Merge dev → prod puis push…"
+	cd $(ROOT) && git fetch origin && \
+	  git checkout prod && git pull origin prod && \
+	  git merge origin/dev -m "merge: promu dev → prod" && \
+	  git push origin prod && \
+	  git checkout -
+
+deploy-hint: ## Guide déploiement Portainer / NPM / mobile
+	@echo ""
+	@echo "  Déploiement"
+	@echo "  -----------"
+	@echo "  LOCAL + téléphone (même Wi‑Fi) :"
+	@echo "    make dev"
+	@echo "    make mobile-qr          # ouvre http://IP:5173 sur Android/iPhone"
+	@echo "    Admin → QR code"
+	@echo ""
+	@echo "  DEV distant (image :dev) :"
+	@echo "    git push origin dev     # CI → ghcr.io/.../ytmusic:dev"
+	@echo "    Portainer stack : YTMUSIC_IMAGE=...:dev"
+	@echo ""
+	@echo "  PRÉPROD : même VPS, autre domaine ytmusic-preprod.delhomme.ovh"
+	@echo "    APP_ENV=preprod APP_URL=https://ytmusic-preprod.delhomme.ovh"
+	@echo ""
+	@echo "  PROD :"
+	@echo "    make push-prod          # ou PR GitHub dev → prod"
+	@echo "    CI → :latest / :prod → Watchtower / Portainer pull"
+	@echo "    NPM : ytmusic.delhomme.ovh → ytmusic:8787 + websockets"
+	@echo ""
+	@echo "  PWA déjà installée : se met à jour au prochain lancement (SW)"
+	@echo "  Docs : docs/DNS-ET-INSTALL.md  DEPLOY.md"
+	@echo ""

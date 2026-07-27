@@ -34,21 +34,29 @@ export function deployInfo(port: number) {
   const built = existsSync(clientDist);
   const desktopPkg = join(ROOT, 'desktop', 'package.json');
   const clientPort = Number(process.env.CLIENT_PORT || 5173);
-  // En prod (build présent) → port API ; en dev → Vite
-  const appPort = built ? port : clientPort;
+  // Dev (tsx/vite) → URLs sur :5173 pour le téléphone ; prod conteneur → :port API
+  const servingDist =
+    process.env.SERVE_DIST === '1' ||
+    (process.env.NODE_ENV === 'production' && built);
+  const appPort = servingDist ? port : clientPort;
   const urls = [
     `http://localhost:${appPort}`,
     ...lan.map((l) => `http://${l.address}:${appPort}`),
   ];
+  // Toujours exposer aussi les URLs Vite en parallèle si on est en dual mode
+  const viteUrls =
+    !servingDist
+      ? []
+      : lan.map((l) => `http://${l.address}:${clientPort}`);
   return {
     port,
     clientPort,
     appPort,
-    mode: built ? 'production' : 'development',
+    mode: servingDist ? 'production' : 'development',
     built,
     builtAt: built ? statSync(clientDist).mtimeMs : null,
     lan,
-    urls,
+    urls: [...urls, ...viteUrls.filter((u) => !urls.includes(u))],
     desktopReady: existsSync(desktopPkg),
     ytdlp: existsSync(join(ROOT, 'bin', 'yt-dlp')),
     users: (db.prepare('SELECT COUNT(*) as c FROM users WHERE email NOT LIKE ?').get('%@local.ytmusic') as { c: number })
@@ -56,6 +64,9 @@ export function deployInfo(port: number) {
     guests: (db.prepare('SELECT COUNT(*) as c FROM users WHERE email LIKE ?').get('%@local.ytmusic') as { c: number })
       .c,
     buildJob,
+    tip: servingDist
+      ? 'Prod : ouvre le domaine NPM ou les URLs ci-dessus'
+      : 'Mobile LAN : même Wi‑Fi, ouvre une URL http://IP:5173 (QR Admin)',
   };
 }
 
