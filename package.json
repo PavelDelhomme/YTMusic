@@ -1,0 +1,25 @@
+{
+  "name": "ytmusic",
+  "version": "1.0.0",
+  "private": true,
+  "description": "YouTube Music — web, mobile PWA & desktop",
+  "scripts": {
+    "dev": "concurrently -n server,client -c red,cyan \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev:server": "npm run dev -w server",
+    "dev:client": "npm run dev -w client",
+    "dev:desktop": "npm run start --prefix desktop",
+    "build": "npm run build -w client",
+    "start": "npm run start -w server",
+    "deploy:local": "npm run build && npm start",
+    "docker:dev": "docker compose -f docker-compose.dev.yml up --build -d",
+    "docker:dev:down": "docker compose -f docker-compose.dev.yml down",
+    "docker:build": "docker build -t ytmusic:local ."
+  },
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

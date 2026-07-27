@@ -1,0 +1,26 @@
+# Développement local en conteneurs (sans Portainer / sans NPM)
+services:
+  ytmusic:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ytmusic-dev
+    ports:
+      - "8787:8787"
+    environment:
+      NODE_ENV: production
+      PORT: "8787"
+      JWT_SECRET: ${JWT_SECRET:-dev-local-secret-change-me}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-admin@ytmusic.local}
+      WEBAUTHN_RP_ID: localhost
+      WEBAUTHN_ORIGIN: http://localhost:8787
+    volumes:
+      - ytmusic_dev_data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  ytmusic_dev_data:

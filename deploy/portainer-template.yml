@@ -1,0 +1,42 @@
+# Template Portainer CE — Custom Templates
+# Title: YTMusic
+# Description: YouTube Music self-hosted (API + PWA) derrière Nginx Proxy Manager
+# Platform: Linux / Compose
+
+version: "3.8"
+
+services:
+  ytmusic:
+    image: ghcr.io/paveldelhomme/ytmusic:latest
+    container_name: ytmusic
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "8787"
+      JWT_SECRET: "CHANGE_ME_openssl_rand_hex_32"
+      ADMIN_EMAILS: "toi@example.com"
+      GOOGLE_CLIENT_ID: ""
+      WEBAUTHN_RP_ID: "ytmusic.delhomme.ovh"
+      WEBAUTHN_ORIGIN: "https://ytmusic.delhomme.ovh"
+    volumes:
+      - ytmusic_data:/app/data
+    networks:
+      - npm-network
+      - shared
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+
+volumes:
+  ytmusic_data:
+
+networks:
+  npm-network:
+    external: true
+    name: nginx-proxy-manager_npm-network
+  shared:
+    external: true
+    name: shared-network-copy

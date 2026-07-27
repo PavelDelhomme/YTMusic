@@ -1,0 +1,16 @@
+{
+  "name": "ytmusic-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^37.2.0"
+  },
+  "allowScripts": {
+    "electron@37.10.3": true
+  }
+}
