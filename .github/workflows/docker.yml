@@ -2,7 +2,7 @@ name: Build & Push YTMusic
 
 on:
   push:
-    branches: [main, dev]
+    branches: [prod, dev]
   workflow_dispatch:
 
 env:
@@ -35,8 +35,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=prod,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/prod' }}
+            type=raw,value=prod,enable=${{ github.ref == 'refs/heads/prod' }}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=sha,prefix=
             type=ref,event=branch

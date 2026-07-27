@@ -1,6 +1,6 @@
 # Déploiement YTMusic — VPS / Portainer / Nginx Proxy Manager
 
-Ce guide couvre le **fix Vite 504**, le **déploiement prod** sur ton VPS (comme Nextcloud), et le **flux git main/dev**.
+Ce guide couvre le **fix Vite 504**, le **déploiement prod** sur ton VPS (comme Nextcloud), et le **flux git prod/dev**.
 
 ---
 
@@ -57,8 +57,9 @@ Ex. `ytmusic.delhomme.ovh` → `95.111.227.204` (adapte si ton IP a changé).
 
 | Branche | Rôle |
 |---------|------|
-| **`main`** (défaut) | Production — images `ghcr.io/<user>/ytmusic:latest` et `:prod` |
+| **`prod`** (défaut) | Production — images `ghcr.io/<user>/ytmusic:latest` et `:prod` |
 | **`dev`** | Intégration / tests — image `:dev` |
+| `feat/…`, `fix/…`, `misc/…`, `err/…`, `tests/…` | Travail depuis **dev** (voir `.cursor/rules/git-branches.mdc`) |
 
 ### Première fois (depuis ta machine)
 
@@ -67,15 +68,15 @@ cd /chemin/YTMusic
 git init
 git add .
 git commit -m "chore: bootstrap YTMusic avec déploiement Docker"
-git branch -M main
+git branch -M prod
 # Crée le repo vide sur GitHub puis :
 git remote add origin git@github.com:TON_USER/YTMusic.git
-git push -u origin main
+git push -u origin prod
 git checkout -b dev
 git push -u origin dev
 ```
 
-Active **Packages** sur le repo (GHCR). Après un push sur `main`, l’action `.github/workflows/docker.yml` build et push l’image.
+Active **Packages** sur le repo (GHCR). Après un push sur `prod`, l’action `.github/workflows/docker.yml` build et push l’image.
 
 Remplace `OWNER` dans :
 
@@ -103,7 +104,7 @@ Pour que Portainer pull GHCR privé : Settings → Registries → add GitHub ave
 
 1. Stacks → Add stack → **Repository**  
 2. URL du repo GitHub  
-3. Reference : `refs/heads/main`  
+3. Reference : `refs/heads/prod`  
 4. Compose path : `docker-compose.yml`  
 5. Environnement : copie `.env.production.example` (JWT_SECRET, ADMIN_EMAILS, domaine passkeys, image)
 
@@ -171,7 +172,7 @@ Sans ça, les **passkeys** échoueront en prod (RP ID ≠ domaine).
 
 ### Backend / web (conteneur)
 
-1. Merge `dev` → `main` sur GitHub  
+1. Merge `dev` → `prod` sur GitHub  
 2. L’action Docker pousse `ghcr.io/.../ytmusic:latest`  
 3. Dans Portainer : Stack → **Pull and redeploy**  
    ou active **Watchtower** (label déjà sur le service) pour pull auto
@@ -184,7 +185,7 @@ Même URL = même version web & mobile installée.
 
 ### Desktop Electron
 
-Rebuild / redistribue depuis la branche `main` quand tu veux (hors Portainer).
+Rebuild / redistribue depuis la branche `prod` quand tu veux (hors Portainer).
 
 ---
 
@@ -193,7 +194,7 @@ Rebuild / redistribue depuis la branche `main` quand tu veux (hors Portainer).
 ```
 feature → branche dev → tests locaux
               ↓
-         merge PR vers main
+         merge PR vers prod
               ↓
          GitHub Actions → image :latest
               ↓
@@ -222,7 +223,7 @@ docker compose -f docker-compose.dev.yml up --build -d
 
 ### Prod VPS
 
-Uniquement via Portainer + image `main` / `:latest`.
+Uniquement via Portainer + image `prod` / `:latest`.
 
 ---
 
@@ -238,7 +239,7 @@ Compte démo local historique : `demo@ytmusic.local` / `demo1234` (à ne pas uti
 
 ## 11. Checklist go-live
 
-- [ ] Repo GitHub avec `main` + `dev`  
+- [ ] Repo GitHub avec `prod` + `dev`  
 - [ ] Action Docker verte (image sur GHCR)  
 - [ ] DNS `ytmusic.delhomme.ovh`  
 - [ ] Stack Portainer healthy  
