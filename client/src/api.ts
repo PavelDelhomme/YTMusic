@@ -195,7 +195,7 @@ async function tryRefresh() {
 export const api = {
   health: () => req<{ ok: boolean; auth: { googleEnabled: boolean; googleClientId: string | null } }>('/api/health'),
   authConfig: () => req<{ googleEnabled: boolean; googleClientId: string | null }>('/api/auth/config'),
-  me: () => req<{ user: User }>('/api/auth/me'),
+  me: () => req<{ user: User | null }>('/api/auth/me'),
   register: (email: string, password: string, name: string) =>
     req<{ user: User; token: string; refreshToken?: string; needsEmailVerification?: boolean }>(
       '/api/auth/register',
@@ -275,12 +275,24 @@ export const api = {
   adminBuildStatus: () => req<any>('/api/admin/build'),
 
   home: () =>
-    req<{ shelves: Shelf[]; seeds?: string[]; hasMore?: boolean; page?: number }>('/api/home'),
+    req<{
+      shelves: Shelf[];
+      seeds?: string[];
+      hasMore?: boolean;
+      page?: number;
+      needsOnboarding?: boolean;
+      radios?: { id: string; title: string }[];
+    }>('/api/home'),
   homeMore: (page: number, seeds: string[] = []) =>
     req<{ shelves: Shelf[]; hasMore: boolean; page: number }>(
       `/api/home/more?page=${page}&seeds=${encodeURIComponent(seeds.join(','))}`,
     ),
-  explore: () => req<{ shelves: Shelf[] }>('/api/explore'),
+  explore: () =>
+    req<{
+      shelves: Shelf[];
+      needsOnboarding?: boolean;
+      radios?: { id: string; title: string }[];
+    }>('/api/explore'),
   search: (q: string, filter = 'all') =>
     req<{
       topResult: Track | null;
@@ -292,6 +304,51 @@ export const api = {
     }>(`/api/search?q=${encodeURIComponent(q)}&filter=${filter}`),
   suggestions: (q: string) =>
     req<{ suggestions: string[] }>(`/api/search/suggestions?q=${encodeURIComponent(q)}`),
+  searchHistory: () => req<{ history: any[] }>('/api/search/history'),
+  prefs: () => req<{ prefs: any; follows: any[] }>('/api/prefs'),
+  savePrefs: (patch: Record<string, unknown>) =>
+    req<{ prefs: any }>('/api/prefs', { method: 'PUT', body: JSON.stringify(patch) }),
+  onboarding: (payload: Record<string, unknown>) =>
+    req<{ prefs: any; follows: any[] }>('/api/prefs/onboarding', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  pins: () => req<{ pins: any[] }>('/api/pins'),
+  addPin: (payload: Record<string, unknown>) =>
+    req<{ pins: any[] }>('/api/pins', { method: 'POST', body: JSON.stringify(payload) }),
+  removePin: (id: string) => req<{ pins: any[] }>(`/api/pins/${id}`, { method: 'DELETE' }),
+  listen: (payload: {
+    trackId: string;
+    event: 'start' | 'progress' | 'complete' | 'skip';
+    progressPct?: number;
+    durationMs?: number;
+    seedId?: string;
+    track?: Track;
+  }) => req<{ ok: boolean }>('/api/listen', { method: 'POST', body: JSON.stringify(payload) }),
+  followArtist: (id: string, name?: string) =>
+    req<{ ok: boolean; follows: any[] }>(`/api/artists/${id}/follow`, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  unfollowArtist: (id: string) =>
+    req<{ ok: boolean; follows: any[] }>(`/api/artists/${id}/follow`, { method: 'DELETE' }),
+  recoSimilar: (trackId: string) =>
+    req<{ tracks: Track[]; related: Track[]; radio: Track[] }>(`/api/reco/similar/${trackId}`),
+  recoRadio: (category: string) =>
+    req<{ category: any; tracks: Track[]; seed: Track | null }>(`/api/reco/radio/${category}`),
+  recoRadios: () => req<{ radios: { id: string; title: string }[] }>('/api/reco/radios'),
+  recoFeedback: (payload: {
+    trackId: string;
+    verdict: 'good' | 'bad';
+    seedId?: string;
+    context?: string;
+  }) => req<{ ok: boolean }>('/api/reco/feedback', { method: 'POST', body: JSON.stringify(payload) }),
+  adminReco: () => req<any>('/api/admin/reco'),
+  adminRecoWeights: (mode: string, weights: Record<string, number>) =>
+    req<any>('/api/admin/reco/weights', {
+      method: 'PUT',
+      body: JSON.stringify({ mode, ...weights }),
+    }),
   track: (id: string) =>
     req<{ track: Track; streamUrl: string; cached: boolean }>(`/api/track/${id}`),
   upNext: (id: string) => req<{ tracks: Track[] }>(`/api/track/${id}/upnext`),

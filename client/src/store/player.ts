@@ -173,9 +173,63 @@ function sendCmd(command: Record<string, unknown>) {
   useSession.getState().sendCommand(command);
 }
 
-/** Dès qu'un titre démarre (même 1s) → historique */
+/** Dès qu'un titre démarre (même 1s) → historique + listen_events */
 function recordStarted(track: Track) {
   void useLibrary.getState().recordPlay(track);
+  void api
+    .listen({ trackId: track.id, event: 'start', progressPct: 0, track })
+    .catch(() => undefined);
+}
+
+let listenTrackId: string | null = null;
+let listenStartedAt = 0;
+let lastProgressSent = 0;
+let completedForTrack: string | null = null;
+
+export function reportListenProgress(progress: number, duration: number) {
+  const current = usePlayer.getState().current;
+  if (!current?.id || !duration) return;
+  if (listenTrackId !== current.id) {
+    listenTrackId = current.id;
+    listenStartedAt = Date.now();
+    lastProgressSent = 0;
+    completedForTrack = null;
+  }
+  const pct = Math.min(100, (progress / duration) * 100);
+  if (pct - lastProgressSent >= 25 && pct < 90) {
+    lastProgressSent = pct;
+    void api
+      .listen({ trackId: current.id, event: 'progress', progressPct: pct })
+      .catch(() => undefined);
+  }
+  if (pct >= 90 && completedForTrack !== current.id) {
+    completedForTrack = current.id;
+    void api
+      .listen({
+        trackId: current.id,
+        event: 'complete',
+        progressPct: pct,
+        durationMs: Math.round(duration * 1000),
+        track: current,
+      })
+      .catch(() => undefined);
+  }
+}
+
+export function reportSkipIfEarly(progress: number) {
+  const current = usePlayer.getState().current;
+  if (!current?.id) return;
+  const elapsed = Date.now() - listenStartedAt;
+  if (progress < 15 || elapsed < 15_000) {
+    void api
+      .listen({
+        trackId: current.id,
+        event: 'skip',
+        progressPct: Math.min(100, (progress / Math.max(1, usePlayer.getState().duration)) * 100),
+        durationMs: elapsed,
+      })
+      .catch(() => undefined);
+  }
 }
 
 /** Génération pour ignorer les play() obsolètes si l’utilisateur saute vite */
@@ -478,8 +532,9 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       sendCmd({ action: 'next' });
       return;
     }
-    const { queue, queueIndex, repeat, shuffle, current } = get();
+    const { queue, queueIndex, repeat, shuffle, current, progress } = get();
     if (!queue.length) return;
+    reportSkipIfEarly(progress);
     if (repeat === 'one') {
       await get().playAt(queueIndex);
       return;

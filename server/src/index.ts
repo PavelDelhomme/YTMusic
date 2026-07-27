@@ -17,7 +17,6 @@ import {
   searchSuggestions,
   getTrack,
   getUpNext,
-  getRelated,
   getAlbumRadio,
   getArtistRadio,
   getLyrics,
@@ -62,10 +61,10 @@ import {
   listPasskeys,
 } from './passkeys.js';
 import {
+  accountRequired,
   authConfig,
   authOptional,
   authRequired,
-  ensureUser,
   issueSession,
   loginGoogle,
   loginLocal,
@@ -74,6 +73,32 @@ import {
   signToken,
   verifyToken,
 } from './auth.js';
+import {
+  addPin,
+  addRecoFeedback,
+  addSearchHistory,
+  followArtist,
+  getPrefs,
+  listFollows,
+  listListenEvents,
+  listPins,
+  listSearchHistory,
+  listWeights,
+  recoAdminStats,
+  recordListenEvent,
+  removePin,
+  savePrefs,
+  saveWeights,
+  unfollowArtist,
+} from './prefs.js';
+import {
+  exploreReco,
+  homeReco,
+  radioForUser,
+  RADIO_CATEGORIES,
+  similarForUser,
+  suggestSearch,
+} from './reco.js';
 import {
   consumeEmailToken,
   createEmailToken,
@@ -111,6 +136,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 const PORT = Number(process.env.PORT || 8787);
 
+function p(v: string | string[] | undefined): string {
+  if (Array.isArray(v)) return String(v[0] || '');
+  return String(v || '');
+}
+
 const app = express();
 app.set('trust proxy', 1);
 app.use(cors({ origin: true, credentials: true }));
@@ -129,7 +159,13 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.get('/api/auth/config', (_req, res) => res.json(authConfig()));
-app.get('/api/auth/me', ensureUser, (req, res) => res.json({ user: req.user }));
+app.get('/api/auth/me', authOptional, (req, res) => {
+  if (!req.user || req.user.isGuest) {
+    res.json({ user: null });
+    return;
+  }
+  res.json({ user: req.user });
+});
 
 app.post('/api/auth/register', async (req, res) => {
   try {
@@ -287,7 +323,7 @@ app.post('/api/auth/2fa/disable', authRequired, (req, res) => {
   }
 });
 
-app.post('/api/telemetry', ensureUser, (req, res) => {
+app.post('/api/telemetry', accountRequired, (req, res) => {
   try {
     const b = req.body || {};
     const id = insertTelemetry({
@@ -452,7 +488,7 @@ app.get('/api/admin/build', requireAdmin, (_req, res) => {
 });
 
 // Deploy info also available lightly for logged-in users (QR on profile) — LAN URLs only
-app.get('/api/deploy/info', ensureUser, (_req, res) => {
+app.get('/api/deploy/info', accountRequired, (_req, res) => {
   const info = deployInfo(PORT);
   res.json({
     urls: info.urls,
@@ -462,20 +498,17 @@ app.get('/api/deploy/info', ensureUser, (_req, res) => {
   });
 });
 
-app.get('/api/home', ensureUser, async (req, res) => {
+app.get('/api/home', accountRequired, async (req, res) => {
   try {
     const personal: Awaited<ReturnType<typeof getHome>> = [];
+    const reco = await homeReco(req.userId!);
+    personal.push(...(reco.shelves as Awaited<ReturnType<typeof getHome>>));
+
     const history = getHistory(req.userId!, 40);
     const top = getTopListened(req.userId!, 25);
     const likedPl = getFullLibrary(req.userId!).likedPlaylists || [];
     const localPl = listPlaylists(req.userId!);
 
-    if (history.length) {
-      personal.push({ title: 'Écouté récemment', items: history.slice(0, 20) });
-    }
-    if (top.length >= 3) {
-      personal.push({ title: 'Tes titres les plus écoutés', items: top.slice(0, 20) });
-    }
     if (likedPl.length) {
       personal.push({
         title: 'Playlists aimées',
@@ -503,12 +536,11 @@ app.get('/api/home', ensureUser, async (req, res) => {
       });
     }
 
-    // Quick picks from top track radio
     if (top[0] && /^[a-zA-Z0-9_-]{11}$/.test(top[0].id)) {
       try {
-        const { radio } = await getRelated(top[0].id);
-        if (radio.length) {
-          personal.push({ title: 'Rapide · pour toi', items: radio.slice(0, 20) });
+        const sim = await similarForUser(req.userId!, top[0].id, top[0]);
+        if (sim.tracks.length) {
+          personal.push({ title: 'Rapide · pour toi', items: sim.tracks.slice(0, 20) });
         }
       } catch {
         /* ignore */
@@ -522,13 +554,20 @@ app.get('/api/home', ensureUser, async (req, res) => {
       .filter((id) => /^[a-zA-Z0-9_-]{11}$/.test(id))
       .slice(0, 24);
 
-    res.json({ shelves, seeds, hasMore: true, page: 0 });
+    res.json({
+      shelves,
+      seeds,
+      hasMore: true,
+      page: 0,
+      needsOnboarding: reco.needsOnboarding,
+      radios: reco.radios,
+    });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-app.get('/api/home/more', ensureUser, async (req, res) => {
+app.get('/api/home/more', accountRequired, async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page || 1));
     const seeds = String(req.query.seeds || '')
@@ -542,43 +581,67 @@ app.get('/api/home/more', ensureUser, async (req, res) => {
   }
 });
 
-app.get('/api/explore', async (_req, res) => {
+app.get('/api/explore', accountRequired, async (req, res) => {
   try {
-    res.json({ shelves: await getExplore() });
+    const yt = await getExplore();
+    const reco = await exploreReco(req.userId!);
+    const radioShelves = reco.radios
+      .filter((r) => r.items.length)
+      .map((r) => ({ title: `Radio · ${r.title}`, items: r.items }));
+    res.json({
+      shelves: [...radioShelves, ...yt],
+      needsOnboarding: reco.needsOnboarding,
+      radios: RADIO_CATEGORIES.map((c) => ({ id: c.id, title: c.title })),
+    });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-app.get('/api/search', async (req, res) => {
+app.get('/api/search', accountRequired, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
     if (!q) {
       res.status(400).json({ error: 'query requise' });
       return;
     }
+    addSearchHistory(req.userId!, q);
     res.json(await search(q, String(req.query.filter || 'all')));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-app.get('/api/search/suggestions', async (req, res) => {
+app.get('/api/search/suggestions', accountRequired, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
-    if (!q) {
-      res.json({ suggestions: [] });
-      return;
-    }
-    res.json({ suggestions: await searchSuggestions(q) });
+    const yt = q ? await searchSuggestions(q) : [];
+    res.json({ suggestions: suggestSearch(req.userId!, q, yt) });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-app.get('/api/track/:id', ensureUser, async (req, res) => {
+app.get('/api/search/history', accountRequired, (req, res) => {
+  res.json({ history: listSearchHistory(req.userId!, 40) });
+});
+
+app.post('/api/search/history', accountRequired, (req, res) => {
+  const q = String(req.body?.query || '').trim();
+  if (!q) {
+    res.status(400).json({ error: 'query requise' });
+    return;
+  }
+  addSearchHistory(req.userId!, q, {
+    id: req.body?.clickedId,
+    kind: req.body?.clickedKind,
+  });
+  res.json({ ok: true, history: listSearchHistory(req.userId!, 40) });
+});
+
+app.get('/api/track/:id', accountRequired, async (req, res) => {
   try {
-    const { track } = await getTrack(req.params.id);
+    const { track } = await getTrack(p(req.params.id));
     // Ne pas écrire l'historique ici : c'est fait dès le play (même partiel)
     res.json({
       track,
@@ -590,7 +653,7 @@ app.get('/api/track/:id', ensureUser, async (req, res) => {
   }
 });
 
-app.post('/api/history', ensureUser, (req, res) => {
+app.post('/api/history', accountRequired, (req, res) => {
   try {
     const track = req.body as Track;
     if (!track?.id) {
@@ -604,21 +667,197 @@ app.post('/api/history', ensureUser, (req, res) => {
   }
 });
 
-app.get('/api/history', ensureUser, (req, res) => {
+app.get('/api/history', accountRequired, (req, res) => {
   res.json({ history: getHistory(req.userId!, 500) });
 });
 
-app.get('/api/track/:id/upnext', async (req, res) => {
+app.get('/api/history/detailed', accountRequired, (req, res) => {
+  res.json({ events: listListenEvents(req.userId!, 500) });
+});
+
+app.post('/api/listen', accountRequired, (req, res) => {
   try {
-    res.json({ tracks: await getUpNext(req.params.id) });
+    const event = String(req.body?.event || 'start') as 'start' | 'progress' | 'complete' | 'skip';
+    const trackId = String(req.body?.trackId || '');
+    if (!trackId) {
+      res.status(400).json({ error: 'trackId requis' });
+      return;
+    }
+    recordListenEvent({
+      userId: req.userId!,
+      trackId,
+      event,
+      progressPct: Number(req.body?.progressPct || 0),
+      durationMs: req.body?.durationMs != null ? Number(req.body.durationMs) : undefined,
+      seedId: req.body?.seedId ? String(req.body.seedId) : undefined,
+    });
+    if (event === 'start' || event === 'complete') {
+      const track = req.body?.track as Track | undefined;
+      if (track?.id) addHistory(req.userId!, track);
+    }
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-app.get('/api/track/:id/related', async (req, res) => {
+app.get('/api/prefs', accountRequired, (req, res) => {
+  res.json({
+    prefs: getPrefs(req.userId!),
+    follows: listFollows(req.userId!),
+  });
+});
+
+app.put('/api/prefs', accountRequired, (req, res) => {
+  const prefs = savePrefs(req.userId!, {
+    genres: Array.isArray(req.body?.genres) ? req.body.genres.map(String) : undefined,
+    moods: Array.isArray(req.body?.moods) ? req.body.moods.map(String) : undefined,
+    moments: Array.isArray(req.body?.moments) ? req.body.moments.map(String) : undefined,
+    discoveryBias:
+      req.body?.discoveryBias != null ? Number(req.body.discoveryBias) : undefined,
+    onboardingDone:
+      req.body?.onboardingDone != null ? Boolean(req.body.onboardingDone) : undefined,
+  });
+  res.json({ prefs });
+});
+
+app.post('/api/prefs/onboarding', accountRequired, (req, res) => {
+  const prefs = savePrefs(req.userId!, {
+    genres: Array.isArray(req.body?.genres) ? req.body.genres.map(String) : [],
+    moods: Array.isArray(req.body?.moods) ? req.body.moods.map(String) : [],
+    moments: Array.isArray(req.body?.moments) ? req.body.moments.map(String) : [],
+    discoveryBias:
+      req.body?.discoveryBias != null ? Number(req.body.discoveryBias) : 0.15,
+    onboardingDone: true,
+  });
+  const artists = Array.isArray(req.body?.artists) ? req.body.artists : [];
+  for (const a of artists) {
+    if (a?.id) followArtist(req.userId!, { id: String(a.id), name: a.name, payload: a });
+  }
+  res.json({ prefs, follows: listFollows(req.userId!) });
+});
+
+app.get('/api/pins', accountRequired, (req, res) => {
+  res.json({ pins: listPins(req.userId!) });
+});
+
+app.post('/api/pins', accountRequired, (req, res) => {
+  const kind = String(req.body?.kind || 'song');
+  const targetId = String(req.body?.targetId || req.body?.id || '');
+  if (!targetId) {
+    res.status(400).json({ error: 'targetId requis' });
+    return;
+  }
+  const pins = addPin(req.userId!, kind, targetId, req.body?.payload || req.body);
+  res.json({ pins });
+});
+
+app.delete('/api/pins/:id', accountRequired, (req, res) => {
+  res.json({ pins: removePin(req.userId!, p(req.params.id)) });
+});
+
+app.post('/api/artists/:id/follow', accountRequired, (req, res) => {
+  followArtist(req.userId!, {
+    id: p(req.params.id),
+    name: req.body?.name,
+    payload: req.body,
+  });
+  res.json({ ok: true, follows: listFollows(req.userId!) });
+});
+
+app.delete('/api/artists/:id/follow', accountRequired, (req, res) => {
+  unfollowArtist(req.userId!, p(req.params.id));
+  res.json({ ok: true, follows: listFollows(req.userId!) });
+});
+
+app.get('/api/reco/home', accountRequired, async (req, res) => {
   try {
-    res.json(await getRelated(req.params.id));
+    res.json(await homeReco(req.userId!));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get('/api/reco/explore', accountRequired, async (req, res) => {
+  try {
+    res.json(await exploreReco(req.userId!));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get('/api/reco/similar/:trackId', accountRequired, async (req, res) => {
+  try {
+    res.json(await similarForUser(req.userId!, p(req.params.trackId)));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get('/api/reco/radio/:category', accountRequired, async (req, res) => {
+  try {
+    res.json(await radioForUser(req.userId!, p(req.params.category)));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get('/api/reco/radios', accountRequired, (_req, res) => {
+  res.json({ radios: RADIO_CATEGORIES.map((c) => ({ id: c.id, title: c.title })) });
+});
+
+app.post('/api/reco/feedback', accountRequired, (req, res) => {
+  const trackId = String(req.body?.trackId || '');
+  const verdict = String(req.body?.verdict || '') as 'good' | 'bad';
+  if (!trackId || (verdict !== 'good' && verdict !== 'bad')) {
+    res.status(400).json({ error: 'trackId et verdict (good|bad) requis' });
+    return;
+  }
+  addRecoFeedback({
+    userId: req.userId!,
+    trackId,
+    seedId: req.body?.seedId ? String(req.body.seedId) : undefined,
+    verdict,
+    context: req.body?.context ? String(req.body.context) : undefined,
+  });
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/reco', requireAdmin, (_req, res) => {
+  res.json(recoAdminStats());
+});
+
+app.put('/api/admin/reco/weights', requireAdmin, (req, res) => {
+  const mode = String(req.body?.mode || 'radio');
+  const w = saveWeights(mode, {
+    w_content: Number(req.body?.w_content ?? 0.35),
+    w_seq: Number(req.body?.w_seq ?? 0.25),
+    w_ctx: Number(req.body?.w_ctx ?? 0.2),
+    w_bandit: Number(req.body?.w_bandit ?? 0.1),
+    w_satisf: Number(req.body?.w_satisf ?? 0.1),
+  });
+  res.json({ weights: w, all: listWeights() });
+});
+
+app.get('/api/track/:id/upnext', accountRequired, async (req, res) => {
+  try {
+    const tracks = await getUpNext(p(req.params.id));
+    const ranked = await similarForUser(req.userId!, p(req.params.id));
+    res.json({ tracks: ranked.tracks.length ? ranked.tracks : tracks });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get('/api/track/:id/related', accountRequired, async (req, res) => {
+  try {
+    const sim = await similarForUser(req.userId!, p(req.params.id));
+    res.json({
+      related: sim.tracks.length ? sim.tracks : sim.related,
+      radio: sim.tracks.length ? sim.tracks : sim.radio,
+      rawRelated: sim.related,
+      rawRadio: sim.radio,
+    });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -626,7 +865,7 @@ app.get('/api/track/:id/related', async (req, res) => {
 
 app.get('/api/track/:id/lyrics', async (req, res) => {
   try {
-    res.json({ lyrics: await getLyrics(req.params.id) });
+    res.json({ lyrics: await getLyrics(p(req.params.id)) });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -634,7 +873,7 @@ app.get('/api/track/:id/lyrics', async (req, res) => {
 
 app.get('/api/artist/:id', async (req, res) => {
   try {
-    res.json(await getArtist(req.params.id));
+    res.json(await getArtist(p(req.params.id)));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -642,7 +881,7 @@ app.get('/api/artist/:id', async (req, res) => {
 
 app.get('/api/artist/:id/radio', async (req, res) => {
   try {
-    res.json({ tracks: await getArtistRadio(req.params.id) });
+    res.json({ tracks: await getArtistRadio(p(req.params.id)) });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -650,7 +889,7 @@ app.get('/api/artist/:id/radio', async (req, res) => {
 
 app.get('/api/album/:id', async (req, res) => {
   try {
-    res.json(await getAlbum(req.params.id));
+    res.json(await getAlbum(p(req.params.id)));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -658,7 +897,7 @@ app.get('/api/album/:id', async (req, res) => {
 
 app.get('/api/album/:id/radio', async (req, res) => {
   try {
-    res.json({ tracks: await getAlbumRadio(req.params.id) });
+    res.json({ tracks: await getAlbumRadio(p(req.params.id)) });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -666,7 +905,7 @@ app.get('/api/album/:id/radio', async (req, res) => {
 
 app.get('/api/playlist/:id', async (req, res) => {
   try {
-    res.json(await getPlaylist(req.params.id));
+    res.json(await getPlaylist(p(req.params.id)));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -676,21 +915,22 @@ app.get('/api/stream/:id', (req, res) => {
   void handleStream(req, res);
 });
 
-app.post('/api/download/:id', ensureUser, async (req, res) => {
+app.post('/api/download/:id', accountRequired, async (req, res) => {
   try {
-    const path = await downloadTrack(req.params.id);
-    markDownloaded(req.userId!, req.params.id, path);
-    res.json({ ok: true, path, streamUrl: `/api/stream/${req.params.id}` });
+    const id = p(req.params.id);
+    const path = await downloadTrack(id);
+    markDownloaded(req.userId!, id, path);
+    res.json({ ok: true, path, streamUrl: `/api/stream/${id}` });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-app.get('/api/library', ensureUser, (req, res) => {
+app.get('/api/library', accountRequired, (req, res) => {
   res.json(getFullLibrary(req.userId!));
 });
 
-app.post('/api/library/like', ensureUser, (req, res) => {
+app.post('/api/library/like', accountRequired, (req, res) => {
   try {
     const track = req.body as Track;
     if (!track?.id) {
@@ -704,7 +944,7 @@ app.post('/api/library/like', ensureUser, (req, res) => {
   }
 });
 
-app.post('/api/library/like-playlist', ensureUser, (req, res) => {
+app.post('/api/library/like-playlist', accountRequired, (req, res) => {
   try {
     res.json({
       ...toggleLikePlaylist(req.userId!, req.body),
@@ -715,7 +955,7 @@ app.post('/api/library/like-playlist', ensureUser, (req, res) => {
   }
 });
 
-app.post('/api/library/albums', ensureUser, (req, res) => {
+app.post('/api/library/albums', accountRequired, (req, res) => {
   try {
     res.json({ album: saveAlbum(req.userId!, req.body), library: getFullLibrary(req.userId!) });
   } catch (err) {
@@ -723,12 +963,12 @@ app.post('/api/library/albums', ensureUser, (req, res) => {
   }
 });
 
-app.delete('/api/library/albums/:id', ensureUser, (req, res) => {
-  removeAlbum(req.userId!, req.params.id);
+app.delete('/api/library/albums/:id', accountRequired, (req, res) => {
+  removeAlbum(req.userId!, p(req.params.id));
   res.json({ ok: true, library: getFullLibrary(req.userId!) });
 });
 
-app.post('/api/library/artists', ensureUser, (req, res) => {
+app.post('/api/library/artists', accountRequired, (req, res) => {
   try {
     res.json({ artist: saveArtist(req.userId!, req.body), library: getFullLibrary(req.userId!) });
   } catch (err) {
@@ -736,12 +976,12 @@ app.post('/api/library/artists', ensureUser, (req, res) => {
   }
 });
 
-app.delete('/api/library/artists/:id', ensureUser, (req, res) => {
-  removeArtist(req.userId!, req.params.id);
+app.delete('/api/library/artists/:id', accountRequired, (req, res) => {
+  removeArtist(req.userId!, p(req.params.id));
   res.json({ ok: true, library: getFullLibrary(req.userId!) });
 });
 
-app.post('/api/library/playlists', ensureUser, (req, res) => {
+app.post('/api/library/playlists', accountRequired, (req, res) => {
   try {
     const name = String(req.body?.name || '').trim() || 'Nouvelle playlist';
     res.json(createPlaylist(req.userId!, name, String(req.body?.description || '')));
@@ -750,48 +990,48 @@ app.post('/api/library/playlists', ensureUser, (req, res) => {
   }
 });
 
-app.patch('/api/library/playlists/:id', ensureUser, (req, res) => {
+app.patch('/api/library/playlists/:id', accountRequired, (req, res) => {
   try {
-    res.json(updatePlaylist(req.userId!, req.params.id, req.body || {}));
+    res.json(updatePlaylist(req.userId!, p(req.params.id), req.body || {}));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-app.delete('/api/library/playlists/:id', ensureUser, (req, res) => {
+app.delete('/api/library/playlists/:id', accountRequired, (req, res) => {
   try {
-    deletePlaylist(req.userId!, req.params.id);
+    deletePlaylist(req.userId!, p(req.params.id));
     res.json({ ok: true, library: getFullLibrary(req.userId!) });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-app.post('/api/library/playlists/:id/tracks', ensureUser, (req, res) => {
+app.post('/api/library/playlists/:id/tracks', accountRequired, (req, res) => {
   try {
-    res.json(addToPlaylist(req.userId!, req.params.id, req.body as Track));
+    res.json(addToPlaylist(req.userId!, p(req.params.id), req.body as Track));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-app.delete('/api/library/playlists/:id/tracks/:trackId', ensureUser, (req, res) => {
+app.delete('/api/library/playlists/:id/tracks/:trackId', accountRequired, (req, res) => {
   try {
-    res.json(removeFromPlaylist(req.userId!, req.params.id, req.params.trackId));
+    res.json(removeFromPlaylist(req.userId!, p(req.params.id), p(req.params.trackId)));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-app.put('/api/library/playlists/:id/reorder', ensureUser, (req, res) => {
+app.put('/api/library/playlists/:id/reorder', accountRequired, (req, res) => {
   try {
-    res.json(reorderPlaylist(req.userId!, req.params.id, (req.body?.trackIds || []) as string[]));
+    res.json(reorderPlaylist(req.userId!, p(req.params.id), (req.body?.trackIds || []) as string[]));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-app.post('/api/import', ensureUser, async (req, res) => {
+app.post('/api/import', accountRequired, async (req, res) => {
   try {
     const kind = req.body?.kind as 'track' | 'album' | 'artist' | 'playlist' | undefined;
     const id = req.body?.id as string | undefined;
@@ -878,11 +1118,11 @@ app.delete('/api/ytm/disconnect', authRequired, (req, res) => {
   res.json({ ok: true, account: getYtmAccountPublic(req.userId!) });
 });
 
-app.get('/api/offline', ensureUser, handleOfflineStatus);
-app.get('/api/offline/downloads', ensureUser, (req, res) => {
+app.get('/api/offline', accountRequired, handleOfflineStatus);
+app.get('/api/offline/downloads', accountRequired, (req, res) => {
   res.json({ downloads: listDownloads(req.userId!) });
 });
-app.post('/api/offline/start', ensureUser, async (req, res) => {
+app.post('/api/offline/start', accountRequired, async (req, res) => {
   try {
     const kind = String(req.body?.kind || 'playlist') as 'album' | 'playlist' | 'artist' | 'liked';
     const targetId = String(req.body?.targetId || 'liked');
@@ -892,7 +1132,7 @@ app.post('/api/offline/start', ensureUser, async (req, res) => {
   }
 });
 
-app.get('/api/session', ensureUser, (req, res) => {
+app.get('/api/session', accountRequired, (req, res) => {
   res.json(getHubPublic(req.userId!));
 });
 

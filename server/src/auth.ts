@@ -111,6 +111,21 @@ export function authRequired(req: Request, res: Response, next: NextFunction) {
   });
 }
 
+export function isGuestEmail(email?: string | null) {
+  return Boolean(email && email.includes('@local.ytmusic'));
+}
+
+/** Compte réel obligatoire (pas d’invité) pour prefs / reco / biblio. */
+export function accountRequired(req: Request, res: Response, next: NextFunction) {
+  authRequired(req, res, () => {
+    if (!req.user || req.user.isGuest || isGuestEmail(req.user.email)) {
+      res.status(401).json({ error: 'Compte requis — connecte-toi ou crée un compte' });
+      return;
+    }
+    next();
+  });
+}
+
 export function ensureUser(req: Request, res: Response, next: NextFunction) {
   authOptional(req, res, () => {
     if (req.userId) return next();

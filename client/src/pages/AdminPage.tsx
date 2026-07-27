@@ -25,6 +25,15 @@ export function AdminPage() {
   const [telemetry, setTelemetry] = useState<{ stats: any; events: any[] } | null>(null);
   const [mails, setMails] = useState<any[]>([]);
   const [levelFilter, setLevelFilter] = useState('');
+  const [reco, setReco] = useState<any>(null);
+  const [recoMode, setRecoMode] = useState('radio');
+  const [recoWeights, setRecoWeights] = useState({
+    w_content: 0.35,
+    w_seq: 0.25,
+    w_ctx: 0.2,
+    w_bandit: 0.1,
+    w_satisf: 0.1,
+  });
 
   const refresh = useCallback(() => {
     void api
@@ -41,6 +50,23 @@ export function AdminPage() {
     void api
       .adminMailOutbox()
       .then((r) => setMails(r.mails || []))
+      .catch(() => undefined);
+    void api
+      .adminReco()
+      .then((r) => {
+        setReco(r);
+        const row = (r.weights || []).find((w: any) => w.mode === recoMode) || (r.weights || [])[0];
+        if (row) {
+          setRecoWeights({
+            w_content: row.w_content,
+            w_seq: row.w_seq,
+            w_ctx: row.w_ctx,
+            w_bandit: row.w_bandit,
+            w_satisf: row.w_satisf,
+          });
+          if (row.mode) setRecoMode(row.mode);
+        }
+      })
       .catch(() => undefined);
   }, [levelFilter]);
 
@@ -113,6 +139,89 @@ export function AdminPage() {
           sub={stats ? `${stats.errors24 || 0} erreurs · ${stats.total || 0} total` : ''}
         />
       </div>
+
+      <section className="mb-6 rounded-2xl border border-yt-border bg-yt-surface p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <Radar className="h-5 w-5 text-yt-red" />
+          <h3 className="font-display text-lg font-semibold">Recommandations</h3>
+        </div>
+        <p className="mb-4 text-sm text-yt-muted">
+          Poids du scoring hybride (contenu / séquence / contexte / bandit / satisfaction). Voir{' '}
+          <code className="text-white">docs/RECOMMANDATIONS.md</code>.
+        </p>
+        <div className="mb-3 flex flex-wrap gap-2">
+          {['radio', 'discover', 'focus'].map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => {
+                setRecoMode(m);
+                const row = (reco?.weights || []).find((w: any) => w.mode === m);
+                if (row) {
+                  setRecoWeights({
+                    w_content: row.w_content,
+                    w_seq: row.w_seq,
+                    w_ctx: row.w_ctx,
+                    w_bandit: row.w_bandit,
+                    w_satisf: row.w_satisf,
+                  });
+                }
+              }}
+              className={`rounded-full px-3 py-1.5 text-sm ${
+                recoMode === m ? 'bg-white text-black' : 'bg-yt-elevated text-yt-muted'
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          {(
+            [
+              ['w_content', 'Contenu'],
+              ['w_seq', 'Séquence'],
+              ['w_ctx', 'Contexte'],
+              ['w_bandit', 'Bandit'],
+              ['w_satisf', 'Satisfaction'],
+            ] as const
+          ).map(([key, label]) => (
+            <label key={key} className="text-xs text-yt-muted">
+              {label}
+              <input
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                value={recoWeights[key]}
+                onChange={(e) =>
+                  setRecoWeights((w) => ({ ...w, [key]: Number(e.target.value) }))
+                }
+                className="mt-1 w-full rounded-lg border border-yt-border bg-yt-bg px-2 py-1.5 text-sm text-white"
+              />
+            </label>
+          ))}
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-4 text-sm text-yt-muted">
+          <button
+            type="button"
+            className="rounded-full bg-yt-red px-4 py-2 text-sm font-medium text-white"
+            onClick={() => {
+              void api.adminRecoWeights(recoMode, recoWeights).then(() => refresh());
+            }}
+          >
+            Enregistrer les poids
+          </button>
+          <span>
+            Écoutes 24h : {reco?.listens24h ?? '—'} · Skips : {reco?.skips24h ?? '—'}
+          </span>
+          <span>
+            Feedback 7j :{' '}
+            {(reco?.feedback || [])
+              .map((f: any) => `${f.verdict}=${f.c}`)
+              .join(' · ') || '—'}
+          </span>
+        </div>
+      </section>
 
       <section className="mb-6 rounded-2xl border border-yt-border bg-yt-surface p-5">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -260,7 +369,7 @@ export function AdminPage() {
             <span className="text-white">1.</span> Scanne le QR sur le téléphone
           </li>
           <li className="rounded-2xl bg-black/30 p-3">
-            <span className="text-white">2.</span> Connecte-toi (ou reste invité)
+            <span className="text-white">2.</span> Connecte-toi avec ton compte (obligatoire)
           </li>
           <li className="rounded-2xl bg-black/30 p-3">
             <span className="text-white">3.</span> « Installer l&apos;app » dans le navigateur

@@ -221,7 +221,7 @@ export async function downloadTrack(videoId: string): Promise<string> {
       if (done) break;
       if (value) {
         if (!file.write(Buffer.from(value))) {
-          await new Promise((r) => file.once('drain', r));
+          await new Promise<void>((r) => file.once('drain', () => r()));
         }
       }
     }

@@ -2,7 +2,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { Track } from '../api';
 import { api } from '../api';
 import { usePlayer } from '../store/player';
-import { Library, Play, Plus } from 'lucide-react';
+import { Library, Pin, Play, Plus } from 'lucide-react';
 import { ArtistLinks } from './ArtistLinks';
 import { CoverImage } from './CoverImage';
 import { useLibrary } from '../store/library';
@@ -97,6 +97,25 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
         />
       </div>
       <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 transition group-hover:translate-y-0 group-hover:opacity-100">
+        <button
+          type="button"
+          title="Épingler à l’accueil"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            void api
+              .addPin({
+                kind: item.type || 'song',
+                targetId: item.id,
+                payload: item,
+                id: item.id,
+              })
+              .catch((err) => console.error(err));
+          }}
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-white shadow-lg"
+        >
+          <Pin className="h-4 w-4" />
+        </button>
         {(item.type === 'playlist' || item.type === 'album' || item.type === 'artist') && !local && (
           <button
             type="button"

@@ -33,21 +33,19 @@ export const useAuth = create<AuthState>((set) => ({
 
   init: async () => {
     try {
-      const [cfg, me] = await Promise.all([api.authConfig(), api.me()]);
+      const cfg = await api.authConfig();
       set({
         googleEnabled: cfg.googleEnabled,
         googleClientId: cfg.googleClientId,
-        user: me.user,
-        loaded: true,
       });
-    } catch {
       try {
-        const r = await api.refresh();
-        applySession(r);
-        set({ user: r.user, loaded: true });
+        const me = await api.me();
+        set({ user: me.user, loaded: true });
       } catch {
-        set({ loaded: true });
+        set({ user: null, loaded: true });
       }
+    } catch {
+      set({ loaded: true, user: null });
     }
   },
 
@@ -76,8 +74,7 @@ export const useAuth = create<AuthState>((set) => ({
     await api.logout().catch(() => undefined);
     setToken(null);
     setRefreshToken(null);
-    const me = await api.me();
-    set({ user: me.user });
+    set({ user: null });
     reconnectSession();
   },
 }));

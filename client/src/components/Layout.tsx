@@ -18,9 +18,10 @@ import { AuthModal } from './AuthModal';
 import { DevicePicker } from './DevicePicker';
 import { InstallBanner } from './InstallBanner';
 import { NowPlaying, type NowPlayingTab } from './NowPlaying';
+import { OnboardingWizard } from './OnboardingWizard';
 import { BrandLogo } from './BrandLogo';
 import { useLibrary } from '../store/library';
-import { usePlayer, wireRemotePlayer } from '../store/player';
+import { usePlayer, wireRemotePlayer, reportListenProgress } from '../store/player';
 import { useAuth } from '../store/auth';
 import { useSession } from '../store/session';
 import { api } from '../api';
@@ -40,6 +41,7 @@ export function Layout() {
   const remoteState = useSession((s) => s.remoteState);
   const isActivePlayer = useSession((s) => s.isActivePlayer);
   const user = useAuth((s) => s.user);
+  const authLoaded = useAuth((s) => s.loaded);
   const logout = useAuth((s) => s.logout);
   const navigate = useNavigate();
   const [q, setQ] = useState('');
@@ -49,6 +51,7 @@ export function Layout() {
   const [devicesOpen, setDevicesOpen] = useState(false);
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
   const [nowPlayingTab, setNowPlayingTab] = useState<NowPlayingTab>('queue');
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const playlists = useLibrary((s) => s.playlists);
   const likedPlaylists = useLibrary((s) => s.likedPlaylists);
   const createPlaylist = useLibrary((s) => s.createPlaylist);
@@ -70,6 +73,40 @@ export function Layout() {
   }, [initAuth, refresh, initSession]);
 
   useEffect(() => {
+    if (!authLoaded) return;
+    const guest = !user || user.isGuest || user.email.includes('@local.ytmusic');
+    if (guest) {
+      setAuthOpen(true);
+      setNeedsOnboarding(false);
+      return;
+    }
+    void api
+      .prefs()
+      .then((r) => setNeedsOnboarding(!r.prefs?.onboardingDone))
+      .catch(() => undefined);
+  }, [authLoaded, user]);
+
+  useEffect(() => {
+    if (!q.trim()) {
+      // suggestions à froid = historique + prefs
+      const t = setTimeout(() => {
+        api
+          .suggestions('')
+          .then((r) => setSuggestions(r.suggestions.slice(0, 8)))
+          .catch(() => setSuggestions([]));
+      }, 100);
+      return () => clearTimeout(t);
+    }
+    const t = setTimeout(() => {
+      api
+        .suggestions(q)
+        .then((r) => setSuggestions(r.suggestions.slice(0, 8)))
+        .catch(() => setSuggestions([]));
+    }, 200);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  useEffect(() => {
     bindAudio(audioRef.current);
   }, [bindAudio]);
 
@@ -84,20 +121,6 @@ export function Layout() {
     lastRemoteAt.current = remoteState.updatedAt || Date.now();
     void applyRemoteState(remoteState, false);
   }, [remoteState, isActivePlayer, applyRemoteState]);
-
-  useEffect(() => {
-    if (!q.trim()) {
-      setSuggestions([]);
-      return;
-    }
-    const t = setTimeout(() => {
-      api
-        .suggestions(q)
-        .then((r) => setSuggestions(r.suggestions.slice(0, 8)))
-        .catch(() => setSuggestions([]));
-    }, 200);
-    return () => clearTimeout(t);
-  }, [q]);
 
   const isGuest = !user || user.isGuest || user.email.includes('@local.ytmusic');
 
@@ -291,12 +314,33 @@ export function Layout() {
           </header>
 
           <main className="min-h-0 flex-1 overflow-y-auto px-4 pb-40 pt-4 md:px-8">
-            {!isActivePlayer && (
-              <div className="mb-4 rounded-xl border border-yt-red/30 bg-yt-red/10 px-4 py-2 text-sm">
-                Contrôle à distance — la musique joue sur un autre appareil. Tu peux tout piloter d’ici.
+            {!authLoaded && <p className="text-yt-muted">Chargement…</p>}
+            {authLoaded && isGuest && (
+              <div className="mx-auto max-w-md rounded-2xl border border-yt-border bg-yt-elevated p-6 text-center">
+                <BrandLogo className="mx-auto mb-3 h-12 w-12" />
+                <h1 className="font-display text-xl font-semibold">Compte requis</h1>
+                <p className="mt-2 text-sm text-yt-muted">
+                  Connecte-toi pour l’accueil, Explorer, la radio et tes recommandations personnelles.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setAuthOpen(true)}
+                  className="mt-4 rounded-full bg-yt-red px-5 py-2.5 text-sm font-medium"
+                >
+                  Se connecter / Créer un compte
+                </button>
               </div>
             )}
-            <Outlet />
+            {authLoaded && !isGuest && (
+              <>
+                {!isActivePlayer && (
+                  <div className="mb-4 rounded-xl border border-yt-red/30 bg-yt-red/10 px-4 py-2 text-sm">
+                    Contrôle à distance — la musique joue sur un autre appareil. Tu peux tout piloter d’ici.
+                  </div>
+                )}
+                <Outlet />
+              </>
+            )}
           </main>
         </div>
 
@@ -338,14 +382,32 @@ export function Layout() {
         onClose={() => setNowPlayingOpen(false)}
       />
       <InstallBanner />
-      <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
+      <AuthModal
+        open={authOpen || (authLoaded && isGuest)}
+        onClose={() => {
+          if (!isGuest) setAuthOpen(false);
+        }}
+      />
+      {needsOnboarding && !isGuest && (
+        <OnboardingWizard
+          onDone={() => {
+            setNeedsOnboarding(false);
+            void refresh();
+          }}
+        />
+      )}
       <DevicePicker open={devicesOpen} onClose={() => setDevicesOpen(false)} />
 
       <audio
         ref={audioRef}
         preload="metadata"
         playsInline
-        onTimeUpdate={(e) => setProgress(e.currentTarget.currentTime)}
+        onTimeUpdate={(e) => {
+          const t = e.currentTarget.currentTime;
+          const d = e.currentTarget.duration || 0;
+          setProgress(t);
+          reportListenProgress(t, d);
+        }}
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
         onEnded={() => void next()}
       />

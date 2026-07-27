@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api, type Track } from '../api';
 import { TrackRow } from '../components/TrackRow';
 import { MediaCard } from '../components/MediaCard';
@@ -27,6 +27,26 @@ export function SearchPage() {
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [history, setHistory] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (q) return;
+    void api
+      .searchHistory()
+      .then((r) => {
+        const seen = new Set<string>();
+        const out: string[] = [];
+        for (const h of r.history || []) {
+          const query = String(h.query || '').trim();
+          if (!query || seen.has(query.toLowerCase())) continue;
+          seen.add(query.toLowerCase());
+          out.push(query);
+          if (out.length >= 12) break;
+        }
+        setHistory(out);
+      })
+      .catch(() => setHistory([]));
+  }, [q]);
 
   useEffect(() => {
     if (!q) return;
@@ -40,7 +60,32 @@ export function SearchPage() {
   }, [q, filter]);
 
   if (!q) {
-    return <p className="text-yt-muted">Tape une recherche dans la barre du haut.</p>;
+    return (
+      <div className="animate-fade-up">
+        <h1 className="mb-2 font-display text-3xl font-semibold tracking-tight">Recherche</h1>
+        <p className="mb-6 text-sm text-yt-muted">
+          Suggestions perso (historique + prefs) dans la barre du haut.
+        </p>
+        {history.length > 0 ? (
+          <section>
+            <h2 className="mb-3 text-sm uppercase tracking-wide text-yt-muted">Récentes</h2>
+            <div className="flex flex-wrap gap-2">
+              {history.map((h) => (
+                <Link
+                  key={h}
+                  to={`/search?q=${encodeURIComponent(h)}`}
+                  className="rounded-full bg-yt-elevated px-4 py-2 text-sm text-yt-muted hover:text-white"
+                >
+                  {h}
+                </Link>
+              ))}
+            </div>
+          </section>
+        ) : (
+          <p className="text-yt-muted">Tape une recherche dans la barre du haut.</p>
+        )}
+      </div>
+    );
   }
 
   return (
