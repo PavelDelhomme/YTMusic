@@ -1,3 +1,5 @@
+import { Capacitor } from '@capacitor/core';
+
 export type Track = {
   id: string;
   title: string;
@@ -48,6 +50,33 @@ export type User = {
 
 const TOKEN_KEY = 'ytm_token';
 const DEVICE_KEY = 'ytm_device';
+const REFRESH_KEY = 'ytm_refresh';
+
+/**
+ * Origine API absolue (APK Capacitor / build natif).
+ * Vide = chemins relatifs (web / Vite proxy).
+ */
+export function apiOrigin(): string {
+  const env = (import.meta.env.VITE_API_ORIGIN as string | undefined)?.replace(/\/$/, '');
+  if (env) return env;
+  try {
+    if (Capacitor.isNativePlatform()) {
+      const stored = localStorage.getItem('ytm_api_origin')?.replace(/\/$/, '');
+      return stored || 'https://ytmusic.delhomme.ovh';
+    }
+  } catch {
+    /* web */
+  }
+  return '';
+}
+
+/** Préfixe une route `/api/...` avec l’origine si besoin. */
+export function apiUrl(path: string): string {
+  if (/^https?:\/\//i.test(path)) return path;
+  const base = apiOrigin();
+  const p = path.startsWith('/') ? path : `/${path}`;
+  return base ? `${base}${p}` : p;
+}
 
 function deviceId() {
   let id = localStorage.getItem(DEVICE_KEY);
@@ -67,7 +96,6 @@ export function setToken(token: string | null) {
   else localStorage.removeItem(TOKEN_KEY);
 }
 
-const REFRESH_KEY = 'ytm_refresh';
 export function setRefreshToken(token: string | null) {
   if (token) localStorage.setItem(REFRESH_KEY, token);
   else localStorage.removeItem(REFRESH_KEY);
@@ -107,7 +135,7 @@ export function proxiedThumbUrl(url: string, size = 200): string {
   if (!resized) return '';
   if (/i\.ytimg\.com/.test(resized)) return resized;
   if (/googleusercontent|ggpht|yt3\./.test(resized)) {
-    return `/api/img?u=${encodeURIComponent(resized)}`;
+    return apiUrl(`/api/img?u=${encodeURIComponent(resized)}`);
   }
   return resized;
 }
@@ -147,6 +175,7 @@ export function artistNames(track: Track) {
 }
 
 async function req<T>(url: string, init?: RequestInit, retried = false): Promise<T> {
+  const fullUrl = apiUrl(url);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-Device-Id': deviceId(),
@@ -155,12 +184,12 @@ async function req<T>(url: string, init?: RequestInit, retried = false): Promise
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(url, {
+  const res = await fetch(fullUrl, {
     ...init,
     headers,
     credentials: 'include',
   });
-  if (res.status === 401 && !retried && !url.includes('/auth/')) {
+  if (res.status === 401 && !retried && !fullUrl.includes('/auth/')) {
     const refreshed = await tryRefresh();
     if (refreshed) return req<T>(url, init, true);
   }
@@ -176,7 +205,7 @@ async function req<T>(url: string, init?: RequestInit, retried = false): Promise
 async function tryRefresh() {
   const refreshToken = getRefreshToken();
   try {
-    const r = await fetch('/api/auth/refresh', {
+    const r = await fetch(apiUrl('/api/auth/refresh'), {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', 'X-Device-Id': deviceId() },
@@ -362,7 +391,10 @@ export const api = {
     req<{ related: Track[]; radio: Track[] }>(`/api/track/${id}/related`),
   albumRadio: (id: string) => req<{ tracks: Track[] }>(`/api/album/${id}/radio`),
   artistRadio: (id: string) => req<{ tracks: Track[] }>(`/api/artist/${id}/radio`),
-  lyrics: (id: string) => req<{ lyrics: string | null }>(`/api/track/${id}/lyrics`),
+  lyrics: (id: string) =>
+    req<{ lyrics: string | null; timed?: { startMs: number; text: string }[] | null }>(
+      `/api/track/${id}/lyrics`,
+    ),
   artist: (id: string) =>
     req<{
       artist: { id: string; name: string; subscribers?: string; thumbnails: Track['thumbnails']; description?: string };

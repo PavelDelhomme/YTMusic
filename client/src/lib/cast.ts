@@ -1,4 +1,4 @@
-import { artistNames, thumb, type Track } from '../api';
+import { apiUrl, artistNames, thumb, type Track } from '../api';
 
 declare global {
   interface Window {
@@ -54,7 +54,7 @@ export async function castToChromecast(track: Track) {
   const session = context.getCurrentSession();
   if (!session) throw new Error('Aucune session Cast');
 
-  const url = `${location.origin}/api/stream/${track.id}`;
+  const url = apiUrl(`/api/stream/${track.id}`);
   const mediaInfo = new window.chrome.cast.media.MediaInfo(url, 'audio/mp4');
   mediaInfo.metadata = new window.chrome.cast.media.MusicTrackMediaMetadata();
   mediaInfo.metadata.title = track.title;
@@ -85,7 +85,7 @@ function castClassic(track: Track): Promise<void> {
       () => {
         chrome.cast.requestSession(
           (session: any) => {
-            const url = `${location.origin}/api/stream/${track.id}`;
+            const url = apiUrl(`/api/stream/${track.id}`);
             const mediaInfo = new chrome.cast.media.MediaInfo(url, 'audio/mp4');
             mediaInfo.metadata = new chrome.cast.media.MusicTrackMediaMetadata();
             mediaInfo.metadata.title = track.title;

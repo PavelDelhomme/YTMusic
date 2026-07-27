@@ -6,7 +6,7 @@ import { Library, Pin, Play, Plus } from 'lucide-react';
 import { ArtistLinks } from './ArtistLinks';
 import { CoverImage } from './CoverImage';
 import { useLibrary } from '../store/library';
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 
 function isLocalPlaylist(item: Track) {
   return item.id.startsWith('local:') || item.album?.id?.startsWith('local:');
@@ -42,7 +42,15 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
     (item.type === 'album' && hasAlbum(item.id)) ||
     (item.type === 'artist' && hasArtist(item.id));
 
-  const onPlay = (e: { preventDefault: () => void; stopPropagation: () => void }) => {
+  const openItem = () => {
+    if (href) {
+      navigate(href);
+      return;
+    }
+    void play(item, queue);
+  };
+
+  const onPlay = (e: MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     if (href) {
@@ -52,7 +60,7 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
     void play(item, queue);
   };
 
-  const addLibrary = async (e: { preventDefault: () => void; stopPropagation: () => void }) => {
+  const addLibrary = async (e: MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     if (busy || inLib || local) return;
@@ -82,13 +90,24 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
     }
   };
 
-  const image = (
+  const cover = (
     <div
       className={`relative overflow-hidden bg-yt-elevated ${
         item.type === 'artist' ? 'rounded-full' : 'rounded-lg'
       }`}
     >
-      <div className="aspect-square">
+      <div
+        role="button"
+        tabIndex={0}
+        className="aspect-square cursor-pointer"
+        onClick={openItem}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openItem();
+          }
+        }}
+      >
         <CoverImage
           item={item}
           size={400}
@@ -96,7 +115,8 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
           className="transition duration-300 group-hover:scale-[1.03]"
         />
       </div>
-      <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 transition group-hover:translate-y-0 group-hover:opacity-100">
+      {/* Boutons d’action hors du lien / hors du bouton principal → pas de nested <button> */}
+      <div className="pointer-events-none absolute bottom-2 right-2 flex gap-1 opacity-0 transition group-hover:opacity-100">
         <button
           type="button"
           title="Épingler à l’accueil"
@@ -112,7 +132,7 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
               })
               .catch((err) => console.error(err));
           }}
-          className="flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-white shadow-lg"
+          className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-white shadow-lg"
         >
           <Pin className="h-4 w-4" />
         </button>
@@ -122,16 +142,16 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
             title={inLib ? 'Dans la bibliothèque' : 'Ajouter à la bibliothèque'}
             disabled={busy || inLib}
             onClick={addLibrary}
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-white shadow-lg disabled:opacity-50"
+            className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-white shadow-lg disabled:opacity-50"
           >
             {inLib ? <Library className="h-4 w-4 text-yt-red" /> : <Plus className="h-4 w-4" />}
           </button>
         )}
-        {(item.type === 'song' || item.type === 'video' || item.type === 'unknown') && (
+        {(item.type === 'song' || item.type === 'video' || item.type === 'unknown' || !href) && (
           <button
             type="button"
             onClick={onPlay}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-yt-red text-white shadow-lg"
+            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-yt-red text-white shadow-lg"
           >
             <Play className="h-5 w-5 fill-white" />
           </button>
@@ -144,7 +164,7 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
               e.stopPropagation();
               if (href) navigate(href);
             }}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-yt-red text-white shadow-lg"
+            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-yt-red text-white shadow-lg"
           >
             <Play className="h-5 w-5 fill-white" />
           </button>
@@ -155,15 +175,7 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
 
   return (
     <div className="group w-40 shrink-0 text-left sm:w-44">
-      {href ? (
-        <Link to={href} className="block">
-          {image}
-        </Link>
-      ) : (
-        <button type="button" className="block w-full" onClick={() => void play(item, queue)}>
-          {image}
-        </button>
-      )}
+      {cover}
       <div className="mt-2 px-0.5">
         {href ? (
           <Link to={href} className="block truncate text-sm font-medium hover:underline">
@@ -198,7 +210,7 @@ export function ShelfRow({ title, items }: { title: string; items: Track[] }) {
   if (!items.length) return null;
   return (
     <section className="animate-fade-up mb-8">
-      <h2 className="mb-3 font-display text-xl font-semibold tracking-tight">{title}</h2>
+      {title ? <h2 className="mb-3 font-display text-xl font-semibold tracking-tight">{title}</h2> : null}
       <div className="shelf-scroll">
         {items.map((item, i) => (
           <MediaCard key={`${title}-${item.id}-${i}`} item={item} queue={items} />

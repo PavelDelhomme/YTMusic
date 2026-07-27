@@ -21,7 +21,7 @@ import { NowPlaying, type NowPlayingTab } from './NowPlaying';
 import { OnboardingWizard } from './OnboardingWizard';
 import { BrandLogo } from './BrandLogo';
 import { useLibrary } from '../store/library';
-import { usePlayer, wireRemotePlayer, reportListenProgress } from '../store/player';
+import { usePlayer, wireRemotePlayer, reportListenProgress, flushPlayerPersist } from '../store/player';
 import { useAuth } from '../store/auth';
 import { useSession } from '../store/session';
 import { api } from '../api';
@@ -63,6 +63,8 @@ export function Layout() {
   const setDuration = usePlayer((s) => s.setDuration);
   const next = usePlayer((s) => s.next);
   const applyRemoteState = usePlayer((s) => s.applyRemoteState);
+  const currentTrack = usePlayer((s) => s.current);
+  const hasPlayback = Boolean(currentTrack);
   const audioRef = useRef<HTMLAudioElement>(null);
   const lastRemoteAt = useRef(0);
 
@@ -86,6 +88,8 @@ export function Layout() {
       setNeedsOnboarding(false);
       return;
     }
+    // Connecté → jamais laisser la popup login ouverte
+    setAuthOpen(false);
     void refresh();
     initSession();
     void api
@@ -126,6 +130,22 @@ export function Layout() {
     const t = setTimeout(() => void hydrate(), 50);
     return () => clearTimeout(t);
   }, [hydrate]);
+
+  // Persistance lecture à la fermeture / mise en arrière-plan (web + PWA)
+  useEffect(() => {
+    const flush = () => flushPlayerPersist();
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('pagehide', flush);
+    window.addEventListener('beforeunload', flush);
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      window.removeEventListener('beforeunload', flush);
+      document.removeEventListener('visibilitychange', onHide);
+    };
+  }, []);
 
   useEffect(() => {
     if (!remoteState || isActivePlayer) return;
@@ -229,9 +249,12 @@ export function Layout() {
                   isActive ? 'bg-yt-elevated text-white' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
                 }`
               }
+              title={user?.email || 'Profil'}
             >
-              <UserRound className="h-5 w-5" />
-              Profil
+              <UserRound className="h-5 w-5 shrink-0" />
+              <span className="min-w-0 truncate" title={user?.email || 'Profil'}>
+                {isGuest ? 'Profil' : user?.email || user?.name || 'Compte'}
+              </span>
             </NavLink>
             {user?.isAdmin && (
               <NavLink
@@ -320,13 +343,18 @@ export function Layout() {
             <button
               type="button"
               onClick={() => setAuthOpen(true)}
-              className="hidden shrink-0 rounded-full bg-yt-elevated px-3 py-2 text-xs text-yt-muted hover:text-white sm:inline-flex"
+              className="hidden max-w-[9rem] shrink-0 truncate rounded-full bg-yt-elevated px-3 py-2 text-xs text-yt-muted hover:text-white sm:inline-flex"
+              title={user?.email || 'Compte'}
             >
-              {isGuest ? 'Compte' : user?.name?.split(' ')[0]}
+              {isGuest ? 'Compte' : user?.email?.split('@')[0] || user?.name?.split(' ')[0] || 'Compte'}
             </button>
           </header>
 
-          <main className="min-h-0 flex-1 overflow-y-auto px-4 pb-40 pt-4 md:px-8">
+          <main
+            className={`min-h-0 flex-1 overflow-y-auto px-4 pt-4 md:px-8 ${
+              hasPlayback ? 'pb-40' : 'pb-24 lg:pb-28'
+            }`}
+          >
             {!authLoaded && <p className="text-yt-muted">Chargement…</p>}
             {authLoaded && isGuest && !allowGuestPage && (
               <div className="mx-auto max-w-md rounded-2xl border border-yt-border bg-yt-elevated p-6 text-center">
@@ -361,7 +389,12 @@ export function Layout() {
       </div>
 
       {!nowPlayingOpen && (
-        <nav className="fixed bottom-[76px] left-0 right-0 z-30 flex overflow-x-auto border-t border-yt-border bg-yt-surface lg:hidden">
+        <nav
+          className={`fixed left-0 right-0 z-30 flex overflow-x-auto border-t border-yt-border bg-yt-surface lg:hidden ${
+            hasPlayback ? 'bottom-[72px] sm:bottom-[76px]' : 'bottom-0'
+          }`}
+          style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+        >
           {links.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
@@ -380,15 +413,19 @@ export function Layout() {
         </nav>
       )}
 
-      <PlayerBar
-        expanded={nowPlayingOpen}
-        onOpenDevices={() => setDevicesOpen(true)}
-        onExpand={(tab) => {
-          setNowPlayingTab(tab || 'queue');
-          setNowPlayingOpen(true);
-        }}
-        onCollapse={() => setNowPlayingOpen(false)}
-      />
+      {/* Lecteur : toujours visible s’il y a un titre (y compris restauré) ; sinon compact desktop only */}
+      {(hasPlayback || !isGuest) && (
+        <PlayerBar
+          expanded={nowPlayingOpen}
+          compactEmpty={!hasPlayback}
+          onOpenDevices={() => setDevicesOpen(true)}
+          onExpand={(tab) => {
+            setNowPlayingTab(tab || 'queue');
+            setNowPlayingOpen(true);
+          }}
+          onCollapse={() => setNowPlayingOpen(false)}
+        />
+      )}
       <NowPlaying
         open={nowPlayingOpen}
         initialTab={nowPlayingTab}
@@ -396,7 +433,7 @@ export function Layout() {
       />
       <InstallBanner />
       <AuthModal
-        open={authOpen || (authLoaded && isGuest && !allowGuestPage)}
+        open={(authOpen || (authLoaded && isGuest && !allowGuestPage)) && !needsOnboarding}
         onClose={() => {
           if (!isGuest) setAuthOpen(false);
         }}
@@ -405,7 +442,12 @@ export function Layout() {
         <OnboardingWizard
           onDone={() => {
             setNeedsOnboarding(false);
+            setAuthOpen(false);
             void refresh();
+            // Recharge l’accueil avec les nouvelles prefs
+            if (location.pathname === '/' || location.pathname === '') {
+              window.location.assign('/');
+            }
           }}
         />
       )}

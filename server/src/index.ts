@@ -887,7 +887,7 @@ app.get('/api/track/:id/related', accountRequired, async (req, res) => {
 
 app.get('/api/track/:id/lyrics', async (req, res) => {
   try {
-    res.json({ lyrics: await getLyrics(p(req.params.id)) });
+    res.json(await getLyrics(p(req.params.id)));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

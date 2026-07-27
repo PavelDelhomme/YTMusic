@@ -3,6 +3,7 @@ import { Cast, Check, Laptop, MonitorPlay, Smartphone, Tv } from 'lucide-react';
 import { useSession } from '../store/session';
 import { usePlayer } from '../store/player';
 import { castToChromecast, isCastAvailable } from '../lib/cast';
+import { isNativeApp } from '../lib/native';
 
 function DeviceIcon({ type }: { type: string }) {
   if (type === 'tv') return <Tv className="h-4 w-4" />;
@@ -17,6 +18,7 @@ export function DevicePicker({ open, onClose }: { open: boolean; onClose: () => 
   const player = usePlayer();
   const [name, setName] = useState(deviceName);
   const [castMsg, setCastMsg] = useState('');
+  const native = isNativeApp();
 
   useEffect(() => setName(deviceName), [deviceName]);
 
@@ -35,19 +37,22 @@ export function DevicePicker({ open, onClose }: { open: boolean; onClose: () => 
     updatedAt: Date.now(),
   });
 
+  const others = devices.filter((d) => d.id !== deviceId);
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-4 sm:items-center">
       <div className="w-full max-w-md rounded-2xl border border-yt-border bg-yt-surface p-5 shadow-2xl">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-display text-xl font-semibold">Appareils</h2>
+          <h2 className="font-display text-xl font-semibold">Cast & appareils</h2>
           <button type="button" onClick={onClose} className="text-yt-muted hover:text-white">
             ✕
           </button>
         </div>
 
         <p className="mb-4 text-sm text-yt-muted">
-          Lance la musique sur un PC / Linux / TV et contrôle tout depuis le mobile (file, titres,
-          volume…).
+          {native
+            ? 'Pilote un PC, une TV ou un autre appareil connecté avec le même compte — file, play/pause, volume.'
+            : 'Lance la musique sur un PC / TV et contrôle tout depuis le mobile (file, titres, volume…).'}
         </p>
 
         <label className="mb-1 block text-xs text-yt-muted">Nom de cet appareil</label>
@@ -89,7 +94,7 @@ export function DevicePicker({ open, onClose }: { open: boolean; onClose: () => 
                     {isMe ? ' (cet appareil)' : ''}
                   </div>
                   <div className="text-xs text-yt-muted">
-                    {d.type} · {active ? 'En lecture ici' : 'Disponible'}
+                    {d.type} · {active ? 'En lecture ici' : isMe ? 'Contrôle local' : 'Caster ici'}
                   </div>
                 </div>
                 {active && <Check className="h-4 w-4 text-yt-red" />}
@@ -97,7 +102,12 @@ export function DevicePicker({ open, onClose }: { open: boolean; onClose: () => 
             );
           })}
           {!devices.length && (
-            <p className="text-sm text-yt-muted">Aucun autre appareil connecté avec le même compte.</p>
+            <p className="text-sm text-yt-muted">Connexion session…</p>
+          )}
+          {devices.length > 0 && others.length === 0 && (
+            <p className="text-xs text-yt-muted">
+              Ouvre YTMusic sur un PC (même compte) pour caster la lecture depuis le téléphone.
+            </p>
           )}
         </div>
 
@@ -112,15 +122,17 @@ export function DevicePicker({ open, onClose }: { open: boolean; onClose: () => 
             Lire sur cet appareil
           </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              window.open('/tv', '_blank', 'noopener');
-            }}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-yt-elevated px-4 py-2.5 text-sm text-yt-muted hover:text-white"
-          >
-            <Tv className="h-4 w-4" /> Ouvrir le mode TV / récepteur
-          </button>
+          {!native && (
+            <button
+              type="button"
+              onClick={() => {
+                window.open('/tv', '_blank', 'noopener');
+              }}
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-yt-elevated px-4 py-2.5 text-sm text-yt-muted hover:text-white"
+            >
+              <Tv className="h-4 w-4" /> Ouvrir le mode TV / récepteur
+            </button>
+          )}
 
           {isCastAvailable() && player.current && (
             <button

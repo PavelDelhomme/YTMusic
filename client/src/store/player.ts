@@ -38,6 +38,7 @@ type PlayerState = {
   toggleLyrics: () => void;
   addNext: (track: Track) => void;
   addToQueue: (track: Track) => void;
+  moveInQueue: (fromIndex: number, toIndex: number) => void;
   appendRelated: (tracks: Track[]) => void;
   clearQueue: () => void;
   startMix: (track: Track) => Promise<void>;
@@ -109,8 +110,12 @@ function setupMediaSession(
 }
 
 const PLAYER_STORAGE_KEY = 'ytm_player_v1';
+/** Conserve un historique court + une longue suite (évite de saturer localStorage). */
+const QUEUE_KEEP_BEFORE = 8;
+const QUEUE_KEEP_AFTER = 72;
 
 type PersistedPlayer = {
+  v?: number;
   current: Track | null;
   queue: Track[];
   queueIndex: number;
@@ -118,7 +123,33 @@ type PersistedPlayer = {
   shuffle: boolean;
   repeat: RepeatMode;
   progress: number;
+  savedAt?: number;
 };
+
+function slimTrack(t: Track): Track {
+  const thumbs = (t.thumbnails || []).slice(0, 2);
+  return {
+    id: t.id,
+    title: t.title,
+    type: t.type,
+    artists: t.artists,
+    album: t.album,
+    duration: t.duration,
+    thumbnails: thumbs,
+  };
+}
+
+function trimQueueForPersist(queue: Track[], queueIndex: number): { queue: Track[]; queueIndex: number } {
+  if (queue.length <= QUEUE_KEEP_BEFORE + 1 + QUEUE_KEEP_AFTER) {
+    return { queue: queue.map(slimTrack), queueIndex };
+  }
+  const start = Math.max(0, queueIndex - QUEUE_KEEP_BEFORE);
+  const end = Math.min(queue.length, queueIndex + 1 + QUEUE_KEEP_AFTER);
+  return {
+    queue: queue.slice(start, end).map(slimTrack),
+    queueIndex: queueIndex - start,
+  };
+}
 
 function loadPersisted(): Partial<PersistedPlayer> {
   try {
@@ -133,20 +164,78 @@ function loadPersisted(): Partial<PersistedPlayer> {
 function persistPlayer() {
   try {
     const s = usePlayer.getState();
+    if (!s.current && (!s.queue || s.queue.length === 0)) {
+      localStorage.removeItem(PLAYER_STORAGE_KEY);
+      return;
+    }
+
+    let progress = s.progress;
+    const audio = s.audioEl;
+    if (audio && Number.isFinite(audio.currentTime) && audio.currentTime > 0) {
+      progress = audio.currentTime;
+    }
+
+    const trimmed = trimQueueForPersist(s.queue || [], s.queueIndex || 0);
     const payload: PersistedPlayer = {
-      current: s.current,
-      queue: s.queue,
-      queueIndex: s.queueIndex,
+      v: 2,
+      current: s.current ? slimTrack(s.current) : null,
+      queue: trimmed.queue,
+      queueIndex: trimmed.queueIndex,
       volume: s.volume,
       shuffle: s.shuffle,
       repeat: s.repeat,
-      progress: s.progress,
+      progress,
+      savedAt: Date.now(),
     };
-    localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(payload));
+
+    try {
+      localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // Quota : garder seulement le titre en cours + 24 suivants
+      const qi = Math.max(0, s.queueIndex || 0);
+      const q = (s.queue || []).slice(qi, qi + 25).map(slimTrack);
+      const compact: PersistedPlayer = {
+        v: 2,
+        current: s.current ? slimTrack(s.current) : q[0] || null,
+        queue: q.length ? q : s.current ? [slimTrack(s.current)] : [],
+        queueIndex: 0,
+        volume: s.volume,
+        shuffle: s.shuffle,
+        repeat: s.repeat,
+        progress,
+        savedAt: Date.now(),
+      };
+      localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(compact));
+    }
   } catch {
-    /* quota / private mode */
+    /* private mode / quota */
   }
 }
+
+/** Flush immédiat (fermeture onglet / app / arrière-plan). */
+export function flushPlayerPersist() {
+  persistPlayer();
+}
+
+function installPersistLifecycle() {
+  if (typeof window === 'undefined') return;
+  const flush = () => {
+    try {
+      persistPlayer();
+    } catch {
+      /* ignore */
+    }
+  };
+  window.addEventListener('pagehide', flush);
+  window.addEventListener('beforeunload', flush);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flush();
+  });
+  // PWA / mobile : freeze de la page
+  window.addEventListener('freeze', flush);
+}
+
+installPersistLifecycle();
 
 function publish() {
   const s = usePlayer.getState();
@@ -163,6 +252,46 @@ function publish() {
     updatedAt: Date.now(),
   });
   persistPlayer();
+  void import('../lib/backgroundAudio')
+    .then(({ setNativePlaybackNotification }) =>
+      setNativePlaybackNotification({
+        playing: s.isPlaying,
+        title: s.current?.title,
+        artist: s.current ? artistNames(s.current) : 'Lecture en cours',
+      }),
+    )
+    .catch(() => undefined);
+}
+
+async function restoreAudioFromPersisted() {
+  const { audioEl, current, progress, volume } = usePlayer.getState();
+  if (!audioEl || !current || !isPlayable(current)) return;
+  // Déjà chargé pour ce titre
+  if (audioEl.dataset.trackId === current.id && audioEl.src) return;
+  try {
+    const src = await resolvePlayUrl(current.id);
+    if (audioEl.src.startsWith('blob:')) URL.revokeObjectURL(audioEl.src);
+    audioEl.src = src;
+    audioEl.dataset.trackId = current.id;
+    audioEl.volume = volume;
+    const seekTo = progress > 0 ? progress : 0;
+    const applySeek = () => {
+      try {
+        if (seekTo > 0 && Number.isFinite(audioEl.duration) && seekTo < audioEl.duration) {
+          audioEl.currentTime = seekTo;
+        } else if (seekTo > 0) {
+          audioEl.currentTime = seekTo;
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    if (audioEl.readyState >= 1) applySeek();
+    else audioEl.addEventListener('loadedmetadata', applySeek, { once: true });
+    void usePlayer.getState().loadRelated(current.id);
+  } catch (err) {
+    console.error('restore playback', err);
+  }
 }
 
 function isActivePlayer() {
@@ -263,23 +392,32 @@ function prefetchTrack(trackId: string | undefined) {
 async function ensureAutoRadio(seedId: string) {
   const cur = usePlayer.getState();
   const upcoming = cur.queue.slice(cur.queueIndex + 1).filter(isPlayable);
-  if (upcoming.length >= 3) {
+  // Vise une file longue (scroll jusqu’à ~100 dans l’UI)
+  if (upcoming.length >= 40) {
     prefetchTrack(upcoming[0]?.id);
     return;
   }
   if (!isPlayable({ id: seedId } as Track)) return;
   try {
-    const { radio, related } = await api.related(seedId);
-    const pool = (radio.length ? radio : related).filter(
+    const [{ radio, related }, upNext] = await Promise.all([
+      api.related(seedId),
+      api.upNext(seedId).catch(() => ({ tracks: [] as Track[] })),
+    ]);
+    const pool = [...(upNext.tracks || []), ...(radio.length ? radio : related)].filter(
       (t) => t.id !== seedId && isPlayable(t),
     );
     if (!pool.length) return;
     const state = usePlayer.getState();
-    // Ne pas écraser une file album/playlist déjà longue
     const remaining = state.queue.slice(state.queueIndex + 1).filter(isPlayable);
-    if (remaining.length >= 3) return;
+    if (remaining.length >= 40) return;
     const existing = new Set(state.queue.map((t) => t.id));
-    const extra = pool.filter((t) => !existing.has(t.id)).slice(0, 40);
+    const extra: Track[] = [];
+    for (const t of pool) {
+      if (existing.has(t.id)) continue;
+      existing.add(t.id);
+      extra.push(t);
+      if (extra.length >= 80) break;
+    }
     if (!extra.length) return;
     const queue = [...state.queue.slice(0, state.queueIndex + 1), ...remaining, ...extra];
     usePlayer.setState({
@@ -318,6 +456,7 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
 
   if (audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
   audio.src = src;
+  audio.dataset.trackId = track.id;
   audio.volume = state.volume;
   // démarrer dès que possible
   let playPromise: Promise<void>;
@@ -399,36 +538,37 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   hydrated: false,
   audioEl: null,
 
-  bindAudio: (el) => set({ audioEl: el }),
+  bindAudio: (el) => {
+    set({ audioEl: el });
+    if (el && get().hydrated && get().current) {
+      void restoreAudioFromPersisted();
+    }
+  },
 
   hydrate: async () => {
     if (get().hydrated) return;
     const saved = loadPersisted();
+    const queue = Array.isArray(saved.queue) ? saved.queue : [];
+    const queueIndex = Math.min(
+      Math.max(0, saved.queueIndex || 0),
+      Math.max(0, queue.length - 1),
+    );
+    const current =
+      saved.current ||
+      (queue.length ? queue[queueIndex] || queue[0] : null) ||
+      null;
     set({
-      current: saved.current || null,
-      queue: saved.queue || [],
-      queueIndex: saved.queueIndex || 0,
+      current,
+      queue,
+      queueIndex: queue.length ? queueIndex : 0,
       volume: typeof saved.volume === 'number' ? saved.volume : 0.9,
       shuffle: Boolean(saved.shuffle),
       repeat: saved.repeat || 'off',
-      progress: saved.progress || 0,
+      progress: typeof saved.progress === 'number' ? saved.progress : 0,
       isPlaying: false,
       hydrated: true,
     });
-    const audio = get().audioEl;
-    const track = get().current;
-    if (audio && track && isPlayable(track)) {
-      try {
-        const src = await resolvePlayUrl(track.id);
-        if (audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
-        audio.src = src;
-        audio.volume = get().volume;
-        if (saved.progress) audio.currentTime = saved.progress;
-        void get().loadRelated(track.id);
-      } catch (err) {
-        console.error(err);
-      }
-    }
+    await restoreAudioFromPersisted();
   },
 
   playQueue: async (tracks, startIndex = 0) => {
@@ -512,13 +652,46 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       set({ isPlaying: !playing });
       return;
     }
-    const { audioEl, isPlaying } = get();
+    const { audioEl, isPlaying, current, queue, progress } = get();
     if (!audioEl) return;
     if (isPlaying) {
       audioEl.pause();
       set({ isPlaying: false });
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+      persistPlayer();
     } else {
+      const needsLoad =
+        !audioEl.src ||
+        audioEl.src === window.location.href ||
+        (current && audioEl.dataset.trackId !== current.id);
+      if (needsLoad && current) {
+        void (async () => {
+          set({ isLoading: true });
+          try {
+            await restoreAudioFromPersisted();
+            if (progress > 0) {
+              try {
+                audioEl.currentTime = progress;
+              } catch {
+                /* ignore */
+              }
+            }
+            await audioEl.play();
+            set({ isPlaying: true, isLoading: false });
+            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+            publish();
+            if (current.id) void ensureAutoRadio(current.id);
+          } catch (err) {
+            console.error(err);
+            // Fallback : rejouer via play()
+            await get().play(current, queue.length ? queue : [current], {
+              preserveQueue: true,
+              noAutoRadio: false,
+            });
+          }
+        })();
+        return;
+      }
       void audioEl.play().then(() => {
         set({ isPlaying: true });
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
@@ -699,6 +872,22 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     publish();
   },
 
+  moveInQueue: (fromIndex, toIndex) => {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
+    set((s) => {
+      if (fromIndex >= s.queue.length || toIndex >= s.queue.length) return s;
+      const q = [...s.queue];
+      const [item] = q.splice(fromIndex, 1);
+      q.splice(toIndex, 0, item);
+      let qi = s.queueIndex;
+      if (fromIndex === qi) qi = toIndex;
+      else if (fromIndex < qi && toIndex >= qi) qi -= 1;
+      else if (fromIndex > qi && toIndex <= qi) qi += 1;
+      return { queue: q, queueIndex: qi };
+    });
+    publish();
+  },
+
   appendRelated: (tracks) => {
     set((s) => {
       const ids = new Set(s.queue.map((t) => t.id));
@@ -756,7 +945,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     if (playAudio && state.current && isActivePlayer()) {
       try {
         set({ isLoading: true });
-        await playLocal(state.current, get());
+        const gen = ++playGeneration;
+        await playLocal(state.current, get(), gen);
         const audio = get().audioEl;
         if (audio && typeof state.progress === 'number') audio.currentTime = state.progress;
         if (state.isPlaying === false) {
