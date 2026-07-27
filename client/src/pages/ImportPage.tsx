@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../store/auth';
 import { useLibrary } from '../store/library';
-import { Download, Link2, Loader2, RefreshCw, Unplug, Youtube } from 'lucide-react';
+import { Download, Link2, Loader2, RefreshCw, Unplug, Music2 } from 'lucide-react';
 
 export function ImportPage() {
   const [input, setInput] = useState('');
@@ -81,7 +81,7 @@ export function ImportPage() {
       {!isGuest && (
         <section className="mb-8 rounded-2xl border border-yt-border bg-yt-surface p-5">
           <div className="mb-3 flex items-center gap-2">
-            <Youtube className="h-5 w-5 text-yt-red" />
+            <Music2 className="h-5 w-5 text-yt-red" />
             <h2 className="font-display text-lg font-semibold">Compte YouTube Music</h2>
           </div>
           <p className="mb-4 text-sm text-yt-muted">
