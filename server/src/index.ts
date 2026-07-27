@@ -66,12 +66,32 @@ import {
   authOptional,
   authRequired,
   ensureUser,
+  issueSession,
   loginGoogle,
   loginLocal,
   registerLocal,
+  sessionCookieOptions,
   signToken,
   verifyToken,
 } from './auth.js';
+import {
+  consumeEmailToken,
+  createEmailToken,
+  insertTelemetry,
+  listMailOutbox,
+  listTelemetry,
+  markEmailVerified,
+  rotateRefreshToken,
+  revokeRefreshToken,
+  telemetryStats,
+} from './platform.js';
+import { sendVerificationEmail, getAppEnv } from './mail.js';
+import {
+  disableTotpForUser,
+  enableTotpForUser,
+  generateTotpSetup,
+} from './totp.js';
+import './platform.js';
 import { findUserByEmail, createUser, publicUser, updateUserProfile, findUserById, isAdminUser } from './db.js';
 import { detachSocket, getHubPublic, handleSessionMessage } from './sessions.js';
 import type { Track } from './types.js';
@@ -108,11 +128,9 @@ app.post('/api/auth/register', async (req, res) => {
       return;
     }
     const result = await registerLocal(String(email), String(password), String(name || ''));
-    res.cookie('ytm_token', result.token, {
-      httpOnly: true,
-      sameSite: 'lax',
-      maxAge: 30 * 24 * 3600 * 1000,
-    });
+    const opts = sessionCookieOptions();
+    res.cookie('ytm_token', result.token, opts);
+    res.cookie('ytm_refresh', result.refreshToken, { ...opts, httpOnly: true });
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: String((err as Error).message || err) });
@@ -121,35 +139,165 @@ app.post('/api/auth/register', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const result = await loginLocal(String(req.body?.email || ''), String(req.body?.password || ''));
-    res.cookie('ytm_token', result.token, {
-      httpOnly: true,
-      sameSite: 'lax',
-      maxAge: 30 * 24 * 3600 * 1000,
+    const result = await loginLocal(String(req.body?.email || ''), String(req.body?.password || ''), {
+      totp: req.body?.totp ? String(req.body.totp) : undefined,
+      deviceLabel: String(req.body?.deviceLabel || req.headers['user-agent'] || 'web').slice(0, 120),
     });
+    const opts = sessionCookieOptions();
+    res.cookie('ytm_token', result.token, opts);
+    res.cookie('ytm_refresh', result.refreshToken, { ...opts, httpOnly: true });
     res.json(result);
   } catch (err) {
-    res.status(401).json({ error: String((err as Error).message || err) });
+    const msg = String((err as Error).message || err);
+    if (msg === '2FA_REQUIRED' || (err as any).code === '2FA_REQUIRED') {
+      res.status(401).json({ error: '2FA_REQUIRED', needs2fa: true });
+      return;
+    }
+    res.status(401).json({ error: msg });
   }
 });
 
 app.post('/api/auth/google', async (req, res) => {
   try {
-    const result = await loginGoogle(String(req.body?.credential || req.body?.idToken || ''));
-    res.cookie('ytm_token', result.token, {
-      httpOnly: true,
-      sameSite: 'lax',
-      maxAge: 30 * 24 * 3600 * 1000,
-    });
+    const result = await loginGoogle(
+      String(req.body?.credential || req.body?.idToken || ''),
+      String(req.body?.deviceLabel || 'google'),
+    );
+    const opts = sessionCookieOptions();
+    res.cookie('ytm_token', result.token, opts);
+    res.cookie('ytm_refresh', result.refreshToken, { ...opts, httpOnly: true });
     res.json(result);
   } catch (err) {
     res.status(401).json({ error: String((err as Error).message || err) });
   }
 });
 
-app.post('/api/auth/logout', (_req, res) => {
+app.post('/api/auth/refresh', async (req, res) => {
+  try {
+    const raw =
+      String(req.body?.refreshToken || '') ||
+      String((req as any).cookies?.ytm_refresh || '');
+    if (!raw) {
+      res.status(401).json({ error: 'refresh manquant' });
+      return;
+    }
+    const rotated = rotateRefreshToken(raw, String(req.headers['user-agent'] || '').slice(0, 80));
+    if (!rotated) {
+      res.status(401).json({ error: 'refresh invalide ou expiré' });
+      return;
+    }
+    const user = findUserById(rotated.userId);
+    if (!user) {
+      res.status(401).json({ error: 'utilisateur introuvable' });
+      return;
+    }
+    const token = await signToken(user);
+    const opts = sessionCookieOptions();
+    res.cookie('ytm_token', token, opts);
+    res.cookie('ytm_refresh', rotated.token, { ...opts, httpOnly: true });
+    res.json({ user: publicUser(user), token, refreshToken: rotated.token });
+  } catch (err) {
+    res.status(401).json({ error: String((err as Error).message || err) });
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const raw = String((req as any).cookies?.ytm_refresh || req.body?.refreshToken || '');
+  if (raw) revokeRefreshToken(raw);
   res.clearCookie('ytm_token');
+  res.clearCookie('ytm_refresh');
   res.json({ ok: true });
+});
+
+app.post('/api/auth/verify-email', async (req, res) => {
+  try {
+    const token = String(req.body?.token || req.query?.token || '');
+    const userId = consumeEmailToken(token, 'verify');
+    if (!userId) {
+      res.status(400).json({ error: 'Lien invalide ou expiré' });
+      return;
+    }
+    markEmailVerified(userId);
+    const user = findUserById(userId)!;
+    res.json({ ok: true, user: publicUser(user) });
+  } catch (err) {
+    res.status(400).json({ error: String((err as Error).message || err) });
+  }
+});
+
+app.post('/api/auth/resend-verification', authRequired, async (req, res) => {
+  try {
+    if (req.user?.isGuest) {
+      res.status(400).json({ error: 'Compte requis' });
+      return;
+    }
+    if (req.user?.emailVerified) {
+      res.json({ ok: true, already: true });
+      return;
+    }
+    const raw = createEmailToken(req.userId!, 'verify');
+    await sendVerificationEmail(req.user!.email, req.user!.name, raw);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: String((err as Error).message || err) });
+  }
+});
+
+app.post('/api/auth/2fa/setup', authRequired, (req, res) => {
+  try {
+    if (req.user?.isGuest) {
+      res.status(400).json({ error: 'Compte requis' });
+      return;
+    }
+    const setup = generateTotpSetup(req.user!.email);
+    res.json(setup);
+  } catch (err) {
+    res.status(400).json({ error: String((err as Error).message || err) });
+  }
+});
+
+app.post('/api/auth/2fa/enable', authRequired, (req, res) => {
+  try {
+    enableTotpForUser(req.userId!, String(req.body?.secret || ''), String(req.body?.code || ''));
+    const user = findUserById(req.userId!)!;
+    res.json({ ok: true, user: publicUser(user) });
+  } catch (err) {
+    res.status(400).json({ error: String((err as Error).message || err) });
+  }
+});
+
+app.post('/api/auth/2fa/disable', authRequired, (req, res) => {
+  try {
+    disableTotpForUser(req.userId!, String(req.body?.code || ''));
+    const user = findUserById(req.userId!)!;
+    res.json({ ok: true, user: publicUser(user) });
+  } catch (err) {
+    res.status(400).json({ error: String((err as Error).message || err) });
+  }
+});
+
+app.post('/api/telemetry', ensureUser, (req, res) => {
+  try {
+    const b = req.body || {};
+    const id = insertTelemetry({
+      env: b.env || getAppEnv(),
+      level: String(b.level || 'info'),
+      kind: String(b.kind || 'client'),
+      message: b.message ? String(b.message) : undefined,
+      stack: b.stack ? String(b.stack) : undefined,
+      url: b.url ? String(b.url) : undefined,
+      userAgent: String(req.headers['user-agent'] || b.userAgent || ''),
+      userId: req.user?.isGuest ? undefined : req.userId,
+      deviceId: String(req.headers['x-device-id'] || b.deviceId || ''),
+      meta: b.meta,
+      batteryLevel: typeof b.batteryLevel === 'number' ? b.batteryLevel : null,
+      batteryCharging: typeof b.batteryCharging === 'boolean' ? b.batteryCharging : null,
+      perf: b.perf,
+    });
+    res.json({ ok: true, id });
+  } catch (err) {
+    res.status(400).json({ error: String((err as Error).message || err) });
+  }
 });
 
 app.get('/api/img', (req, res) => void handleImageProxy(req, res));
@@ -244,13 +392,11 @@ app.post('/api/auth/passkeys/login/verify', async (req, res) => {
       res.status(401).json({ error: 'Utilisateur introuvable' });
       return;
     }
-    const token = await signToken(user);
-    res.cookie('ytm_token', token, {
-      httpOnly: true,
-      sameSite: 'lax',
-      maxAge: 30 * 24 * 3600 * 1000,
-    });
-    res.json({ user: publicUser(user), token });
+    const session = await issueSession(user, 'passkey');
+    const opts = sessionCookieOptions();
+    res.cookie('ytm_token', session.token, opts);
+    res.cookie('ytm_refresh', session.refreshToken, { ...opts, httpOnly: true });
+    res.json(session);
   } catch (err) {
     res.status(401).json({ error: String((err as Error).message || err) });
   }
@@ -268,7 +414,22 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
 }
 
 app.get('/api/admin/status', requireAdmin, (_req, res) => {
-  res.json(deployInfo(PORT));
+  res.json({ ...deployInfo(PORT), env: getAppEnv(), telemetry: telemetryStats() });
+});
+
+app.get('/api/admin/telemetry', requireAdmin, (req, res) => {
+  res.json({
+    stats: telemetryStats(),
+    events: listTelemetry({
+      level: req.query.level ? String(req.query.level) : undefined,
+      limit: Number(req.query.limit || 100),
+      offset: Number(req.query.offset || 0),
+    }),
+  });
+});
+
+app.get('/api/admin/mail-outbox', requireAdmin, (_req, res) => {
+  res.json({ mails: listMailOutbox(80) });
 });
 
 app.post('/api/admin/build', requireAdmin, (_req, res) => {

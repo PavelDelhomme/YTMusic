@@ -3,7 +3,124 @@ import { startRegistration } from '@simplewebauthn/browser';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api';
 import { useAuth } from '../store/auth';
-import { Fingerprint, KeyRound, Smartphone, Trash2 } from 'lucide-react';
+import { Fingerprint, KeyRound, Shield, Smartphone, Trash2 } from 'lucide-react';
+import type { User } from '../api';
+
+function TwoFactorSection({ user, onUpdated }: { user: User; onUpdated: () => Promise<void> }) {
+  const [secret, setSecret] = useState<string | null>(null);
+  const [otpauthUrl, setOtpauthUrl] = useState('');
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [msg, setMsg] = useState('');
+
+  return (
+    <section className="mb-8 rounded-2xl border border-yt-border bg-yt-surface p-5">
+      <div className="mb-4 flex items-center gap-2">
+        <Shield className="h-5 w-5 text-yt-red" />
+        <h2 className="font-display text-lg font-semibold">Double authentification (2FA)</h2>
+      </div>
+      <p className="mb-4 text-sm text-yt-muted">
+        TOTP (Google Authenticator, Aegis, etc.). Requise à chaque connexion email/mot de passe.
+      </p>
+      {user.totpEnabled ? (
+        <form
+          className="flex flex-wrap items-end gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setBusy(true);
+            setErr('');
+            void api
+              .totpDisable(code)
+              .then(async () => {
+                setMsg('2FA désactivée');
+                setCode('');
+                await onUpdated();
+              })
+              .catch((ex) => setErr(String(ex.message || ex)))
+              .finally(() => setBusy(false));
+          }}
+        >
+          <p className="w-full text-sm text-emerald-400">2FA active</p>
+          <input
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="Code pour désactiver"
+            className="rounded-xl border border-yt-border bg-yt-bg px-3 py-2 text-sm outline-none"
+          />
+          <button
+            type="submit"
+            disabled={busy || code.length < 6}
+            className="rounded-full bg-yt-elevated px-4 py-2 text-sm disabled:opacity-50"
+          >
+            Désactiver
+          </button>
+        </form>
+      ) : secret ? (
+        <div className="space-y-3">
+          <div className="inline-block rounded-2xl bg-white p-3">
+            <QRCodeSVG value={otpauthUrl} size={160} />
+          </div>
+          <p className="break-all text-xs text-yt-muted">Secret : {secret}</p>
+          <form
+            className="flex flex-wrap gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setBusy(true);
+              setErr('');
+              void api
+                .totpEnable(secret, code)
+                .then(async () => {
+                  setMsg('2FA activée');
+                  setSecret(null);
+                  setCode('');
+                  await onUpdated();
+                })
+                .catch((ex) => setErr(String(ex.message || ex)))
+                .finally(() => setBusy(false));
+            }}
+          >
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="Code à 6 chiffres"
+              className="rounded-xl border border-yt-border bg-yt-bg px-3 py-2 text-sm outline-none"
+            />
+            <button
+              type="submit"
+              disabled={busy || code.length < 6}
+              className="rounded-full bg-yt-red px-4 py-2 text-sm font-medium disabled:opacity-50"
+            >
+              Confirmer
+            </button>
+          </form>
+        </div>
+      ) : (
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded-full bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-60"
+          onClick={() => {
+            setBusy(true);
+            setErr('');
+            void api
+              .totpSetup()
+              .then((r) => {
+                setSecret(r.secret);
+                setOtpauthUrl(r.otpauthUrl);
+              })
+              .catch((ex) => setErr(String(ex.message || ex)))
+              .finally(() => setBusy(false));
+          }}
+        >
+          Activer la 2FA
+        </button>
+      )}
+      {err && <p className="mt-2 text-sm text-red-400">{err}</p>}
+      {msg && <p className="mt-2 text-sm text-emerald-400">{msg}</p>}
+    </section>
+  );
+}
 
 export function ProfilePage() {
   const user = useAuth((s) => s.user);
@@ -59,6 +176,23 @@ export function ProfilePage() {
         <>
           <section className="mb-8 rounded-2xl border border-yt-border bg-yt-surface p-5">
             <h2 className="mb-4 font-display text-lg font-semibold">Identité</h2>
+            {!user.emailVerified && (
+              <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm">
+                Email non validé.{' '}
+                <button
+                  type="button"
+                  className="text-yt-red underline"
+                  onClick={() => {
+                    void api
+                      .resendVerification()
+                      .then(() => setMsg('Email de validation renvoyé'))
+                      .catch((ex) => setErr(String(ex.message || ex)));
+                  }}
+                >
+                  Renvoyer le lien
+                </button>
+              </div>
+            )}
             <form
               className="space-y-3"
               onSubmit={(e) => {
@@ -104,6 +238,8 @@ export function ProfilePage() {
               </button>
             </form>
           </section>
+
+          <TwoFactorSection user={user} onUpdated={init} />
 
           <section className="mb-8 rounded-2xl border border-yt-border bg-yt-surface p-5">
             <div className="mb-4 flex items-center gap-2">

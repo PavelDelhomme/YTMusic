@@ -3,14 +3,16 @@ import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api';
 import { useAuth } from '../store/auth';
 import {
+  Activity,
   CheckCircle2,
   Construction,
   Copy,
+  Mail,
+  Monitor,
   Radar,
   Rocket,
   Server,
   Smartphone,
-  Monitor,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -20,6 +22,9 @@ export function AdminPage() {
   const [err, setErr] = useState('');
   const [selectedUrl, setSelectedUrl] = useState('');
   const [copied, setCopied] = useState(false);
+  const [telemetry, setTelemetry] = useState<{ stats: any; events: any[] } | null>(null);
+  const [mails, setMails] = useState<any[]>([]);
+  const [levelFilter, setLevelFilter] = useState('');
 
   const refresh = useCallback(() => {
     void api
@@ -29,7 +34,15 @@ export function AdminPage() {
         setSelectedUrl((prev) => prev || s.urls?.find((u: string) => !u.includes('localhost')) || s.urls?.[0] || '');
       })
       .catch((e) => setErr(String(e.message || e)));
-  }, []);
+    void api
+      .adminTelemetry(levelFilter || undefined)
+      .then(setTelemetry)
+      .catch(() => undefined);
+    void api
+      .adminMailOutbox()
+      .then((r) => setMails(r.mails || []))
+      .catch(() => undefined);
+  }, [levelFilter]);
 
   useEffect(() => {
     refresh();
@@ -53,6 +66,8 @@ export function AdminPage() {
     );
   }
 
+  const stats = telemetry?.stats;
+
   return (
     <div className="animate-fade-up mx-auto max-w-4xl">
       <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
@@ -60,7 +75,7 @@ export function AdminPage() {
           <p className="text-xs uppercase tracking-widest text-yt-muted">Console</p>
           <h1 className="font-display text-3xl font-semibold tracking-tight">Administration</h1>
           <p className="mt-1 text-sm text-yt-muted">
-            Déploie sur mobile, build PWA, statut serveur — sans quitter l&apos;app.
+            Déploiement, analytics erreurs/perf/batterie, mails — local · préprod · prod.
           </p>
         </div>
         <button
@@ -81,7 +96,7 @@ export function AdminPage() {
           value={status ? `:${status.appPort || status.port}` : '…'}
           sub={
             status
-              ? `${status.mode === 'development' ? 'Dev (Vite)' : 'Prod'} · API :${status.port}`
+              ? `${status.mode === 'development' ? 'Dev (Vite)' : 'Prod'} · env ${status.env || 'local'}`
               : ''
           }
         />
@@ -92,12 +107,110 @@ export function AdminPage() {
           sub={status ? `${status.guests} invités` : ''}
         />
         <Stat
-          icon={<Radar className="h-4 w-4" />}
-          label="Réseau local"
-          value={status?.lan?.length ? `${status.lan.length} IP` : '…'}
-          sub={status?.lan?.[0]?.address || 'Aucune'}
+          icon={<Activity className="h-4 w-4" />}
+          label="Télémétrie 24h"
+          value={stats ? String(stats.last24 ?? '…') : '…'}
+          sub={stats ? `${stats.errors24 || 0} erreurs · ${stats.total || 0} total` : ''}
         />
       </div>
+
+      <section className="mb-6 rounded-2xl border border-yt-border bg-yt-surface p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Activity className="h-5 w-5 text-yt-red" />
+            <h3 className="font-display text-lg font-semibold">Analytics & erreurs</h3>
+          </div>
+          <select
+            value={levelFilter}
+            onChange={(e) => setLevelFilter(e.target.value)}
+            className="rounded-xl border border-yt-border bg-yt-bg px-3 py-1.5 text-sm"
+          >
+            <option value="">Tous niveaux</option>
+            <option value="error">Erreurs</option>
+            <option value="fatal">Fatal</option>
+            <option value="info">Info</option>
+          </select>
+        </div>
+        <p className="mb-4 text-sm text-yt-muted">
+          Client web, PWA mobile et desktop envoient erreurs, perf JS heap et batterie (si dispo).
+        </p>
+        <div className="max-h-80 overflow-auto rounded-xl bg-black/40">
+          <table className="w-full text-left text-xs">
+            <thead className="sticky top-0 bg-yt-elevated text-yt-muted">
+              <tr>
+                <th className="px-3 py-2">Quand</th>
+                <th className="px-3 py-2">Niv.</th>
+                <th className="px-3 py-2">Kind</th>
+                <th className="px-3 py-2">Message</th>
+                <th className="px-3 py-2">Batt.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(telemetry?.events || []).slice(0, 80).map((ev: any) => (
+                <tr key={ev.id} className="border-t border-yt-border/50 align-top">
+                  <td className="whitespace-nowrap px-3 py-2 text-yt-muted">
+                    {new Date(ev.created_at).toLocaleString('fr-FR')}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={
+                        ev.level === 'error' || ev.level === 'fatal'
+                          ? 'text-red-400'
+                          : 'text-yt-muted'
+                      }
+                    >
+                      {ev.level}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-yt-muted">{ev.kind}</td>
+                  <td className="max-w-xs truncate px-3 py-2" title={ev.message || ''}>
+                    {ev.message || '—'}
+                  </td>
+                  <td className="px-3 py-2 text-yt-muted">
+                    {ev.battery_level != null
+                      ? `${Math.round(ev.battery_level * 100)}%${ev.battery_charging ? '⚡' : ''}`
+                      : '—'}
+                  </td>
+                </tr>
+              ))}
+              {(!telemetry?.events || telemetry.events.length === 0) && (
+                <tr>
+                  <td colSpan={5} className="px-3 py-6 text-center text-yt-muted">
+                    Aucun événement pour l&apos;instant
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="mb-6 rounded-2xl border border-yt-border bg-yt-surface p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <Mail className="h-5 w-5 text-yt-red" />
+          <h3 className="font-display text-lg font-semibold">Boîte mail (outbox)</h3>
+        </div>
+        <p className="mb-4 text-sm text-yt-muted">
+          Sans SMTP, les emails (validation…) sont stockés ici + logs console. Avec SMTP, ils
+          partent vraiment.
+        </p>
+        <ul className="max-h-60 space-y-2 overflow-auto text-sm">
+          {mails.slice(0, 30).map((m) => (
+            <li key={m.id} className="rounded-xl bg-yt-elevated px-3 py-2">
+              <div className="flex justify-between gap-2 text-xs text-yt-muted">
+                <span>{m.to_email}</span>
+                <span>{new Date(m.created_at).toLocaleString('fr-FR')}</span>
+              </div>
+              <div className="font-medium">{m.subject}</div>
+              <details className="mt-1 text-xs text-yt-muted">
+                <summary>Corps</summary>
+                <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap">{m.body}</pre>
+              </details>
+            </li>
+          ))}
+          {mails.length === 0 && <li className="text-yt-muted">Aucun mail</li>}
+        </ul>
+      </section>
 
       <section className="mb-6 overflow-hidden rounded-3xl border border-yt-border bg-gradient-to-br from-[#1a1a1a] via-yt-surface to-[#0d0d0d] p-6">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-center">
@@ -211,16 +324,15 @@ export function AdminPage() {
             </li>
             <li>
               <strong className="text-white">Ordinateur</strong> — Chrome/Edge propose « Installer
-              YTMusic » ; une bannière apparaît aussi dans l&apos;app.
+              YTMusic » uniquement si pas déjà installé (bannière conditionnelle).
             </li>
             <li>
               <strong className="text-white">Electron</strong> —{' '}
-              <code className="text-white">npm run dev:desktop</code> dans le dossier projet
+              <code className="text-white">npm run dev:desktop</code>
               {status?.desktopReady ? ' (desktop détecté)' : ''}.
             </li>
             <li>
-              Prod simple : <code className="text-white">npm run build && npm start</code> puis ouvre
-              les URLs LAN.
+              Socle réutilisable : <code className="text-white">packages/platform-kit</code>
             </li>
           </ul>
         </section>

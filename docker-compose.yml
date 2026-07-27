@@ -14,11 +14,21 @@ services:
     environment:
       NODE_ENV: production
       PORT: "8787"
+      APP_ENV: ${APP_ENV:-production}
+      APP_URL: ${APP_URL:-https://ytmusic.delhomme.ovh}
       JWT_SECRET: ${JWT_SECRET:?Définis JWT_SECRET}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-14d}
+      AUTH_COOKIE_MS: ${AUTH_COOKIE_MS:-34560000000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-1}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-ytmusic.delhomme.ovh}
       WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-https://ytmusic.delhomme.ovh}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-YTMusic <noreply@ytmusic.delhomme.ovh>}
     volumes:
       - ytmusic_data:/app/data
     networks:

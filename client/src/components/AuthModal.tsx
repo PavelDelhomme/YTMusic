@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { startAuthentication } from '@simplewebauthn/browser';
-import { api, setToken } from '../api';
+import { api, setRefreshToken, setToken } from '../api';
 import { useAuth } from '../store/auth';
 import { useLibrary } from '../store/library';
 import { Fingerprint } from 'lucide-react';
@@ -18,15 +18,17 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [totp, setTotp] = useState('');
+  const [needs2fa, setNeeds2fa] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [info, setInfo] = useState('');
   const googleBtn = useRef<HTMLDivElement>(null);
 
   const isGuest = !user || user.isGuest || user.email.includes('@local.ytmusic');
 
   useEffect(() => {
     if (!open || !googleEnabled || !googleClientId) return;
-
     const scriptId = 'google-gsi';
     const boot = () => {
       if (!window.google || !googleBtn.current) return;
@@ -51,7 +53,6 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
         shape: 'pill',
       });
     };
-
     if (!document.getElementById(scriptId)) {
       const s = document.createElement('script');
       s.src = 'https://accounts.google.com/gsi/client';
@@ -59,9 +60,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
       s.id = scriptId;
       s.onload = boot;
       document.body.appendChild(s);
-    } else {
-      boot();
-    }
+    } else boot();
   }, [open, googleEnabled, googleClientId, loginGoogle, onClose, refresh]);
 
   if (!open) return null;
@@ -75,7 +74,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
               {mode === 'login' ? 'Connexion' : 'Créer un compte'}
             </h2>
             <p className="mt-1 text-sm text-yt-muted">
-              Synchronise bibliothèque, playlists et offline entre web, mobile et desktop.
+              Session longue sécurisée (refresh) — web, mobile PWA et desktop.
             </p>
           </div>
           <button type="button" onClick={onClose} className="text-yt-muted hover:text-white">
@@ -86,6 +85,15 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
         {!isGuest && (
           <p className="mb-3 rounded-lg bg-yt-elevated px-3 py-2 text-sm">
             Connecté : {user!.name} ({user!.email})
+            {!user!.emailVerified && (
+              <button
+                type="button"
+                className="ml-2 text-yt-red underline"
+                onClick={() => void api.resendVerification().then(() => setInfo('Email renvoyé'))}
+              >
+                Renvoyer validation
+              </button>
+            )}
           </p>
         )}
 
@@ -108,6 +116,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
                 const cred = await startAuthentication({ optionsJSON: options });
                 const r = await api.passkeyLoginVerify(cred);
                 setToken(r.token);
+                if ((r as any).refreshToken) setRefreshToken((r as any).refreshToken);
                 await init();
                 await refresh();
                 onClose();
@@ -122,28 +131,39 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
           <Fingerprint className="h-4 w-4" /> Continuer avec une passkey
         </button>
 
-        {!googleEnabled && (
-          <p className="mb-3 rounded-lg border border-yt-border bg-yt-elevated px-3 py-2 text-xs text-yt-muted">
-            Google OAuth : ajoute <code>GOOGLE_CLIENT_ID</code> dans <code>.env</code> pour activer le bouton.
-          </p>
-        )}
-
         <form
           className="space-y-3"
           onSubmit={(e) => {
             e.preventDefault();
             setError('');
-            const run = async () => {
+            setInfo('');
+            void (async () => {
               try {
-                if (mode === 'login') await login(email, password);
-                else await register(email, password, name || email.split('@')[0]);
-                await refresh();
-                onClose();
+                if (mode === 'login') {
+                  try {
+                    await login(email, password, needs2fa ? totp : undefined);
+                  } catch (err) {
+                    const msg = String((err as Error).message || err);
+                    if ((err as any).needs2fa || msg.includes('2FA')) {
+                      setNeeds2fa(true);
+                      setError('Entre le code 2FA de ton application d’authentification');
+                      return;
+                    }
+                    throw err;
+                  }
+                  await refresh();
+                  onClose();
+                } else {
+                  await register(email, password, name || email.split('@')[0]);
+                  setInfo(
+                    'Compte créé — un email de validation a été envoyé. En local : Admin → Boîte mail / logs serveur.',
+                  );
+                  await refresh();
+                }
               } catch (err) {
                 setError(String((err as Error).message || err));
               }
-            };
-            void run();
+            })();
           }}
         >
           {mode === 'register' && (
@@ -171,7 +191,17 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
             placeholder="Mot de passe"
             className="w-full rounded-xl border border-yt-border bg-yt-bg px-3 py-2.5 text-sm outline-none focus:border-white/30"
           />
+          {needs2fa && (
+            <input
+              value={totp}
+              onChange={(e) => setTotp(e.target.value)}
+              placeholder="Code 2FA (6 chiffres)"
+              inputMode="numeric"
+              className="w-full rounded-xl border border-yt-border bg-yt-bg px-3 py-2.5 text-sm outline-none focus:border-white/30"
+            />
+          )}
           {error && <p className="text-sm text-red-400">{error}</p>}
+          {info && <p className="text-sm text-emerald-400">{info}</p>}
           <button type="submit" className="w-full rounded-full bg-yt-red py-2.5 text-sm font-medium">
             {mode === 'login' ? 'Se connecter' : "S'inscrire"}
           </button>
@@ -180,14 +210,13 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
         <button
           type="button"
           className="mt-4 w-full text-center text-sm text-yt-muted hover:text-white"
-          onClick={() => setMode((m) => (m === 'login' ? 'register' : 'login'))}
+          onClick={() => {
+            setMode((m) => (m === 'login' ? 'register' : 'login'));
+            setNeeds2fa(false);
+          }}
         >
           {mode === 'login' ? 'Créer un compte' : 'Déjà un compte ? Connexion'}
         </button>
-
-        <p className="mt-3 text-center text-[11px] text-yt-muted">
-          Sans compte, un profil invité local est créé — crée un compte pour sync multi-appareils.
-        </p>
       </div>
     </div>
   );

@@ -42,6 +42,8 @@ export type User = {
   hasGoogle?: boolean;
   isGuest?: boolean;
   isAdmin?: boolean;
+  emailVerified?: boolean;
+  totpEnabled?: boolean;
 };
 
 const TOKEN_KEY = 'ytm_token';
@@ -63,6 +65,15 @@ export function getToken() {
 export function setToken(token: string | null) {
   if (token) localStorage.setItem(TOKEN_KEY, token);
   else localStorage.removeItem(TOKEN_KEY);
+}
+
+const REFRESH_KEY = 'ytm_refresh';
+export function setRefreshToken(token: string | null) {
+  if (token) localStorage.setItem(REFRESH_KEY, token);
+  else localStorage.removeItem(REFRESH_KEY);
+}
+export function getRefreshToken() {
+  return localStorage.getItem(REFRESH_KEY);
 }
 
 /** Upscale / normalize CDN thumbnail URLs for crisp display */
@@ -135,7 +146,7 @@ export function artistNames(track: Track) {
   return track.artists?.map((a) => a.name).join(', ') || 'Artiste inconnu';
 }
 
-async function req<T>(url: string, init?: RequestInit): Promise<T> {
+async function req<T>(url: string, init?: RequestInit, retried = false): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-Device-Id': deviceId(),
@@ -149,11 +160,36 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
     headers,
     credentials: 'include',
   });
+  if (res.status === 401 && !retried && !url.includes('/auth/')) {
+    const refreshed = await tryRefresh();
+    if (refreshed) return req<T>(url, init, true);
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || res.statusText);
+    const err = new Error(body.error || res.statusText) as Error & { needs2fa?: boolean };
+    if (body.needs2fa) err.needs2fa = true;
+    throw err;
   }
   return res.json() as Promise<T>;
+}
+
+async function tryRefresh() {
+  const refreshToken = getRefreshToken();
+  try {
+    const r = await fetch('/api/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', 'X-Device-Id': deviceId() },
+      body: JSON.stringify({ refreshToken }),
+    });
+    if (!r.ok) return false;
+    const data = await r.json();
+    if (data.token) setToken(data.token);
+    if (data.refreshToken) setRefreshToken(data.refreshToken);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export const api = {
@@ -161,21 +197,54 @@ export const api = {
   authConfig: () => req<{ googleEnabled: boolean; googleClientId: string | null }>('/api/auth/config'),
   me: () => req<{ user: User }>('/api/auth/me'),
   register: (email: string, password: string, name: string) =>
-    req<{ user: User; token: string }>('/api/auth/register', {
+    req<{ user: User; token: string; refreshToken?: string; needsEmailVerification?: boolean }>(
+      '/api/auth/register',
+      {
+        method: 'POST',
+        body: JSON.stringify({ email, password, name }),
+      },
+    ),
+  login: (email: string, password: string, totp?: string) =>
+    req<{ user: User; token: string; refreshToken?: string }>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password, name }),
-    }),
-  login: (email: string, password: string) =>
-    req<{ user: User; token: string }>('/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, totp }),
     }),
   google: (credential: string) =>
-    req<{ user: User; token: string }>('/api/auth/google', {
+    req<{ user: User; token: string; refreshToken?: string }>('/api/auth/google', {
       method: 'POST',
       body: JSON.stringify({ credential }),
     }),
-  logout: () => req<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+  logout: () => req<{ ok: boolean }>('/api/auth/logout', { method: 'POST', body: '{}' }),
+  refresh: (refreshToken?: string) =>
+    req<{ user: User; token: string; refreshToken: string }>('/api/auth/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken }),
+    }),
+  verifyEmail: (token: string) =>
+    req<{ ok: boolean; user: User }>('/api/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+  resendVerification: () =>
+    req<{ ok: boolean }>('/api/auth/resend-verification', { method: 'POST', body: '{}' }),
+  totpSetup: () => req<{ secret: string; otpauthUrl: string }>('/api/auth/2fa/setup', { method: 'POST', body: '{}' }),
+  totpEnable: (secret: string, code: string) =>
+    req<{ ok: boolean; user: User }>('/api/auth/2fa/enable', {
+      method: 'POST',
+      body: JSON.stringify({ secret, code }),
+    }),
+  totpDisable: (code: string) =>
+    req<{ ok: boolean; user: User }>('/api/auth/2fa/disable', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
+  telemetry: (payload: Record<string, unknown>) =>
+    req<{ ok: boolean }>('/api/telemetry', { method: 'POST', body: JSON.stringify(payload) }),
+  adminTelemetry: (level?: string) =>
+    req<{ stats: any; events: any[] }>(
+      `/api/admin/telemetry${level ? `?level=${encodeURIComponent(level)}` : ''}`,
+    ),
+  adminMailOutbox: () => req<{ mails: any[] }>('/api/admin/mail-outbox'),
   updateProfile: (patch: { name?: string; email?: string; picture?: string | null }) =>
     req<{ user: User }>('/api/auth/profile', { method: 'PATCH', body: JSON.stringify(patch) }),
   passkeys: () => req<{ passkeys: any[] }>('/api/auth/passkeys'),

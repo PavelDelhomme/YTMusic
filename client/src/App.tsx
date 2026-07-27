@@ -11,6 +11,7 @@ import { OfflinePage } from './pages/OfflinePage';
 import { TvPage } from './pages/TvPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { AdminPage } from './pages/AdminPage';
+import { VerifyEmailPage } from './pages/VerifyEmailPage';
 
 export default function App() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
           <Route path="offline" element={<OfflinePage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="admin" element={<AdminPage />} />
+          <Route path="verify-email" element={<VerifyEmailPage />} />
           <Route path="artist/:id" element={<ArtistPage />} />
           <Route path="album/:id" element={<AlbumPage />} />
           <Route path="playlist/:id" element={<PlaylistPage />} />

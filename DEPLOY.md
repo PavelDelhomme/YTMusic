@@ -266,7 +266,26 @@ Fichiers utiles dans le repo :
 
 - `Dockerfile` — image prod  
 - `docker-compose.yml` — stack Portainer  
-- `docker-compose.dev.yml` — test local conteneur  
+- `docker-compose.dev.yml` — test local conteneur (+ Mailhog)  
 - `deploy/portainer-template.yml` — template Custom  
 - `.env.production.example` — variables  
 - `.github/workflows/docker.yml` — build auto  
+- `packages/platform-kit/` — socle réutilisable (env, auth longue, mail, telemetry)
+
+---
+
+## 13. Auth, email, 2FA, analytics (multi-env)
+
+| Variable | Local | Préprod / Prod |
+|----------|-------|----------------|
+| `APP_ENV` | `local` | `preprod` / `production` |
+| `APP_URL` | `http://localhost:5173` | `https://ytmusic.delhomme.ovh` |
+| `SMTP_*` | optionnel (outbox admin) | recommandé |
+| `JWT_ACCESS_TTL` | `14d` | idem |
+| Refresh cookie | ~400 jours | idem + `COOKIE_SECURE=1` |
+
+- Inscription → email de validation (`/verify-email?token=…`)
+- Profil → activer TOTP 2FA
+- Admin → Analytics (erreurs, perf, batterie) + boîte mail outbox
+- Install PWA : bannière seulement si l’app n’est **pas** déjà en mode standalone (tous hosts)  
+

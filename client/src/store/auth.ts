@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { api, setToken, type User } from '../api';
+import { api, setRefreshToken, setToken, type User } from '../api';
 import { sessionSocket } from '../lib/session';
 import { useSession } from './session';
 
@@ -9,7 +9,7 @@ type AuthState = {
   googleClientId: string | null;
   loaded: boolean;
   init: () => Promise<void>;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, totp?: string) => Promise<void>;
   register: (email: string, password: string, name: string) => Promise<void>;
   loginGoogle: (credential: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -18,6 +18,11 @@ type AuthState = {
 function reconnectSession() {
   sessionSocket.close();
   useSession.getState().init();
+}
+
+function applySession(r: { user: User; token: string; refreshToken?: string }) {
+  setToken(r.token);
+  if (r.refreshToken) setRefreshToken(r.refreshToken);
 }
 
 export const useAuth = create<AuthState>((set) => ({
@@ -36,27 +41,33 @@ export const useAuth = create<AuthState>((set) => ({
         loaded: true,
       });
     } catch {
-      set({ loaded: true });
+      try {
+        const r = await api.refresh();
+        applySession(r);
+        set({ user: r.user, loaded: true });
+      } catch {
+        set({ loaded: true });
+      }
     }
   },
 
-  login: async (email, password) => {
-    const r = await api.login(email, password);
-    setToken(r.token);
+  login: async (email, password, totp) => {
+    const r = await api.login(email, password, totp);
+    applySession(r);
     set({ user: r.user });
     reconnectSession();
   },
 
   register: async (email, password, name) => {
     const r = await api.register(email, password, name);
-    setToken(r.token);
+    applySession(r);
     set({ user: r.user });
     reconnectSession();
   },
 
   loginGoogle: async (credential) => {
     const r = await api.google(credential);
-    setToken(r.token);
+    applySession(r);
     set({ user: r.user });
     reconnectSession();
   },
@@ -64,6 +75,7 @@ export const useAuth = create<AuthState>((set) => ({
   logout: async () => {
     await api.logout().catch(() => undefined);
     setToken(null);
+    setRefreshToken(null);
     const me = await api.me();
     set({ user: me.user });
     reconnectSession();

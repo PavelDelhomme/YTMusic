@@ -10,17 +10,32 @@ services:
     environment:
       NODE_ENV: production
       PORT: "8787"
+      APP_ENV: local
+      APP_URL: http://localhost:8787
       JWT_SECRET: ${JWT_SECRET:-dev-local-secret-change-me}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-admin@ytmusic.local}
       WEBAUTHN_RP_ID: localhost
       WEBAUTHN_ORIGIN: http://localhost:8787
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      SMTP_FROM: YTMusic <noreply@ytmusic.local>
     volumes:
       - ytmusic_dev_data:/app/data
+    depends_on:
+      - mailhog
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]
       interval: 20s
       timeout: 5s
       retries: 3
+
+  # UI mails : http://localhost:8025 — SMTP : mailhog:1025
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    container_name: ytmusic-mailhog
+    ports:
+      - "8025:8025"
+      - "1025:1025"
 
 volumes:
   ytmusic_dev_data:

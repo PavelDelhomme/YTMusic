@@ -7,10 +7,10 @@ type BeforeInstallPromptEvent = Event & {
 };
 
 function isStandalone() {
-  return (
-    window.matchMedia('(display-mode: standalone)').matches ||
-    (window.navigator as any).standalone === true
-  );
+  const mq = window.matchMedia('(display-mode: standalone)').matches;
+  const ios = (window.navigator as any).standalone === true;
+  const twa = document.referrer.includes('android-app://');
+  return mq || ios || twa;
 }
 
 function isIos() {
@@ -21,13 +21,19 @@ function isMobile() {
   return /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
 }
 
+function isDesktop() {
+  return !isMobile();
+}
+
+/** Bannière d’install : uniquement si l’app n’est PAS déjà installée (tous hosts). */
 export function InstallBanner() {
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
   const [visible, setVisible] = useState(false);
   const [iosHint, setIosHint] = useState(false);
-  const dismissedKey = 'ytm_install_dismissed';
+  const dismissedKey = `ytm_install_dismissed:${location.host}`;
 
   useEffect(() => {
+    // Déjà en mode app (Edge/Chrome installé, PWA iOS, etc.) → ne rien proposer
     if (isStandalone()) return;
     if (localStorage.getItem(dismissedKey) === '1') return;
 
@@ -38,25 +44,25 @@ export function InstallBanner() {
     };
     window.addEventListener('beforeinstallprompt', onBip);
 
-    // iOS / browsers without beforeinstallprompt
-    if (isIos() || (isMobile() && !deferred)) {
-      const t = setTimeout(() => setVisible(true), 2500);
+    // iOS : pas d’event BIP → hint manuel
+    if (isIos()) {
+      const t = setTimeout(() => setVisible(true), 3000);
       return () => {
         clearTimeout(t);
         window.removeEventListener('beforeinstallprompt', onBip);
       };
     }
 
-    // Desktop: show soft prompt after a bit if installable later
+    // Desktop / Android : attendre BIP ; sinon hint soft après délai (Edge/Chrome)
     const t = setTimeout(() => {
       if (!isStandalone()) setVisible(true);
-    }, 8000);
+    }, isDesktop() ? 6000 : 4000);
 
     return () => {
       clearTimeout(t);
       window.removeEventListener('beforeinstallprompt', onBip);
     };
-  }, []);
+  }, [dismissedKey]);
 
   if (!visible || isStandalone()) return null;
 
@@ -70,16 +76,17 @@ export function InstallBanner() {
     if (deferred) {
       await deferred.prompt();
       const choice = await deferred.userChoice;
-      if (choice.outcome === 'accepted') dismiss();
+      if (choice.outcome === 'accepted') {
+        localStorage.setItem(dismissedKey, '1');
+        setVisible(false);
+      }
       setDeferred(null);
-      return;
-    }
-    if (isIos()) {
-      setIosHint(true);
       return;
     }
     setIosHint(true);
   };
+
+  const hostHint = location.host || 'cet appareil';
 
   return (
     <div className="fixed bottom-[92px] left-3 right-3 z-40 mx-auto max-w-lg animate-fade-up md:left-auto md:right-4">
@@ -97,21 +104,19 @@ export function InstallBanner() {
               {isMobile() ? 'Installer sur mobile' : 'Installer sur cet ordinateur'}
             </div>
             <p className="mt-0.5 text-xs text-yt-muted">
-              Accès rapide, plein écran, hors-ligne — comme une vraie app.
+              {hostHint} — plein écran, hors-ligne, comme une vraie app.
             </p>
             {iosHint && (
               <p className="mt-2 rounded-lg bg-yt-elevated px-2.5 py-2 text-[11px] leading-relaxed text-yt-muted">
                 {isIos() ? (
                   <>
-                    Sur iPhone/iPad : appuie sur <Share2 className="inline h-3 w-3" /> Partager puis « Sur
-                    l&apos;écran d&apos;accueil ».
+                    iPhone/iPad : <Share2 className="inline h-3 w-3" /> Partager → « Sur l&apos;écran
+                    d&apos;accueil ».
                   </>
-                ) : deferred ? (
-                  <>Utilise le bouton Installer ci-dessous.</>
                 ) : (
                   <>
-                    Ouvre le menu du navigateur (⋮) → « Installer l&apos;application » / « Ajouter à
-                    l&apos;écran d&apos;accueil ». Ou scanne le QR dans Admin.
+                    Edge / Chrome : menu ⋮ → « Applications » → « Installer YTMusic » (ou icône ⊕ dans
+                    la barre d&apos;adresse).
                   </>
                 )}
               </p>
@@ -122,7 +127,7 @@ export function InstallBanner() {
                 onClick={() => void install()}
                 className="rounded-full bg-white px-3.5 py-1.5 text-xs font-medium text-black"
               >
-                {deferred ? 'Installer' : isIos() ? 'Comment installer' : 'Installer'}
+                {deferred ? 'Installer' : 'Comment installer'}
               </button>
               <button
                 type="button"

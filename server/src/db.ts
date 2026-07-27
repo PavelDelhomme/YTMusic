@@ -183,6 +183,10 @@ export function createUser(input: {
 }
 
 export function publicUser(u: UserRow) {
+  const row = u as UserRow & {
+    email_verified?: number;
+    totp_enabled?: number;
+  };
   return {
     id: u.id,
     email: u.email,
@@ -191,6 +195,8 @@ export function publicUser(u: UserRow) {
     hasGoogle: Boolean(u.google_id),
     isGuest: u.email.includes('@local.ytmusic'),
     isAdmin: isAdminUser(u),
+    emailVerified: Boolean(row.email_verified) || Boolean(u.google_id) || u.email.includes('@local.ytmusic'),
+    totpEnabled: Boolean(row.totp_enabled),
   };
 }
 

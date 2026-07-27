@@ -11,12 +11,19 @@ import {
   promoteAdminIfNeeded,
   type UserRow,
 } from './db.js';
+import { createEmailToken, createRefreshToken, markEmailVerified } from './platform.js';
+import { sendVerificationEmail } from './mail.js';
+import { checkUserTotp, userRequiresTotp } from './totp.js';
 
 const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || 'ytmusic-dev-secret-change-me',
 );
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
+
+/** Access token court ; refresh token très long (mobile / desktop / web) */
+const ACCESS_TTL = process.env.JWT_ACCESS_TTL || '14d';
+const COOKIE_MAX_MS = Number(process.env.AUTH_COOKIE_MS || 400 * 24 * 3600 * 1000);
 
 export type AuthUser = ReturnType<typeof publicUser>;
 
@@ -43,11 +50,33 @@ function verifyPassword(password: string, stored: string) {
 }
 
 export async function signToken(user: UserRow) {
-  return new SignJWT({ sub: user.id, email: user.email, name: user.name })
+  return new SignJWT({
+    sub: user.id,
+    email: user.email,
+    name: user.name,
+    typ: 'access',
+  })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
-    .setExpirationTime('30d')
+    .setExpirationTime(ACCESS_TTL)
     .sign(JWT_SECRET);
+}
+
+export async function issueSession(user: UserRow, deviceLabel?: string) {
+  const token = await signToken(user);
+  const refresh = createRefreshToken(user.id, deviceLabel);
+  return { user: publicUser(user), token, refreshToken: refresh.token };
+}
+
+export function sessionCookieOptions() {
+  const secure = process.env.NODE_ENV === 'production' || process.env.COOKIE_SECURE === '1';
+  return {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    secure,
+    maxAge: COOKIE_MAX_MS,
+    path: '/',
+  };
 }
 
 export async function verifyToken(token: string) {
@@ -82,7 +111,6 @@ export function authRequired(req: Request, res: Response, next: NextFunction) {
   });
 }
 
-/** Ensure a user context: logged-in or auto local guest persisted via device id */
 export function ensureUser(req: Request, res: Response, next: NextFunction) {
   authOptional(req, res, () => {
     if (req.userId) return next();
@@ -117,20 +145,41 @@ export async function registerLocal(email: string, password: string, name: strin
   });
   promoteAdminIfNeeded(email);
   const refreshed = findUserByEmail(email) || user;
-  const token = await signToken(refreshed);
-  return { user: publicUser(refreshed), token };
+
+  const verifyRaw = createEmailToken(refreshed.id, 'verify');
+  await sendVerificationEmail(refreshed.email, refreshed.name, verifyRaw).catch((e) =>
+    console.error('mail verify', e),
+  );
+
+  const session = await issueSession(refreshed, 'register');
+  return {
+    ...session,
+    needsEmailVerification: true,
+    message: 'Compte créé — vérifie ton email (lien aussi dans la console admin / logs en local).',
+  };
 }
 
-export async function loginLocal(email: string, password: string) {
+export async function loginLocal(
+  email: string,
+  password: string,
+  opts?: { totp?: string; deviceLabel?: string },
+) {
   const user = findUserByEmail(email);
   if (!user?.password_hash || !verifyPassword(password, user.password_hash)) {
     throw new Error('Identifiants invalides');
   }
-  const token = await signToken(user);
-  return { user: publicUser(user), token };
+  if (userRequiresTotp(user.id)) {
+    if (!opts?.totp) {
+      const err = new Error('2FA_REQUIRED');
+      (err as any).code = '2FA_REQUIRED';
+      throw err;
+    }
+    if (!checkUserTotp(user.id, opts.totp)) throw new Error('Code 2FA invalide');
+  }
+  return issueSession(user, opts?.deviceLabel || 'web');
 }
 
-export async function loginGoogle(idToken: string) {
+export async function loginGoogle(idToken: string, deviceLabel?: string) {
   if (!googleClient || !GOOGLE_CLIENT_ID) {
     throw new Error('Google OAuth non configuré (GOOGLE_CLIENT_ID manquant)');
   }
@@ -149,25 +198,25 @@ export async function loginGoogle(idToken: string) {
       picture: payload.picture,
       googleId: payload.sub,
     });
+    markEmailVerified(user.id);
   } else if (!user.google_id) {
-    // link account — simple update
     const { db } = await import('./db.js');
-    db.prepare('UPDATE users SET google_id = ?, picture = COALESCE(?, picture), updated_at = ? WHERE id = ?').run(
-      payload.sub,
-      payload.picture || null,
-      Date.now(),
-      user.id,
-    );
+    db.prepare(
+      'UPDATE users SET google_id = ?, picture = COALESCE(?, picture), email_verified = 1, updated_at = ? WHERE id = ?',
+    ).run(payload.sub, payload.picture || null, Date.now(), user.id);
     user = findUserById(user.id)!;
+  } else {
+    markEmailVerified(user.id);
   }
 
-  const token = await signToken(user);
-  return { user: publicUser(user), token };
+  return issueSession(user, deviceLabel || 'google');
 }
 
 export function authConfig() {
   return {
     googleClientId: GOOGLE_CLIENT_ID || null,
     googleEnabled: Boolean(GOOGLE_CLIENT_ID),
+    accessTtl: ACCESS_TTL,
+    appEnv: process.env.APP_ENV || (process.env.NODE_ENV === 'production' ? 'production' : 'local'),
   };
 }
