@@ -11,11 +11,20 @@ Même socle que JobbingTrack : compte technique **`noreply@example.com`**, serve
 | `SMTP_SECURE` / `SMTP_USE_SSL` | `1` sur port 465 |
 | `SMTP_USER` | `noreply@example.com` |
 | `SMTP_PASS` | mot de passe de la boîte (Portainer / `.env` local **uniquement**) |
-| `SMTP_FROM` | `YTMusic <noreply@example.com>` |
+| `SMTP_FROM` | `"YTMusic <noreply@example.com>"` (guillemets recommandés) |
 | `SMTP_REPLY_TO` | `noreply@example.com` |
 | `APP_URL` | URL publique (liens `/verify-email?token=…`) |
 
 Sans `SMTP_HOST` → mails uniquement dans **Admin → outbox** + logs console.
+
+## Expéditeur affiché « JobbingTrack Security » ?
+
+La boîte **`noreply@example.com`** est partagée avec JobbingTrack (alertes security). Deux causes fréquentes :
+
+1. **Cache Gmail / client mail** — pour une même adresse, le client garde l’ancien nom d’affichage (« JobbingTrack Security ») même si le header `From:` dit `YTMusic`. Ouvre le mail → détails → vérifie le vrai `From:`. Ou cherche un mail dont le **sujet** commence par `[YTMusic]`.
+2. **Nom d’affichage OVH du compte** — Webmail Roundcube / OVH → compte `noreply` → identité / nom affiché → mets **YTMusic** (ou « Noreply ») au lieu de JobbingTrack.
+
+YTMusic envoie bien `From: YTMusic <noreply@example.com>` (objet nodemailer `{ name, address }` + header `X-Mailer: YTMusic`).
 
 ## Local
 

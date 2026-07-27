@@ -13,6 +13,21 @@ export function getAppEnv() {
   return process.env.APP_ENV || (process.env.NODE_ENV === 'production' ? 'production' : 'local');
 }
 
+/** Parse `Name <addr@host>` ou adresse seule → objet nodemailer. */
+export function parseFromAddress(raw: string): { name: string; address: string } {
+  const s = String(raw || '').trim();
+  const m = s.match(/^(.*?)\s*<([^>]+)>\s*$/);
+  if (m) {
+    const name = m[1].replace(/^["']|["']$/g, '').trim() || 'YTMusic';
+    return { name, address: m[2].trim() };
+  }
+  if (s.includes('@')) return { name: 'YTMusic', address: s };
+  return {
+    name: 'YTMusic',
+    address: process.env.SMTP_USER || 'noreply@example.com',
+  };
+}
+
 export function smtpPublicConfig() {
   const host = process.env.SMTP_HOST || '';
   const port = Number(process.env.SMTP_PORT || 587);
@@ -22,14 +37,17 @@ export function smtpPublicConfig() {
     process.env.SMTP_SECURE === 'true' ||
     useSsl ||
     port === 465;
+  const fromRaw = process.env.SMTP_FROM || 'YTMusic <noreply@example.com>';
+  const from = parseFromAddress(fromRaw);
   return {
     configured: Boolean(host),
     host: host || null,
     port,
     secure,
     user: process.env.SMTP_USER || null,
-    from: process.env.SMTP_FROM || 'YTMusic <noreply@example.com>',
-    replyTo: process.env.SMTP_REPLY_TO || process.env.SMTP_USER || null,
+    from: `${from.name} <${from.address}>`,
+    fromParsed: from,
+    replyTo: process.env.SMTP_REPLY_TO || process.env.SMTP_USER || from.address,
     mode: host ? 'smtp' : 'outbox',
     domainHint: 'maily.ovh (OVH MX Plan)',
   };
@@ -50,6 +68,8 @@ async function getTransporter() {
       ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS || '' }
       : undefined,
     tls: { minVersion: 'TLSv1.2' },
+    // Ne pas laisser le serveur réécrire silencieusement sans qu’on le voie
+    name: undefined,
   });
   return transporter;
 }
@@ -66,24 +86,42 @@ export async function sendMail(opts: {
   text?: string;
 }) {
   const cfg = smtpPublicConfig();
-  const from = cfg.from;
+  const from = cfg.fromParsed;
   const id = saveMailOutbox(opts.to, opts.subject, opts.html);
   const tx = await getTransporter();
   if (!tx) {
     console.log(
-      `\n[mail:${getAppEnv()}] → ${opts.to}\nSubject: ${opts.subject}\n${opts.text || opts.html}\n(outbox id=${id})\n`,
+      `\n[mail:${getAppEnv()}] from=${cfg.from} → ${opts.to}\nSubject: ${opts.subject}\n${opts.text || opts.html}\n(outbox id=${id})\n`,
     );
-    return { ok: true, mode: 'outbox' as const, id };
+    return { ok: true, mode: 'outbox' as const, id, from: cfg.from };
   }
-  await tx.sendMail({
-    from,
+
+  // From structuré : nom affiché « YTMusic » (pas le display name OVH JobbingTrack)
+  const info = await tx.sendMail({
+    from: { name: from.name, address: from.address },
+    sender: from.address,
     to: opts.to,
-    replyTo: cfg.replyTo || undefined,
+    replyTo: cfg.replyTo || from.address,
     subject: opts.subject,
     html: opts.html,
     text: opts.text,
+    headers: {
+      'X-Mailer': 'YTMusic',
+      'X-YTMusic-Env': getAppEnv(),
+    },
   });
-  return { ok: true, mode: 'smtp' as const, id };
+
+  console.log(
+    `[mail:${getAppEnv()}] sent id=${info.messageId} from="${from.name}" <${from.address}> → ${opts.to}`,
+  );
+  return {
+    ok: true,
+    mode: 'smtp' as const,
+    id,
+    from: cfg.from,
+    messageId: info.messageId,
+    response: info.response,
+  };
 }
 
 export async function sendVerificationEmail(email: string, name: string, rawToken: string) {
@@ -91,14 +129,14 @@ export async function sendVerificationEmail(email: string, name: string, rawToke
   return sendMail({
     to: email,
     subject: 'Confirme ton adresse — YTMusic',
-    text: `Salut ${name},\n\nConfirme ton email : ${link}\n\nLien valable 48h.`,
+    text: `Salut ${name},\n\nConfirme ton email : ${link}\n\nLien valable 48h.\n\n— YTMusic`,
     html: `
       <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto">
-        <h2>Bienvenue sur YTMusic</h2>
+        <h2 style="color:#111">Bienvenue sur YTMusic</h2>
         <p>Salut <strong>${name}</strong>, confirme ton adresse email :</p>
         <p><a href="${link}" style="display:inline-block;background:#ff0033;color:#fff;padding:12px 20px;border-radius:999px;text-decoration:none">Valider mon email</a></p>
         <p style="color:#666;font-size:12px">Ou copie ce lien :<br>${link}</p>
-        <p style="color:#666;font-size:12px">Envoyé via ${cfgDomain()} · env ${getAppEnv()}</p>
+        <p style="color:#666;font-size:12px">Envoyé par <strong>YTMusic</strong> via ${cfgDomain()} · ${getAppEnv()}</p>
       </div>`,
   });
 }
@@ -109,6 +147,7 @@ function cfgDomain() {
 
 /** Smoke SMTP — verify() + mail de test optionnel. */
 export async function testSmtp(to?: string) {
+  resetMailTransporter();
   const cfg = smtpPublicConfig();
   if (!cfg.configured) {
     return {
@@ -122,13 +161,18 @@ export async function testSmtp(to?: string) {
     const tx = await getTransporter();
     if (!tx) throw new Error('Transporteur indisponible');
     await tx.verify();
-    let sent: { ok: boolean; mode: string; id?: string } | undefined;
+    let sent: Awaited<ReturnType<typeof sendMail>> | undefined;
     if (to) {
       sent = await sendMail({
         to,
-        subject: `[YTMusic] Test SMTP · ${getAppEnv()}`,
-        text: `Test d’envoi OK depuis ${cfg.from} via ${cfg.host}:${cfg.port}`,
-        html: `<p>Test d’envoi <strong>OK</strong> depuis <code>${cfg.from}</code><br>via ${cfg.host}:${cfg.port} (${getAppEnv()})</p>`,
+        subject: `[YTMusic] Test SMTP · ${getAppEnv()} · ${new Date().toISOString()}`,
+        text: `Test YTMusic OK.\nFrom configuré : ${cfg.from}\nHost : ${cfg.host}:${cfg.port}\nSi tu vois encore « JobbingTrack », vide le cache d’affichage du client mail (Gmail garde l’ancien nom pour noreply@example.com).`,
+        html: `<div style="font-family:system-ui,sans-serif">
+          <p><strong>Test YTMusic OK</strong></p>
+          <p>From configuré : <code>${cfg.from}</code></p>
+          <p>Host : ${cfg.host}:${cfg.port} (${getAppEnv()})</p>
+          <p style="color:#666;font-size:12px">Si l’expéditeur affiche encore « JobbingTrack Security », c’est le cache du client mail / le nom d’affichage OVH du compte noreply@example.com — pas SMTP_FROM.</p>
+        </div>`,
       });
     }
     return { ok: true, mode: 'smtp' as const, config: cfg, sent };
