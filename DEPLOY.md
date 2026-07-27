@@ -285,12 +285,33 @@ Fichiers utiles dans le repo :
 |----------|-------|----------------|
 | `APP_ENV` | `local` | `preprod` / `production` |
 | `APP_URL` | `http://localhost:5173` | `https://ytmusic.delhomme.ovh` |
-| `SMTP_*` | optionnel (outbox admin) | recommandé |
+| `SMTP_*` | `ssl0.ovh.net` + `noreply@maily.ovh` (ou outbox) | idem, secrets Portainer |
 | `JWT_ACCESS_TTL` | `14d` | idem |
 | Refresh cookie | ~400 jours | idem + `COOKIE_SECURE=1` |
 
-- Inscription → email de validation (`/verify-email?token=…`)
+- Inscription → email de validation (`/verify-email?token=…`) via **maily.ovh** — voir [`docs/SMTP-MAILY.md`](docs/SMTP-MAILY.md)
 - Profil → activer TOTP 2FA
-- Admin → Analytics (erreurs, perf, batterie) + boîte mail outbox
-- Install PWA : bannière seulement si l’app n’est **pas** déjà en mode standalone (tous hosts)  
+- Admin → Analytics, SMTP test, outbox, poids reco, guide NPM
+- Compte obligatoire (prefs / playlists / reco synchronisés entre appareils)
+- Install PWA : bannière seulement si l’app n’est **pas** déjà en mode standalone
+
+### Comptes admin locaux
+
+```bash
+# dans .env : SEED_PASSWORD=…  ADMIN_EMAILS=paul@delhomme.ovh,dev@delhomme.ovh
+make seed-users
+```
+
+### NPM (rappel, comme taskflow)
+
+| Champ | Valeur |
+|-------|--------|
+| Domain | `ytmusic.delhomme.ovh` |
+| Scheme | `http` |
+| Forward Hostname | `ytmusic` |
+| Forward Port | `8787` |
+| SSL | Let’s Encrypt + Force SSL |
+| Websockets | **ON** |
+
+Réseau conteneur : `nginx-proxy-manager_npm-network` (+ `shared-network-copy` optionnel).
 

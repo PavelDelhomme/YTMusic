@@ -245,6 +245,12 @@ export const api = {
       `/api/admin/telemetry${level ? `?level=${encodeURIComponent(level)}` : ''}`,
     ),
   adminMailOutbox: () => req<{ mails: any[] }>('/api/admin/mail-outbox'),
+  adminSmtp: () => req<{ smtp: any; env: string; appUrl: string | null }>('/api/admin/smtp'),
+  adminSmtpTest: (to?: string) =>
+    req<{ ok: boolean; mode?: string; error?: string; config?: any; sent?: any }>(
+      '/api/admin/smtp/test',
+      { method: 'POST', body: JSON.stringify({ to }) },
+    ),
   updateProfile: (patch: { name?: string; email?: string; picture?: string | null }) =>
     req<{ user: User }>('/api/auth/profile', { method: 'PATCH', body: JSON.stringify(patch) }),
   passkeys: () => req<{ passkeys: any[] }>('/api/auth/passkeys'),

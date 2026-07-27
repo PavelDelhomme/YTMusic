@@ -40,7 +40,17 @@ export const useAuth = create<AuthState>((set) => ({
       });
       try {
         const me = await api.me();
-        set({ user: me.user, loaded: true });
+        if (me.user) {
+          set({ user: me.user, loaded: true });
+          return;
+        }
+      } catch {
+        /* try refresh below */
+      }
+      try {
+        const r = await api.refresh();
+        applySession(r);
+        set({ user: r.user, loaded: true });
       } catch {
         set({ user: null, loaded: true });
       }

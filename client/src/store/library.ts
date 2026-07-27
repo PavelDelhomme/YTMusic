@@ -33,8 +33,12 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   applyLibrary: (lib) => set({ ...empty, ...lib, loaded: true }),
 
   refresh: async () => {
-    const data = await api.library();
-    set({ ...empty, ...data, loaded: true });
+    try {
+      const data = await api.library();
+      set({ ...empty, ...data, loaded: true });
+    } catch {
+      set({ ...empty, loaded: true });
+    }
   },
 
   toggleLike: async (track) => {

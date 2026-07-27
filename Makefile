@@ -7,8 +7,8 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 .PHONY: help install dev dev-server dev-client build start deploy-local \
 	clean-vite icons docker-dev docker-dev-down docker-build \
-	mobile-qr mobile-hint mobile-adb update-apps status status-watch logs ports kill-dev \
-	push-dev push-prod deploy-hint
+	mobile-qr mobile-hint mobile-adb mobile-install-adb update-apps status status-watch logs ports kill-dev \
+	push-dev push-prod deploy-hint seed-users
 
 help: ## Affiche cette aide
 	@echo ""
@@ -19,13 +19,16 @@ help: ## Affiche cette aide
 	@echo ""
 	@echo "  Domaine prod  : https://ytmusic.delhomme.ovh"
 	@echo "  Dev local     : http://localhost:5173  (API :8787)"
-	@echo "  Mobile LAN    : make mobile-qr / make mobile-adb DEVICE=R5CT7263YJL"
+	@echo "  Mobile LAN    : make mobile-install-adb DEVICE=R5CT7263YJL"
 	@echo "  Ops           : make status · status-watch · logs"
 	@echo "  Branches      : feat/* depuis dev → merge prod"
 	@echo ""
 
 install: ## Installe les dépendances (workspaces server + client)
 	cd $(ROOT) && npm install
+
+seed-users: ## Crée/maj paul@ + dev@ (SEED_PASSWORD dans .env)
+	cd $(ROOT) && node scripts/seed-users.mjs
 
 dev: ## Lance API + Vite (web/PWA) en parallèle
 	cd $(ROOT) && npm run dev
@@ -81,32 +84,33 @@ mobile-hint: ## Affiche comment installer l’app mobile (PWA)
 	@echo "  4. Connecte-toi avec ton compte app (email / passkey)"
 	@echo "  5. Mises à jour = recharger l’app (service worker auto)"
 	@echo ""
+	@echo "  USB ADB (recommandé en local) :"
+	@echo "    make mobile-install-adb   # reverse + Chrome + bannière Installer"
+	@echo "    make mobile-adb           # ouvrir seulement (sans force install)"
+	@echo ""
 	@echo "  QR / URLs : page Admin ou Profil dans l’app"
-	@echo "  make mobile-qr  → tente d’afficher les URLs LAN"
+	@echo "  make mobile-qr  → URLs LAN Wi‑Fi"
 	@echo ""
-
-mobile-qr: ## Liste les URLs d’accès LAN pour le mobile
-	@echo "URLs utiles :"
-	@echo "  http://localhost:5173"
-	@hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^$$' | while read ip; do \
-	  echo "  http://$$ip:5173"; \
-	done || true
-	@echo "  https://ytmusic.delhomme.ovh  (prod)"
-	@echo ""
-	@echo "Admin → QR code dans l’app une fois connecté en admin."
-	@echo "ADB   → make mobile-adb DEVICE=R5CT7263YJL"
 
 # DEVICE=R5CT7263YJL par défaut (Samsung branché)
 DEVICE ?= R5CT7263YJL
-mobile-adb: ## Ouvre l’URL LAN sur le device ADB (Chrome)
-	@set -e; \
-	adb devices | grep -q "$(DEVICE)" || (echo "Device $(DEVICE) introuvable — adb devices :" && adb devices && exit 1); \
-	IP=$$(hostname -I 2>/dev/null | awk '{print $$1}'); \
-	URL="$${MOBILE_URL:-http://$$IP:5173}"; \
-	echo "→ $$URL sur $(DEVICE)"; \
-	adb -s "$(DEVICE)" shell am start -a android.intent.action.VIEW -d "$$URL" >/dev/null || \
-	  adb -s "$(DEVICE)" shell monkey -p com.android.chrome -c android.intent.category.LAUNCHER 1 >/dev/null; \
-	echo "OK — connecte-toi avec ton compte (obligatoire)"
+
+mobile-qr: ## Liste les URLs d’accès LAN pour le mobile
+	@echo "URLs utiles :"
+	@echo "  http://localhost:5173  (via make mobile-install-adb + adb reverse)"
+	@IP=$$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($$i=="src") {print $$(i+1); exit}}'); \
+	if [ -n "$$IP" ]; then echo "  http://$$IP:5173  (Wi‑Fi LAN)"; fi
+	@echo "  https://ytmusic.delhomme.ovh  (prod)"
+	@echo ""
+	@echo "Préféré USB : make mobile-install-adb DEVICE=$(DEVICE)"
+
+mobile-adb: ## Ouvre YTMusic sur le device (adb reverse + Chrome)
+	@chmod +x $(ROOT)/scripts/mobile-install-adb.sh
+	@DEVICE="$(DEVICE)" bash $(ROOT)/scripts/mobile-install-adb.sh open
+
+mobile-install-adb: ## Installe la PWA sur le device (reverse + Chrome ?install=1)
+	@chmod +x $(ROOT)/scripts/mobile-install-adb.sh
+	@DEVICE="$(DEVICE)" bash $(ROOT)/scripts/mobile-install-adb.sh install
 
 update-apps: ## Rappel : comment MAJ web / mobile / desktop
 	@echo ""
