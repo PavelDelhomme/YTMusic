@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   Compass,
   Download,
@@ -44,6 +44,8 @@ export function Layout() {
   const authLoaded = useAuth((s) => s.loaded);
   const logout = useAuth((s) => s.logout);
   const navigate = useNavigate();
+  const location = useLocation();
+  const isVerifyRoute = location.pathname.startsWith('/verify-email');
   const [q, setQ] = useState('');
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [openSug, setOpenSug] = useState(false);
@@ -80,7 +82,7 @@ export function Layout() {
     if (!authLoaded) return;
     const guest = !user || user.isGuest || user.email.includes('@local.ytmusic');
     if (guest) {
-      setAuthOpen(true);
+      if (!location.pathname.startsWith('/verify-email')) setAuthOpen(true);
       setNeedsOnboarding(false);
       return;
     }
@@ -90,7 +92,7 @@ export function Layout() {
       .prefs()
       .then((r) => setNeedsOnboarding(!r.prefs?.onboardingDone))
       .catch(() => undefined);
-  }, [authLoaded, user, refresh, initSession]);
+  }, [authLoaded, user, refresh, initSession, location.pathname]);
 
   useEffect(() => {
     const guest = !user || user.isGuest || user.email?.includes('@local.ytmusic');
@@ -133,6 +135,7 @@ export function Layout() {
   }, [remoteState, isActivePlayer, applyRemoteState]);
 
   const isGuest = !user || user.isGuest || user.email.includes('@local.ytmusic');
+  const allowGuestPage = isVerifyRoute;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-yt-bg">
@@ -325,7 +328,7 @@ export function Layout() {
 
           <main className="min-h-0 flex-1 overflow-y-auto px-4 pb-40 pt-4 md:px-8">
             {!authLoaded && <p className="text-yt-muted">Chargement…</p>}
-            {authLoaded && isGuest && (
+            {authLoaded && isGuest && !allowGuestPage && (
               <div className="mx-auto max-w-md rounded-2xl border border-yt-border bg-yt-elevated p-6 text-center">
                 <BrandLogo className="mx-auto mb-3 h-12 w-12" />
                 <h1 className="font-display text-xl font-semibold">Compte requis</h1>
@@ -341,9 +344,9 @@ export function Layout() {
                 </button>
               </div>
             )}
-            {authLoaded && !isGuest && (
+            {authLoaded && (!isGuest || allowGuestPage) && (
               <>
-                {!isActivePlayer && (
+                {!isActivePlayer && !allowGuestPage && (
                   <div className="mb-4 rounded-xl border border-yt-red/30 bg-yt-red/10 px-4 py-2 text-sm">
                     Contrôle à distance — la musique joue sur un autre appareil. Tu peux tout piloter d’ici.
                   </div>
@@ -393,7 +396,7 @@ export function Layout() {
       />
       <InstallBanner />
       <AuthModal
-        open={authOpen || (authLoaded && isGuest)}
+        open={authOpen || (authLoaded && isGuest && !allowGuestPage)}
         onClose={() => {
           if (!isGuest) setAuthOpen(false);
         }}

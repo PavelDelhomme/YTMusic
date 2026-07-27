@@ -315,3 +315,33 @@ make seed-users
 
 Réseau conteneur : `nginx-proxy-manager_npm-network` (+ `shared-network-copy` optionnel).
 
+### Persistance des comptes / données
+
+Le volume Docker **`ytmusic_data`** monte `/app/data` (SQLite : users, prefs, playlists, reco…).
+
+| Action | Comptes / playlists |
+|--------|---------------------|
+| `Pull & Redeploy` / Watchtower (même volume) | **Conservés** |
+| Changer seulement l’image (`:latest` → nouveau digest) | **Conservés** |
+| Stack delete **avec** suppression des volumes | **Perdus** |
+| `docker volume rm ytmusic_data` | **Perdus** |
+
+En Portainer : ne coche **pas** « Remove volumes » lors d’un redeploy.  
+Backup : copier le volume ou le fichier `data/ytmusic.db`.
+
+### Validation email
+
+| Env | `APP_URL` | Lien dans le mail |
+|-----|-----------|-------------------|
+| Local + ADB | `http://127.0.0.1:5173` | Ouvre sur le téléphone via `adb reverse` |
+| Local Wi‑Fi | `http://192.168.x.x:5173` | Même réseau |
+| Prod | `https://ytmusic.delhomme.ovh` | Domaine public |
+
+Test local Android :
+
+```bash
+make dev
+TEST_PASSWORD='…' make test-register-adb
+# → recrée dev@, envoie le mail, ouvre /verify-email sur le device
+```
+
