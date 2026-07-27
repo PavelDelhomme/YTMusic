@@ -167,10 +167,17 @@ export async function registerLocal(email: string, password: string, name: strin
   );
 
   const session = await issueSession(refreshed, 'register');
+  const { appUrl } = await import('./mail.js');
+  const verifyUrl = `${appUrl()}/verify-email?token=${encodeURIComponent(verifyRaw)}`;
+  const env = process.env.APP_ENV || 'local';
   return {
     ...session,
     needsEmailVerification: true,
     message: 'Compte créé — vérifie ton email (lien aussi dans la console admin / logs en local).',
+    // Lien exposé seulement hors production (tests ADB / local)
+    ...(env !== 'production'
+      ? { verifyUrl, verifyToken: verifyRaw }
+      : {}),
   };
 }
 

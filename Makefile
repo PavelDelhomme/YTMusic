@@ -7,7 +7,8 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 .PHONY: help install dev dev-server dev-client build start deploy-local \
 	clean-vite icons docker-dev docker-dev-down docker-build \
-	mobile-qr mobile-hint mobile-adb mobile-install-adb update-apps status status-watch logs ports kill-dev \
+	mobile-qr mobile-hint mobile-adb mobile-install-adb test-register-adb \
+	update-apps status status-watch logs ports kill-dev \
 	push-dev push-prod deploy-hint seed-users
 
 help: ## Affiche cette aide
@@ -111,6 +112,13 @@ mobile-adb: ## Ouvre YTMusic sur le device (adb reverse + Chrome)
 mobile-install-adb: ## Installe la PWA sur le device (reverse + Chrome ?install=1)
 	@chmod +x $(ROOT)/scripts/mobile-install-adb.sh
 	@DEVICE="$(DEVICE)" bash $(ROOT)/scripts/mobile-install-adb.sh install
+
+test-register-adb: ## Recrée compte + email validation + ouvre le lien sur Android
+	@cd $(ROOT) && \
+	  DEVICE="$(DEVICE)" \
+	  TEST_EMAIL="$(or $(TEST_EMAIL),dev@example.com)" \
+	  TEST_PASSWORD="$(TEST_PASSWORD)" \
+	  node scripts/test-register-verify-adb.mjs
 
 update-apps: ## Rappel : comment MAJ web / mobile / desktop
 	@echo ""
