@@ -7,6 +7,12 @@ DEVICE="${DEVICE:-R5CT7263YJL}"
 MODE="${1:-install}" # sync | build | install
 
 export ANDROID_HOME="${ANDROID_HOME:-/home/pactivisme/Android/Sdk}"
+# Ne jamais utiliser /opt/android-sdk (souvent read-only, licences non acceptées)
+if [[ "$ANDROID_HOME" == /opt/android-sdk* ]] || [[ ! -d "$ANDROID_HOME/platforms" ]]; then
+  if [[ -d /home/pactivisme/Android/Sdk/platforms ]]; then
+    export ANDROID_HOME=/home/pactivisme/Android/Sdk
+  fi
+fi
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 # Capacitor 8 / AGP → JDK 21 de préférence
 if [[ -x /usr/lib/jvm/java-21-openjdk/bin/javac ]]; then
@@ -16,7 +22,7 @@ elif [[ -z "${JAVA_HOME:-}" || ! -x "${JAVA_HOME}/bin/javac" ]]; then
     export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
   fi
 fi
-export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/35.0.0:$PATH"
 
 # API jointe par l’APK (pas le front Vite)
 VITE_API_ORIGIN="${VITE_API_ORIGIN:-http://127.0.0.1:8787}"
@@ -29,6 +35,7 @@ echo "==> MODE=$MODE"
 echo "==> DEVICE=$DEVICE"
 echo "==> VITE_API_ORIGIN=$VITE_API_ORIGIN"
 echo "==> CAP_LIVE_RELOAD=$CAP_LIVE_RELOAD"
+echo "==> ANDROID_HOME=$ANDROID_HOME"
 echo "==> JAVA_HOME=$JAVA_HOME ($("$JAVA_HOME/bin/java" -version 2>&1 | head -1))"
 
 cd "$CLIENT"
@@ -62,6 +69,11 @@ NODE
 
 npx cap sync android
 
+# Force le SDK utilisateur (évite /opt/android-sdk read-only + licences)
+mkdir -p "$CLIENT/android"
+printf 'sdk.dir=%s\n' "$ANDROID_HOME" >"$CLIENT/android/local.properties"
+echo "==> local.properties → sdk.dir=$ANDROID_HOME"
+
 if [[ "$MODE" == "sync" ]]; then
   echo "Sync OK"
   exit 0
@@ -69,7 +81,7 @@ fi
 
 cd "$CLIENT/android"
 chmod +x ./gradlew
-./gradlew assembleDebug
+./gradlew assembleDebug -Pandroid.builder.sdkDownload=false
 
 APK="$CLIENT/android/app/build/outputs/apk/debug/app-debug.apk"
 echo "==> APK: $APK"

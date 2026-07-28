@@ -8,7 +8,9 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 .PHONY: help install dev dev-server dev-client build start deploy-local \
 	clean-vite icons docker-dev docker-dev-down docker-build \
 	mobile-qr mobile-hint mobile-adb mobile-install-adb test-register-adb \
-	android-sync android-build android-install android-prod \
+	android-sync android-build android-install android-prod android \
+	android-capacitor android-capacitor-prod \
+	ensure-api restart-api \
 	update-apps status status-watch logs logs-tail logs-watch ports kill-dev \
 	push-dev push-prod deploy-hint seed-users
 
@@ -21,8 +23,8 @@ help: ## Affiche cette aide
 	@echo ""
 	@echo "  Domaine prod  : https://ytmusic.delhomme.ovh"
 	@echo "  Dev local     : http://localhost:5173  (API :8787)"
-	@echo "  Mobile APK    : make android-install DEVICE=R5CT7263YJL"
-	@echo "  Mobile PWA    : make mobile-install-adb DEVICE=R5CT7263YJL"
+	@echo "  API           : make ensure-api  ·  restart-api  ·  kill-dev"
+	@echo "  Mobile APK    : make android   (Kotlin Compose natif + API :8787)"
 	@echo "  Ops           : make status · status-watch · logs"
 	@echo "  Branches      : feat/* depuis dev → merge prod"
 	@echo ""
@@ -34,13 +36,26 @@ seed-users: ## Crée/maj paul@ + dev@ (SEED_PASSWORD dans .env)
 	cd $(ROOT) && node scripts/seed-users.mjs
 
 dev: ## Lance API + Vite (web/PWA) — logs aussi dans logs/ytmusic-dev.log
+	@chmod +x $(ROOT)/scripts/ensure-api.sh $(ROOT)/scripts/kill-dev.sh
+	@# Si API déjà UP, on ne la redémarre pas ; Vite peut quand même démarrer
+	@FORCE_RESTART=0 bash $(ROOT)/scripts/ensure-api.sh || true
 	@mkdir -p $(ROOT)/logs
 	@echo "📝 Logs → $(ROOT)/logs/ytmusic-dev.log  ·  suivi : make logs"
+	@echo "   (API :8787 gérée via ensure-api ; ici Vite + éventuel serveur si besoin)"
 	cd $(ROOT) && npm run dev 2>&1 | tee -a $(ROOT)/logs/ytmusic-dev.log
 
-dev-server: ## API seule (port 8787)
-	@mkdir -p $(ROOT)/logs
-	cd $(ROOT) && npm run dev:server 2>&1 | tee -a $(ROOT)/logs/ytmusic-server.log
+dev-server: ## API seule — réutilise :8787 si déjà UP, sinon démarre (fond)
+	@chmod +x $(ROOT)/scripts/ensure-api.sh
+	@bash $(ROOT)/scripts/ensure-api.sh
+	@echo "   Relancer de force : make restart-api · logs : make logs"
+
+ensure-api: ## Garantit l’API :8787 (réutilise si UP, sinon démarre en fond)
+	@chmod +x $(ROOT)/scripts/ensure-api.sh
+	@bash $(ROOT)/scripts/ensure-api.sh
+
+restart-api: ## Tue :8787 puis relance l’API en fond
+	@chmod +x $(ROOT)/scripts/ensure-api.sh
+	@FORCE_RESTART=1 bash $(ROOT)/scripts/ensure-api.sh
 
 dev-client: ## Frontend Vite seul (port 5173)
 	@mkdir -p $(ROOT)/logs
@@ -83,13 +98,13 @@ mobile-hint: ## Affiche comment installer l’app mobile (APK + PWA)
 	@echo ""
 	@echo "  YTMusic sur téléphone Android"
 	@echo "  -----------------------------"
-	@echo "  Vraie app (APK Capacitor, UI embarquée + audio arrière-plan) :"
-	@echo "    make android-install              # API locale :8787"
+	@echo "  App Kotlin native (Compose + ExoPlayer, sans WebView) :"
+	@echo "    make android                      # API locale :8787"
 	@echo "    make android-prod                 # API ytmusic.delhomme.ovh"
-	@echo "    VITE_API_ORIGIN=http://IP:8787 make android-install"
+	@echo "    API_BASE_URL=http://IP:8787 make android-install"
 	@echo ""
-	@echo "  PWA (optionnel, navigateur) :"
-	@echo "    make mobile-install-adb"
+	@echo "  Legacy Capacitor (WebView) : make android-capacitor"
+	@echo "  PWA (navigateur)           : make mobile-install-adb"
 	@echo ""
 # DEVICE=R5CT7263YJL par défaut (Samsung branché)
 DEVICE ?= R5CT7263YJL
@@ -111,20 +126,32 @@ mobile-install-adb: ## Installe la PWA sur le device (reverse + Chrome ?install=
 	@chmod +x $(ROOT)/scripts/mobile-install-adb.sh
 	@DEVICE="$(DEVICE)" bash $(ROOT)/scripts/mobile-install-adb.sh install
 
-android-sync: ## Sync Capacitor (sans rebuild APK)
+android-sync: ## Sync Capacitor legacy (sans rebuild APK)
 	@chmod +x $(ROOT)/scripts/android-install.sh
 	@DEVICE="$(DEVICE)" VITE_API_ORIGIN="$(VITE_API_ORIGIN)" bash $(ROOT)/scripts/android-install.sh sync
 
-android-build: ## Compile l’APK Android (UI embarquée)
-	@chmod +x $(ROOT)/scripts/android-install.sh
-	@DEVICE="$(DEVICE)" VITE_API_ORIGIN="$(or $(VITE_API_ORIGIN),http://127.0.0.1:8787)" bash $(ROOT)/scripts/android-install.sh build
+android-build: ## Compile l’APK Kotlin (Compose / Media3)
+	@chmod +x $(ROOT)/scripts/kotlin-android-install.sh
+	@DEVICE="$(DEVICE)" API_BASE_URL="$(or $(API_BASE_URL),$(or $(VITE_API_ORIGIN),http://127.0.0.1:8787))" bash $(ROOT)/scripts/kotlin-android-install.sh build
 
-android-install: ## Build + installe l’APK native (ADB) — API locale :8787
-	@chmod +x $(ROOT)/scripts/android-install.sh
-	@echo "Astuce : « make dev » ou « make dev-server » pour l’API locale."
+android-install: ## Build + installe l’APK Kotlin (ADB) — s’assure que l’API :8787 est UP
+	@chmod +x $(ROOT)/scripts/kotlin-android-install.sh $(ROOT)/scripts/ensure-api.sh
+	@bash $(ROOT)/scripts/ensure-api.sh
+	@DEVICE="$(DEVICE)" API_BASE_URL="$(or $(API_BASE_URL),$(or $(VITE_API_ORIGIN),http://127.0.0.1:8787))" bash $(ROOT)/scripts/kotlin-android-install.sh install
+
+android: ## Raccourci : ensure-api + APK Kotlin native
+	@$(MAKE) android-install DEVICE="$(DEVICE)" API_BASE_URL="$(or $(API_BASE_URL),$(or $(VITE_API_ORIGIN),http://127.0.0.1:8787))"
+
+android-prod: ## APK Kotlin → API https://ytmusic.delhomme.ovh + install ADB
+	@chmod +x $(ROOT)/scripts/kotlin-android-install.sh
+	@DEVICE="$(DEVICE)" API_BASE_URL="https://ytmusic.delhomme.ovh" bash $(ROOT)/scripts/kotlin-android-install.sh install
+
+android-capacitor: ## Legacy : APK Capacitor (WebView) + API locale
+	@chmod +x $(ROOT)/scripts/android-install.sh $(ROOT)/scripts/ensure-api.sh
+	@bash $(ROOT)/scripts/ensure-api.sh
 	@DEVICE="$(DEVICE)" VITE_API_ORIGIN="$(or $(VITE_API_ORIGIN),http://127.0.0.1:8787)" bash $(ROOT)/scripts/android-install.sh install
 
-android-prod: ## APK native → API https://ytmusic.delhomme.ovh + install ADB
+android-capacitor-prod: ## Legacy Capacitor → API prod
 	@chmod +x $(ROOT)/scripts/android-install.sh
 	@DEVICE="$(DEVICE)" VITE_API_ORIGIN="https://ytmusic.delhomme.ovh" bash $(ROOT)/scripts/android-install.sh install
 
@@ -216,12 +243,22 @@ logs-watch: ## Logs avec reconnexion auto (surtout Docker) — Ctrl+C
 	  bash $(ROOT)/scripts/ops/logs.sh watch
 
 ports: ## Affiche qui écoute 5173 / 8787
-	@ss -tlnp 2>/dev/null | grep -E ':5173|:8787' || netstat -tlnp 2>/dev/null | grep -E '5173|8787' || true
+	@echo "Ports YTMusic :"
+	@ss -tlnp 2>/dev/null | grep -E ':5173|:8787' || netstat -tlnp 2>/dev/null | grep -E '5173|8787' || echo "  (rien)"
+	@echo ""
+	@for p in 5173 8787; do \
+	  pids=$$(lsof -tiTCP:$$p -sTCP:LISTEN 2>/dev/null || true); \
+	  if [ -n "$$pids" ]; then \
+	    echo "  :$$p → $$pids"; \
+	    for pid in $$pids; do \
+	      printf "    "; tr '\0' ' ' < /proc/$$pid/cmdline 2>/dev/null | cut -c1-100; echo; \
+	    done; \
+	  fi; \
+	done
 
-kill-dev: ## Tue les process sur 5173 et 8787
-	@fuser -k 5173/tcp 2>/dev/null || true
-	@fuser -k 8787/tcp 2>/dev/null || true
-	@echo "Ports libérés"
+kill-dev: ## Tue les process sur 5173 et 8787 (proprement)
+	@chmod +x $(ROOT)/scripts/kill-dev.sh
+	@bash $(ROOT)/scripts/kill-dev.sh
 
 push-dev: ## Push la branche courante vers origin (intégration)
 	cd $(ROOT) && git push -u origin HEAD
