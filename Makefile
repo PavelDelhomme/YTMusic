@@ -5,7 +5,7 @@
 SHELL := /bin/bash
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
-.PHONY: help install dev dev-server dev-web build start deploy-local \
+.PHONY: help install dev up dev-server dev-web build start deploy-local \
 	clean-vite icons docker-dev docker-dev-down docker-build \
 	mobile-qr mobile-hint mobile-adb mobile-install-adb test-register-adb \
 	android-sync android-build android-install android-prod android \
@@ -22,7 +22,7 @@ help: ## Affiche cette aide
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  Domaine prod  : https://ytmusic.delhomme.ovh"
-	@echo "  Dev local     : http://localhost:5173  (API :8787)"
+	@echo "  Dev local     : make up  (API+Vite en fond)  ·  make dev (Vite au premier plan)"
 	@echo "  API           : make ensure-api  ·  restart-api  ·  kill-dev"
 	@echo "  Mobile APK    : make android   (Kotlin Compose natif + API :8787)"
 	@echo "  Env           : make env-check  (aligne .env / .env.example)"
@@ -42,16 +42,20 @@ env-check: ## Vérifie que .env et .env.example ont les mêmes clés (sans affic
 
 # API en fond via ensure-api (réutilise si déjà UP) + Vite seul sur :5173
 # → plus de double bind :8787 (EADDRINUSE) ni Vite qui bascule sur :5174
-dev: ## Lance API (ensure) + Vite web — logs dans logs/ytmusic-dev.log
+dev: ## Lance API (ensure) + Vite web au premier plan — logs ytmusic-dev.log
 	@chmod +x $(ROOT)/scripts/ensure-api.sh $(ROOT)/scripts/kill-dev.sh $(ROOT)/scripts/env-check.sh
 	@bash $(ROOT)/scripts/env-check.sh || true
 	@FORCE_RESTART=0 bash $(ROOT)/scripts/ensure-api.sh
-	@# Libère Vite orphelin sur 5173/5174 sans toucher à l’API
 	@bash $(ROOT)/scripts/kill-dev.sh vite-only
 	@mkdir -p $(ROOT)/logs
 	@echo "📝 Logs → $(ROOT)/logs/ytmusic-dev.log  ·  suivi : make logs"
 	@echo "   API :8787 (ensure-api) + Vite :5173 uniquement"
+	@echo "   Astuce fond : make up   (API + Vite détachés, terminal libre)"
 	cd $(ROOT) && npm run dev:web 2>&1 | tee -a $(ROOT)/logs/ytmusic-dev.log
+
+up: ## API + Vite en fond (setsid) — terminal libre ensuite
+	@chmod +x $(ROOT)/scripts/dev-up.sh
+	@bash $(ROOT)/scripts/dev-up.sh
 
 dev-server: ## API seule — réutilise :8787 si déjà UP, sinon démarre (fond)
 	@chmod +x $(ROOT)/scripts/ensure-api.sh
