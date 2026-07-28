@@ -9,11 +9,16 @@ COLOR="$ROOT/scripts/ops/color-logs.sh"
 chmod +x "$COLOR" 2>/dev/null || true
 
 LOGS_SINCE="${LOGS_SINCE:-24h}"
-LOGS_TAIL="${LOGS_TAIL:-500}"
-LOG_FILE="${LOG_FILE:-$ROOT/logs/ytmusic-dev.log}"
+LOGS_TAIL="${LOGS_TAIL:-80}"
+LOG_DIR="$ROOT/logs"
+# API (ensure-api) + Vite (make dev) — les deux flux
+LOG_FILES=(
+  "$LOG_DIR/ytmusic-server.log"
+  "$LOG_DIR/ytmusic-dev.log"
+  "$LOG_DIR/ytmusic-web.log"
+)
 
 set_term_title() {
-  # Ignore si pas de TTY (make/CI)
   { printf '\033]0;%s\007' "$1" >/dev/tty; } 2>/dev/null || true
 }
 trap 'set_term_title ""' EXIT
@@ -27,7 +32,6 @@ compose_args() {
 }
 
 docker_running() {
-  # Conteneurs du projet ytmusic
   local args
   # shellcheck disable=SC2046
   args=$(compose_args)
@@ -35,7 +39,6 @@ docker_running() {
   if docker compose $args ps -q --status running 2>/dev/null | grep -q .; then
     return 0
   fi
-  # Noms connus même hors compose courant
   docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^ytmusic' && return 0
   return 1
 }
@@ -46,9 +49,8 @@ follow_docker() {
   set_term_title "YTMusic Logs"
   echo "📋 Logs YTMusic (Docker)"
   echo "========================"
-  echo "⏹️  Ctrl+C pour quitter"
+  echo "⏹  Ctrl+C pour quitter"
   echo "🔧 LOGS_SINCE=${LOGS_SINCE}  LOGS_TAIL=${LOGS_TAIL}"
-  echo "   Compose : docker compose $args"
   echo ""
   # shellcheck disable=SC2086
   if [[ "$MODE" == "tail" ]]; then
@@ -63,33 +65,49 @@ follow_docker_by_name() {
   set_term_title "YTMusic Logs"
   echo "📋 Logs YTMusic (docker logs par nom)"
   echo "===================================="
-  echo "⏹️  Ctrl+C pour quitter"
+  echo "⏹  Ctrl+C pour quitter"
   echo ""
   local names
   names=$(docker ps --format '{{.Names}}' | grep -E '^ytmusic' || true)
-  if [[ -z "$names" ]]; then
-    return 1
-  fi
+  [[ -z "$names" ]] && return 1
   # shellcheck disable=SC2086
   docker logs -f -t --tail="${LOGS_TAIL}" $names 2>&1 | bash "$COLOR"
 }
 
-follow_local_file() {
-  mkdir -p "$ROOT/logs"
-  touch "$LOG_FILE"
+ensure_log_files() {
+  mkdir -p "$LOG_DIR"
+  local f
+  for f in "${LOG_FILES[@]}"; do
+    touch "$f"
+  done
+}
+
+follow_local_files() {
+  ensure_log_files
   set_term_title "YTMusic Logs"
-  echo "📋 Logs YTMusic (local · $LOG_FILE)"
-  echo "==================================="
-  echo "⏹️  Ctrl+C pour quitter"
-  echo "💡 Écrit par : make dev  (tee → logs/ytmusic-dev.log)"
+  echo "📋 Logs YTMusic (local · multi-fichiers)"
+  echo "======================================="
+  echo "⏹  Ctrl+C pour quitter"
+  echo "💡 API  → logs/ytmusic-server.log   (make ensure-api / restart-api)"
+  echo "💡 Vite → logs/ytmusic-dev.log      (make dev)"
   echo "🔧 LOGS_TAIL=${LOGS_TAIL}"
   echo ""
+  # Affiche un extrait récent de chaque fichier (étiqueté)
+  local f base
+  for f in "${LOG_FILES[@]}"; do
+    base="$(basename "$f")"
+    if [[ -s "$f" ]]; then
+      echo "──── $base (dernieres ${LOGS_TAIL} lignes) ────"
+      tail -n "${LOGS_TAIL}" "$f" 2>/dev/null | sed "s/^/[$base] /" | bash "$COLOR" || true
+      echo ""
+    fi
+  done
   if [[ "$MODE" == "tail" ]]; then
-    tail -n "${LOGS_TAIL}" "$LOG_FILE" 2>&1 | bash "$COLOR"
-    return $?
+    return 0
   fi
-  # Affiche les dernières lignes puis suit
-  tail -n "${LOGS_TAIL}" -F "$LOG_FILE" 2>&1 | bash "$COLOR"
+  echo "──── suivi en direct (tail -F) ────"
+  # -F : suit même si le fichier est tronqué / recréé (restart-api)
+  tail -n 0 -F "${LOG_FILES[@]}" 2>&1 | bash "$COLOR"
 }
 
 follow_watch_docker() {
@@ -97,7 +115,6 @@ follow_watch_docker() {
   args=$(compose_args)
   set_term_title "YTMusic Logs"
   echo "📋 logs-watch — reconnexion auto — Ctrl+C pour quitter"
-  echo "   since=${LOGS_SINCE} tail=${LOGS_TAIL}"
   echo ""
   trap 'echo ""; echo "⏹ logs-watch arrêté."; exit 130' INT
   while true; do
@@ -128,22 +145,13 @@ if docker_running; then
   exit $?
 fi
 
-# Local npm/tsx
-if [[ -f "$LOG_FILE" ]] || ss -tln 2>/dev/null | grep -qE ':5173|:8787'; then
-  if [[ ! -f "$LOG_FILE" ]] || [[ ! -s "$LOG_FILE" ]]; then
-    echo "⚠️  Mode local détecté (ports 5173/8787) mais pas encore de fichier log."
-    echo "   Relance le serveur avec : make kill-dev && make dev"
-    echo "   (make dev écrit dans logs/ytmusic-dev.log)"
-    echo ""
-    mkdir -p "$ROOT/logs"
-    touch "$LOG_FILE"
-    echo "   En attente d’écritures dans $LOG_FILE …"
-  fi
-  follow_local_file
+# Local npm/tsx — toujours suivre les fichiers (même vides)
+if ss -tln 2>/dev/null | grep -qE ':5173|:5174|:8787' || true; then
+  follow_local_files
   exit $?
 fi
 
 echo "⚠️  Rien à suivre."
-echo "   Local  : make dev          puis  make logs"
+echo "   Local  : make kill-dev && make ensure-api && make dev"
 echo "   Docker : make docker-dev   puis  make logs"
 exit 1

@@ -10,7 +10,7 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 	mobile-qr mobile-hint mobile-adb mobile-install-adb test-register-adb \
 	android-sync android-build android-install android-prod android \
 	android-capacitor android-capacitor-prod \
-	ensure-api restart-api \
+	ensure-api restart-api env-check \
 	update-apps status status-watch logs logs-tail logs-watch ports kill-dev \
 	push-dev push-prod deploy-hint seed-users
 
@@ -25,6 +25,7 @@ help: ## Affiche cette aide
 	@echo "  Dev local     : http://localhost:5173  (API :8787)"
 	@echo "  API           : make ensure-api  ·  restart-api  ·  kill-dev"
 	@echo "  Mobile APK    : make android   (Kotlin Compose natif + API :8787)"
+	@echo "  Env           : make env-check  (aligne .env / .env.example)"
 	@echo "  Ops           : make status · status-watch · logs"
 	@echo "  Branches      : feat/* depuis dev → merge prod"
 	@echo ""
@@ -35,14 +36,22 @@ install: ## Installe les dépendances (workspaces api + web)
 seed-users: ## Crée/maj paul@ + dev@ (SEED_PASSWORD dans .env)
 	cd $(ROOT) && node scripts/seed-users.mjs
 
-dev: ## Lance API + Vite (web/PWA) — logs aussi dans logs/ytmusic-dev.log
-	@chmod +x $(ROOT)/scripts/ensure-api.sh $(ROOT)/scripts/kill-dev.sh
-	@# Si API déjà UP, on ne la redémarre pas ; Vite peut quand même démarrer
-	@FORCE_RESTART=0 bash $(ROOT)/scripts/ensure-api.sh || true
+env-check: ## Vérifie que .env et .env.example ont les mêmes clés (sans afficher de secrets)
+	@chmod +x $(ROOT)/scripts/env-check.sh
+	@bash $(ROOT)/scripts/env-check.sh
+
+# API en fond via ensure-api (réutilise si déjà UP) + Vite seul sur :5173
+# → plus de double bind :8787 (EADDRINUSE) ni Vite qui bascule sur :5174
+dev: ## Lance API (ensure) + Vite web — logs dans logs/ytmusic-dev.log
+	@chmod +x $(ROOT)/scripts/ensure-api.sh $(ROOT)/scripts/kill-dev.sh $(ROOT)/scripts/env-check.sh
+	@bash $(ROOT)/scripts/env-check.sh || true
+	@FORCE_RESTART=0 bash $(ROOT)/scripts/ensure-api.sh
+	@# Libère Vite orphelin sur 5173/5174 sans toucher à l’API
+	@bash $(ROOT)/scripts/kill-dev.sh vite-only
 	@mkdir -p $(ROOT)/logs
 	@echo "📝 Logs → $(ROOT)/logs/ytmusic-dev.log  ·  suivi : make logs"
-	@echo "   (API :8787 gérée via ensure-api ; ici Vite + éventuel serveur si besoin)"
-	cd $(ROOT) && npm run dev 2>&1 | tee -a $(ROOT)/logs/ytmusic-dev.log
+	@echo "   API :8787 (ensure-api) + Vite :5173 uniquement"
+	cd $(ROOT) && npm run dev:web 2>&1 | tee -a $(ROOT)/logs/ytmusic-dev.log
 
 dev-server: ## API seule — réutilise :8787 si déjà UP, sinon démarre (fond)
 	@chmod +x $(ROOT)/scripts/ensure-api.sh
@@ -58,6 +67,8 @@ restart-api: ## Tue :8787 puis relance l’API en fond
 	@FORCE_RESTART=1 bash $(ROOT)/scripts/ensure-api.sh
 
 dev-web: ## Frontend Vite seul (port 5173)
+	@chmod +x $(ROOT)/scripts/kill-dev.sh
+	@bash $(ROOT)/scripts/kill-dev.sh vite-only
 	@mkdir -p $(ROOT)/logs
 	cd $(ROOT) && npm run dev:web 2>&1 | tee -a $(ROOT)/logs/ytmusic-web.log
 
