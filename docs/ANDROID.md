@@ -1,42 +1,32 @@
 # Application Android native (Kotlin)
 
-Client **Kotlin + Jetpack Compose + Media3/ExoPlayer** — pas de WebView, pas de Passkey/WebAuthn.
+Client **Kotlin + Jetpack Compose + Media3/ExoPlayer** — pas de WebView.
 
-Package : `ovh.delhomme.ytmusic`  
-Sources : `mobile-android/`
+Sources : `mobile-android/` · Package : `ovh.delhomme.ytmusic`
+
+## Structure monorepo
+
+| Dossier | Rôle |
+|---------|------|
+| `api/` | Backend Express + SQLite + WebSocket |
+| `web/` | Front React / Vite / PWA |
+| `mobile-android/` | App Android Kotlin native |
+| `desktop/` | Electron (optionnel) |
 
 ## Installer
 
 ```bash
-# API locale + build + adb install
-make android
-
-# Ou
-make ensure-api && make android-install
-```
-
-Prod :
-
-```bash
-make android-prod DEVICE=R5CT7263YJL
-```
-
-API custom :
-
-```bash
-API_BASE_URL=http://192.168.1.10:8787 make android-install
+make android              # API locale + APK
+make android-prod         # API https://ytmusic.delhomme.ovh
+make seed-users           # comptes SEED_* du .env
 ```
 
 ## Auth
 
-Email + mot de passe (+ 2FA TOTP si activé). **Pas de Passkey** (WebAuthn n’existe pas hors navigateur sécurisé).
-
-## Lecture
-
-`PlaybackService` (MediaSessionService) : notification média, contrôles casque / écran verrouillé, lecture en arrière-plan.
-
-Stream : `GET {API}/api/stream/:id` via `adb reverse tcp:8787` en local.
+- Email / mot de passe préremplis depuis `.env` (`SEED_EMAIL` / `SEED_PASSWORD`)
+- Passkeys via **Credential Manager** (Biblio → Enregistrer une passkey)
+- Asset links : `GET /.well-known/assetlinks.json`
 
 ## Legacy Capacitor
 
-Ancien APK WebView : `make android-capacitor` (voir `client/android/`). Déconseillé (Passkey / batterie / UI « site web »).
+`make android-capacitor` → `web/android/` (WebView, déconseillé).

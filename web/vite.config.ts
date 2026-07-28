@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  // Charge .env à la racine du monorepo (aligné avec l’API)
+  envDir: '..',
   plugins: [
     react(),
     tailwindcss(),

@@ -1,14 +1,26 @@
 # YTMusic
 
-Client YouTube Music multi-plateforme : **web**, **PWA mobile**, **desktop Electron**, avec compte utilisateur, sync bibliothèque, import YouTube et mode offline.
+Client YouTube Music multi-plateforme : **web**, **API**, **Android Kotlin**, **desktop Electron**.
+
+## Structure
+
+```
+api/              Backend Express + SQLite + WS
+web/              React / Vite / PWA
+mobile-android/   App Android Kotlin (Compose + Media3)
+desktop/          Electron
+scripts/          seed, android, ops
+```
 
 ## Démarrage rapide
 
 ```bash
-cp .env.example .env
-make install   # ou npm install
-make help      # toutes les commandes
-make dev       # API + Vite
+cp .env.example .env   # comptes de test : SEED_EMAIL / SEED_PASSWORD
+make install           # ou npm install
+make seed-users        # crée/maj dev@ + paul@
+make help
+make dev               # API :8787 + Vite :5173
+make android           # APK Kotlin sur device ADB
 ```
 
 - Web / PWA : http://localhost:5173  

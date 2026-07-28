@@ -1,10 +1,12 @@
-# Développement local en conteneurs (sans Portainer / sans NPM)
+# =============================================================================
+# YTMusic — développement en conteneurs (API + Web Vite + Mailhog)
+# =============================================================================
 services:
-  ytmusic:
+  api:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ytmusic-dev
+    container_name: ytmusic-api-dev
     ports:
       - "8787:8787"
     environment:
@@ -13,11 +15,14 @@ services:
       APP_ENV: local
       APP_URL: http://localhost:8787
       JWT_SECRET: ${JWT_SECRET:-dev-local-secret-change-me}
-      ADMIN_EMAILS: ${ADMIN_EMAILS:-admin@ytmusic.local}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-admin@example.com,dev@example.com}
+      SEED_EMAIL: ${SEED_EMAIL:-dev@example.com}
+      SEED_PASSWORD: ${SEED_PASSWORD:-}
       WEBAUTHN_RP_ID: localhost
       WEBAUTHN_ORIGIN: http://localhost:8787
       SMTP_HOST: mailhog
       SMTP_PORT: "1025"
+      SMTP_SECURE: "0"
       SMTP_FROM: YTMusic <noreply@ytmusic.local>
     volumes:
       - ytmusic_dev_data:/app/data
@@ -29,7 +34,26 @@ services:
       timeout: 5s
       retries: 3
 
-  # UI mails : http://localhost:8025 — SMTP : mailhog:1025
+  # Hot-reload UI (optionnel) — proxy /api → api:8787
+  web:
+    image: node:22-bookworm-slim
+    container_name: ytmusic-web-dev
+    working_dir: /app
+    command: bash -lc "npm ci && npm run dev -w web -- --host 0.0.0.0 --port 5173"
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_ORIGIN: http://localhost:8787
+      VITE_DEV_EMAIL: ${VITE_DEV_EMAIL:-dev@example.com}
+      VITE_DEV_PASSWORD: ${VITE_DEV_PASSWORD:-}
+    volumes:
+      - ./:/app
+      - ytmusic_node_modules:/app/node_modules
+    depends_on:
+      api:
+        condition: service_healthy
+    profiles: ["hot"]
+
   mailhog:
     image: mailhog/mailhog:v1.0.1
     container_name: ytmusic-mailhog
@@ -39,3 +63,4 @@ services:
 
 volumes:
   ytmusic_dev_data:
+  ytmusic_node_modules:

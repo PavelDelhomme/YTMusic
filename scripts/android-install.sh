@@ -2,7 +2,7 @@
 # Build APK Android natif (UI embarquée + API distante) et install ADB
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLIENT="$ROOT/client"
+CLIENT="$ROOT/web"
 DEVICE="${DEVICE:-R5CT7263YJL}"
 MODE="${1:-install}" # sync | build | install
 

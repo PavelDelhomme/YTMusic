@@ -13,12 +13,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.BuildConfig
+import ovh.delhomme.ytmusic.auth.PasskeyAuth
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.RefreshBody
 
@@ -29,6 +34,9 @@ fun LibraryScreen(
 ) {
     val email by container.tokenStore.userEmail.collectAsState(initial = null)
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var info by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
 
     Column(
         Modifier
@@ -53,11 +61,40 @@ fun LibraryScreen(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "Client Kotlin natif — ExoPlayer / Media3, pas de WebView ni Passkey.",
+            "Kotlin natif — ExoPlayer / Media3 + Passkeys Credential Manager.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        info?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = MaterialTheme.colorScheme.primary)
+        }
+        error?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = MaterialTheme.colorScheme.error)
+        }
         Spacer(Modifier.height(28.dp))
+        Button(
+            onClick = {
+                scope.launch {
+                    error = null
+                    info = null
+                    try {
+                        val token = container.tokenStore.getAccess()
+                            ?: error("Session expirée")
+                        PasskeyAuth(context, container.httpPlain)
+                            .register(token, "Android")
+                        info = "Passkey enregistrée sur cet appareil"
+                    } catch (e: Exception) {
+                        error = e.message ?: "Échec enregistrement passkey"
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Enregistrer une passkey")
+        }
+        Spacer(Modifier.height(12.dp))
         OutlinedButton(
             onClick = {
                 scope.launch {
@@ -71,14 +108,6 @@ fun LibraryScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Se déconnecter")
-        }
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = { /* placeholder */ },
-            enabled = false,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Favoris & playlists (bientôt)")
         }
     }
 }

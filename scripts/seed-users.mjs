@@ -2,9 +2,8 @@
 /**
  * Crée / met à jour les comptes locaux (email déjà vérifié).
  *
- *   SEED_PASSWORD='…' node scripts/seed-users.mjs
- *
- * Ne jamais committer de mot de passe.
+ *   node scripts/seed-users.mjs
+ *   # lit SEED_EMAIL / SEED_PASSWORD / SEED_* dans .env
  */
 import 'dotenv/config';
 import { randomBytes, randomUUID, scryptSync } from 'node:crypto';
@@ -25,10 +24,15 @@ if (!password) {
   process.exit(1);
 }
 
-const users = [
-  { email: 'admin@example.com', name: 'Paul' },
-  { email: 'dev@example.com', name: 'Dev' },
-];
+const primaryEmail = (process.env.SEED_EMAIL || 'dev@example.com').trim().toLowerCase();
+const primaryName = (process.env.SEED_NAME || 'Dev').trim() || 'Dev';
+const secondaryEmail = (process.env.SEED_EMAIL_SECONDARY || '').trim().toLowerCase();
+const secondaryName = (process.env.SEED_NAME_SECONDARY || 'Paul').trim() || 'Paul';
+
+const users = [{ email: primaryEmail, name: primaryName }];
+if (secondaryEmail && secondaryEmail !== primaryEmail) {
+  users.push({ email: secondaryEmail, name: secondaryName });
+}
 
 function hashPassword(pw) {
   const salt = randomBytes(16).toString('hex');
@@ -87,5 +91,5 @@ for (const u of users) {
 }
 
 console.log(`DB → ${dbPath}`);
-console.log('OK — connecte-toi avec admin@example.com / dev@example.com');
+console.log(`OK — connecte-toi avec ${users.map((u) => u.email).join(' / ')}`);
 db.close();

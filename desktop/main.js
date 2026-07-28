@@ -7,7 +7,7 @@ let serverProc = null;
 
 function startServer() {
   if (isDev) return; // in dev, use npm run dev separately
-  const serverEntry = path.join(__dirname, '..', 'server', 'src', 'index.ts');
+  const serverEntry = path.join(__dirname, '..', 'api', 'src', 'index.ts');
   serverProc = spawn('npx', ['tsx', serverEntry], {
     cwd: path.join(__dirname, '..'),
     env: { ...process.env, PORT: '8787' },

@@ -3,7 +3,7 @@
 from pathlib import Path
 from PIL import Image
 
-ROOT = Path(__file__).resolve().parent.parent / "client" / "public"
+ROOT = Path(__file__).resolve().parent.parent / "web" / "public"
 
 for size, out_name in [(192, "icon-192-maskable.png"), (512, "icon-512-maskable.png")]:
     src = Image.open(ROOT / f"icon-{size}.png").convert("RGBA")

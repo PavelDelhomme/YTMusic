@@ -23,7 +23,10 @@ function cleanChallenges() {
 }
 
 export function getRpID(host?: string) {
-  const h = (host || process.env.WEBAUTHN_RP_ID || 'localhost').split(':')[0];
+  if (process.env.WEBAUTHN_RP_ID) return process.env.WEBAUTHN_RP_ID.split(':')[0];
+  const h = (host || 'localhost').split(':')[0];
+  // Les IP ne sont pas des RP ID WebAuthn valides → fallback localhost
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(h) || h === '127.0.0.1') return 'localhost';
   return h;
 }
 
@@ -32,6 +35,16 @@ export function getOrigin(reqHost?: string, proto?: string) {
   const host = reqHost || 'localhost:5173';
   const p = proto || 'http';
   return `${p}://${host}`;
+}
+
+/** Origines Android Credential Manager (apk-key-hash) + web. */
+export function expectedOrigins(primary: string): string | string[] {
+  const extras = (process.env.WEBAUTHN_ANDROID_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const all = [primary, ...extras].filter(Boolean);
+  return all.length === 1 ? all[0]! : all;
 }
 
 db.exec(`
@@ -126,7 +139,7 @@ export async function finishRegistration(
   const verification = await verifyRegistrationResponse({
     response,
     expectedChallenge: expected.challenge,
-    expectedOrigin: origin,
+    expectedOrigin: expectedOrigins(origin),
     expectedRPID: rpID,
   });
   if (!verification.verified || !verification.registrationInfo) {
@@ -212,7 +225,7 @@ export async function finishAuthentication(
       verification = await verifyAuthenticationResponse({
         response,
         expectedChallenge: v.challenge,
-        expectedOrigin: origin,
+        expectedOrigin: expectedOrigins(origin),
         expectedRPID: rpID,
         credential: {
           id: row.credential_id,
