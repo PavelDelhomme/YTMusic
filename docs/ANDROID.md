@@ -1,16 +1,18 @@
-# Application Android native (Capacitor)
+# Application Android native (Kotlin)
 
-APK réel : UI **embarquée** dans l’application (plus de simple onglet web distant),
-API via `VITE_API_ORIGIN`, lecture arrière-plan + cast multi-appareils.
+Client **Kotlin + Jetpack Compose + Media3/ExoPlayer** — pas de WebView, pas de Passkey/WebAuthn.
+
+Package : `ovh.delhomme.ytmusic`  
+Sources : `mobile-android/`
 
 ## Installer
 
 ```bash
-# Terminal 1 — API
-make dev-server   # ou make dev
+# API locale + build + adb install
+make android
 
-# Terminal 2 — APK native (API locale :8787 via adb reverse)
-make android-install DEVICE=R5CT7263YJL
+# Ou
+make ensure-api && make android-install
 ```
 
 Prod :
@@ -19,22 +21,22 @@ Prod :
 make android-prod DEVICE=R5CT7263YJL
 ```
 
-## Cast / contrôle
-
-Dans l’app : barre du bas → **Cast** → choisir un PC / TV connecté avec le même compte,
-ou Chromecast. Le téléphone pilote file, play/pause, volume à distance.
-
-## Différence PWA
-
-| | PWA | APK native |
-|---|---|---|
-| Bannière « Installer l’app » | oui (navigateur) | **jamais** |
-| UI | site / SW | assets dans l’APK |
-| Arrière-plan | limité | service `mediaPlayback` |
-| Cast YTMusic | oui | oui (prioritaire) |
-
-Live-reload (dev UI à chaud, rare) :
+API custom :
 
 ```bash
-CAP_LIVE_RELOAD=1 CAP_SERVER_URL=http://127.0.0.1:5173 make android-install
+API_BASE_URL=http://192.168.1.10:8787 make android-install
 ```
+
+## Auth
+
+Email + mot de passe (+ 2FA TOTP si activé). **Pas de Passkey** (WebAuthn n’existe pas hors navigateur sécurisé).
+
+## Lecture
+
+`PlaybackService` (MediaSessionService) : notification média, contrôles casque / écran verrouillé, lecture en arrière-plan.
+
+Stream : `GET {API}/api/stream/:id` via `adb reverse tcp:8787` en local.
+
+## Legacy Capacitor
+
+Ancien APK WebView : `make android-capacitor` (voir `client/android/`). Déconseillé (Passkey / batterie / UI « site web »).
