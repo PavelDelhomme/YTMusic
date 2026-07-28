@@ -14,8 +14,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -75,46 +77,62 @@ fun TrackRow(
     }
 }
 
+/** Mini-lecteur style YT / Google Music — tap = expand, play/skip restent isolés. */
 @Composable
 fun MiniPlayerBar(
     track: TrackDto,
     playing: Boolean,
+    progress: Float,
     onToggle: () -> Unit,
+    onSkipNext: () -> Unit,
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(64.dp)
-            .clickable(onClick = onOpen)
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        AsyncImage(
-            model = track.coverUrl(120),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
+    Column(modifier = modifier.fillMaxWidth()) {
+        LinearProgressIndicator(
+            progress = { progress.coerceIn(0f, 1f) },
             modifier = Modifier
-                .size(48.dp)
-                .clip(RoundedCornerShape(6.dp)),
+                .fillMaxWidth()
+                .height(2.dp),
+            color = MaterialTheme.colorScheme.primary,
+            trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
         )
-        Column(Modifier.weight(1f)) {
-            Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                track.artistLine(),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .clickable(onClick = onOpen)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            AsyncImage(
+                model = track.coverUrl(120),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(6.dp)),
             )
-        }
-        IconButton(onClick = onToggle) {
-            Icon(
-                if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (playing) "Pause" else "Lecture",
-            )
+            Column(Modifier.weight(1f).padding(horizontal = 6.dp)) {
+                Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    track.artistLine(),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onToggle) {
+                Icon(
+                    if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (playing) "Pause" else "Lecture",
+                )
+            }
+            IconButton(onClick = onSkipNext) {
+                Icon(Icons.Default.SkipNext, contentDescription = "Suivant")
+            }
         }
     }
 }

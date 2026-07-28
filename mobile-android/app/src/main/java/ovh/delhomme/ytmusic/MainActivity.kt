@@ -5,9 +5,15 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,12 +41,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import ovh.delhomme.ytmusic.data.AppContainer
+import ovh.delhomme.ytmusic.data.TrackDto
 import ovh.delhomme.ytmusic.player.PlayerController
 import ovh.delhomme.ytmusic.ui.auth.LoginScreen
 import ovh.delhomme.ytmusic.ui.components.MiniPlayerBar
@@ -103,6 +111,11 @@ fun YtMusicAppContent(container: AppContainer) {
         }
     }
 
+    // Retour système → replie le lecteur plein écran (comme YT Music)
+    BackHandler(enabled = loggedIn == true && showNowPlaying) {
+        showNowPlaying = false
+    }
+
     when (loggedIn) {
         null -> Box(
             Modifier
@@ -111,20 +124,35 @@ fun YtMusicAppContent(container: AppContainer) {
         )
         false -> LoginScreen(container = container, onLoggedIn = { loggedIn = true })
         true -> {
-            if (showNowPlaying) {
-                val ui by player.state.collectAsState()
-                NowPlayingScreen(
-                    player = player,
-                    ui = ui,
-                    onClose = { showNowPlaying = false },
-                )
-            } else {
+            Box(Modifier.fillMaxSize()) {
                 MainTabs(
                     container = container,
                     player = player,
+                    expanded = showNowPlaying,
                     onOpenPlayer = { showNowPlaying = true },
+                    onPlayTracks = { tracks, idx ->
+                        player.play(tracks, idx)
+                        // reste sur la liste + mini-barre (style Google / YT Music)
+                        showNowPlaying = false
+                    },
                     onLoggedOut = { loggedIn = false },
                 )
+
+                AnimatedVisibility(
+                    visible = showNowPlaying,
+                    enter = fadeIn() + slideInVertically { it },
+                    exit = fadeOut() + slideOutVertically { it },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(10f),
+                ) {
+                    val ui by player.state.collectAsState()
+                    NowPlayingScreen(
+                        player = player,
+                        ui = ui,
+                        onClose = { showNowPlaying = false },
+                    )
+                }
             }
         }
     }
@@ -134,7 +162,9 @@ fun YtMusicAppContent(container: AppContainer) {
 private fun MainTabs(
     container: AppContainer,
     player: PlayerController,
+    expanded: Boolean,
     onOpenPlayer: () -> Unit,
+    onPlayTracks: (List<TrackDto>, Int) -> Unit,
     onLoggedOut: () -> Unit,
 ) {
     val nav = rememberNavController()
@@ -143,34 +173,51 @@ private fun MainTabs(
     val current = backStack?.destination?.route
     val playerUi by player.state.collectAsState()
 
+    // Progress mini-barre
+    LaunchedEffect(playerUi.playing, playerUi.track?.id) {
+        while (playerUi.playing && playerUi.track != null) {
+            player.tick()
+            kotlinx.coroutines.delay(500)
+        }
+    }
+
     Scaffold(
         bottomBar = {
-            Column {
-                playerUi.track?.let { track ->
-                    MiniPlayerBar(
-                        track = track,
-                        playing = playerUi.playing,
-                        onToggle = player::toggle,
-                        onOpen = onOpenPlayer,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                    )
-                }
-                NavigationBar {
-                    tabs.forEach { tab ->
-                        NavigationBarItem(
-                            selected = current == tab.route,
-                            onClick = {
-                                nav.navigate(tab.route) {
-                                    popUpTo(nav.graph.startDestinationId) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
+            // Mini-barre masquée quand le plein écran est ouvert
+            if (!expanded) {
+                Column {
+                    playerUi.track?.let { track ->
+                        MiniPlayerBar(
+                            track = track,
+                            playing = playerUi.playing,
+                            progress = if (playerUi.durationMs > 0) {
+                                (playerUi.positionMs.toFloat() / playerUi.durationMs).coerceIn(0f, 1f)
+                            } else {
+                                0f
                             },
-                            icon = { Icon(tab.icon, contentDescription = tab.label) },
-                            label = { Text(tab.label) },
+                            onToggle = player::toggle,
+                            onSkipNext = player::skipNext,
+                            onOpen = onOpenPlayer,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
                         )
+                    }
+                    NavigationBar {
+                        tabs.forEach { tab ->
+                            NavigationBarItem(
+                                selected = current == tab.route,
+                                onClick = {
+                                    nav.navigate(tab.route) {
+                                        popUpTo(nav.graph.startDestinationId) { saveState = true }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
+                                },
+                                icon = { Icon(tab.icon, contentDescription = tab.label) },
+                                label = { Text(tab.label) },
+                            )
+                        }
                     }
                 }
             }
@@ -182,10 +229,10 @@ private fun MainTabs(
             modifier = Modifier.padding(padding),
         ) {
             composable(Tab.Home.route) {
-                HomeScreen(container = container, onPlay = player::play)
+                HomeScreen(container = container, onPlay = onPlayTracks)
             }
             composable(Tab.Search.route) {
-                SearchScreen(container = container, onPlay = player::play)
+                SearchScreen(container = container, onPlay = onPlayTracks)
             }
             composable(Tab.Library.route) {
                 LibraryScreen(container = container, onLoggedOut = onLoggedOut)
