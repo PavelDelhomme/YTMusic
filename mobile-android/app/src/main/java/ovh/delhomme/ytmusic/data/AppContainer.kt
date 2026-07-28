@@ -48,6 +48,12 @@ class AppContainer(context: Context) {
         )
         .build()
 
+    /** Client sans auth interceptor (passkeys login). */
+    val httpPlain: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .build()
+
     val apiBaseUrl: String = BuildConfig.API_BASE_URL.trimEnd('/') + "/"
 
     val api: YtMusicApi = Retrofit.Builder()

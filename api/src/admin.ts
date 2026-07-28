@@ -30,7 +30,7 @@ export function lanAddresses() {
 
 export function deployInfo(port: number) {
   const lan = lanAddresses();
-  const clientDist = join(ROOT, 'client', 'dist', 'index.html');
+  const clientDist = join(ROOT, 'web', 'dist', 'index.html');
   const built = existsSync(clientDist);
   const desktopPkg = join(ROOT, 'desktop', 'package.json');
   const clientPort = Number(process.env.CLIENT_PORT || 5173);

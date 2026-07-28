@@ -3,18 +3,21 @@ package ovh.delhomme.ytmusic.ui.auth
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import ovh.delhomme.ytmusic.BuildConfig
+import ovh.delhomme.ytmusic.auth.PasskeyAuth
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.LoginBody
 import ovh.delhomme.ytmusic.data.RegisterBody
 import retrofit2.HttpException
 
 data class AuthUiState(
-    val email: String = "",
-    val password: String = "",
+    val email: String = BuildConfig.DEV_EMAIL,
+    val password: String = BuildConfig.DEV_PASSWORD,
     val name: String = "",
     val totp: String = "",
     val registerMode: Boolean = false,
@@ -88,6 +91,28 @@ class AuthViewModel(private val container: AppContainer) : ViewModel() {
                 _state.value = _state.value.copy(
                     loading = false,
                     error = e.message ?: "Erreur de connexion",
+                )
+            }
+        }
+    }
+
+    fun loginWithPasskey(activityContext: android.content.Context) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(loading = true, error = null)
+            try {
+                val auth = PasskeyAuth(activityContext, container.httpPlain)
+                val tokens = auth.login(_state.value.email.ifBlank { null })
+                container.tokenStore.saveSession(
+                    tokens.token,
+                    tokens.refreshToken,
+                    tokens.email,
+                    tokens.name,
+                )
+                _state.value = _state.value.copy(loading = false, loggedIn = true)
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = e.message ?: "Passkey indisponible",
                 )
             }
         }

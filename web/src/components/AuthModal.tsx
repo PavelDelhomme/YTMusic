@@ -15,8 +15,9 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
   const { login, register, loginGoogle, googleEnabled, googleClientId, user, init } = useAuth();
   const refresh = useLibrary((s) => s.refresh);
   const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState(() => import.meta.env.VITE_DEV_EMAIL || '');
+  const [password, setPassword] = useState(() => import.meta.env.VITE_DEV_PASSWORD || '');
+  const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState('');
   const [totp, setTotp] = useState('');
   const [needs2fa, setNeeds2fa] = useState(false);
@@ -182,15 +183,25 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
             placeholder="Email"
             className="w-full rounded-xl border border-yt-border bg-yt-bg px-3 py-2.5 text-sm outline-none focus:border-white/30"
           />
-          <input
-            type="password"
-            required
-            minLength={6}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Mot de passe"
-            className="w-full rounded-xl border border-yt-border bg-yt-bg px-3 py-2.5 text-sm outline-none focus:border-white/30"
-          />
+          <div className="relative">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              required
+              minLength={6}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Mot de passe"
+              className="w-full rounded-xl border border-yt-border bg-yt-bg px-3 py-2.5 pr-12 text-sm outline-none focus:border-white/30"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-yt-muted hover:text-white"
+              aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+            >
+              {showPassword ? 'Masquer' : 'Voir'}
+            </button>
+          </div>
           {needs2fa && (
             <input
               value={totp}

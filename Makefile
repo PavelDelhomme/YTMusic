@@ -5,7 +5,7 @@
 SHELL := /bin/bash
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
-.PHONY: help install dev dev-server dev-client build start deploy-local \
+.PHONY: help install dev dev-server dev-web build start deploy-local \
 	clean-vite icons docker-dev docker-dev-down docker-build \
 	mobile-qr mobile-hint mobile-adb mobile-install-adb test-register-adb \
 	android-sync android-build android-install android-prod android \
@@ -29,7 +29,7 @@ help: ## Affiche cette aide
 	@echo "  Branches      : feat/* depuis dev → merge prod"
 	@echo ""
 
-install: ## Installe les dépendances (workspaces server + client)
+install: ## Installe les dépendances (workspaces api + web)
 	cd $(ROOT) && npm install
 
 seed-users: ## Crée/maj paul@ + dev@ (SEED_PASSWORD dans .env)
@@ -57,33 +57,33 @@ restart-api: ## Tue :8787 puis relance l’API en fond
 	@chmod +x $(ROOT)/scripts/ensure-api.sh
 	@FORCE_RESTART=1 bash $(ROOT)/scripts/ensure-api.sh
 
-dev-client: ## Frontend Vite seul (port 5173)
+dev-web: ## Frontend Vite seul (port 5173)
 	@mkdir -p $(ROOT)/logs
-	cd $(ROOT) && npm run dev:client 2>&1 | tee -a $(ROOT)/logs/ytmusic-client.log
+	cd $(ROOT) && npm run dev:web 2>&1 | tee -a $(ROOT)/logs/ytmusic-web.log
 
 build: ## Build production du client (PWA)
 	cd $(ROOT) && npm run build
 
-start: ## Démarre le serveur qui sert API + client/dist
+start: ## Démarre le serveur qui sert API + web/dist
 	cd $(ROOT) && npm start
 
 deploy-local: ## build + start (prod locale sans Docker)
 	cd $(ROOT) && npm run deploy:local
 
 clean-vite: ## Vide le cache Vite (fix 504 Outdated Optimize Dep)
-	rm -rf $(ROOT)/client/node_modules/.vite \
+	rm -rf $(ROOT)/web/node_modules/.vite \
 	       $(ROOT)/node_modules/.vite \
-	       $(ROOT)/node_modules/client/node_modules/.vite 2>/dev/null || true
+	       $(ROOT)/node_modules/web/node_modules/.vite 2>/dev/null || true
 	@echo "Cache Vite nettoyé — relance : make dev"
 
 icons: ## Régénère les icônes PWA (PNG) depuis favicon.svg
 	@command -v rsvg-convert >/dev/null || (echo "installe librsvg (rsvg-convert)" && exit 1)
-	cd $(ROOT)/client/public && \
+	cd $(ROOT)/web/public && \
 	  rsvg-convert -w 192 -h 192 favicon.svg -o icon-192.png && \
 	  rsvg-convert -w 512 -h 512 favicon.svg -o icon-512.png && \
 	  rsvg-convert -w 180 -h 180 favicon.svg -o apple-touch-icon.png && \
 	  python3 $(ROOT)/scripts/make-maskable-icons.py
-	@echo "Icônes OK dans client/public/"
+	@echo "Icônes OK dans web/public/"
 
 docker-dev: ## Conteneurs locaux (+ Mailhog :8025)
 	cd $(ROOT) && npm run docker:dev

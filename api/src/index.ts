@@ -382,6 +382,31 @@ app.get('/api/auth/passkeys', authRequired, (req, res) => {
   res.json({ passkeys: listPasskeys(req.userId!) });
 });
 
+/** Digital Asset Links — Passkeys / Credential Manager Android */
+app.get('/.well-known/assetlinks.json', (_req, res) => {
+  const fps = (process.env.ANDROID_SHA256_FINGERPRINTS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const fingerprints =
+    fps.length > 0
+      ? fps
+      : ['3C:F6:C5:32:1D:A1:51:7E:79:94:0C:9E:25:51:4A:63:9B:2C:44:9E:3E:FF:7D:F7:47:68:76:CB:F6:F4:C1:1F'];
+  res.json([
+    {
+      relation: [
+        'delegate_permission/common.handle_all_urls',
+        'delegate_permission/common.get_login_creds',
+      ],
+      target: {
+        namespace: 'android_app',
+        package_name: process.env.ANDROID_PACKAGE_NAME || 'ovh.delhomme.ytmusic',
+        sha256_cert_fingerprints: fingerprints,
+      },
+    },
+  ]);
+});
+
 app.post('/api/auth/passkeys/register/options', authRequired, async (req, res) => {
   try {
     if (req.user?.isGuest) {
@@ -405,9 +430,11 @@ app.post('/api/auth/passkeys/register/verify', authRequired, async (req, res) =>
   try {
     const host = String(req.headers['x-forwarded-host'] || req.get('host') || req.hostname);
     const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http');
-    // Prefer client origin for WebAuthn (Vite :5173 in dev)
-    const origin = String(req.headers.origin || getOrigin(host, proto));
-    const rpID = getRpID(new URL(origin).hostname);
+    const rawOrigin = String(req.headers.origin || getOrigin(host, proto));
+    const origin = rawOrigin;
+    const rpID = rawOrigin.startsWith('android:')
+      ? getRpID(host)
+      : getRpID(new URL(rawOrigin).hostname);
     const result = await finishRegistration(
       req.userId!,
       req.body?.credential || req.body,
@@ -429,7 +456,11 @@ app.delete('/api/auth/passkeys/:id', authRequired, (req, res) => {
 app.post('/api/auth/passkeys/login/options', async (req, res) => {
   try {
     const origin = String(req.headers.origin || '');
-    const rpID = origin ? getRpID(new URL(origin).hostname) : getRpID(req.hostname);
+    const rpID = origin.startsWith('android:')
+      ? getRpID(req.hostname)
+      : origin
+        ? getRpID(new URL(origin).hostname)
+        : getRpID(req.hostname);
     const options = await beginAuthentication(rpID, req.body?.email ? String(req.body.email) : undefined);
     res.json(options);
   } catch (err) {
@@ -439,9 +470,13 @@ app.post('/api/auth/passkeys/login/options', async (req, res) => {
 
 app.post('/api/auth/passkeys/login/verify', async (req, res) => {
   try {
-    const origin = String(req.headers.origin || getOrigin(req.get('host') || undefined, req.protocol));
-    const rpID = getRpID(new URL(origin).hostname);
-    const userId = await finishAuthentication(req.body?.credential || req.body, rpID, origin);
+    const host = String(req.headers['x-forwarded-host'] || req.get('host') || req.hostname);
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http');
+    const rawOrigin = String(req.headers.origin || getOrigin(host, proto));
+    const rpID = rawOrigin.startsWith('android:')
+      ? getRpID(host)
+      : getRpID(new URL(rawOrigin).hostname);
+    const userId = await finishAuthentication(req.body?.credential || req.body, rpID, rawOrigin);
     const user = findUserById(userId);
     if (!user) {
       res.status(401).json({ error: 'Utilisateur introuvable' });
@@ -1158,7 +1193,7 @@ app.get('/api/session', accountRequired, (req, res) => {
   res.json(getHubPublic(req.userId!));
 });
 
-const clientDist = join(ROOT, 'client', 'dist');
+const clientDist = join(ROOT, 'web', 'dist');
 if (existsSync(clientDist)) {
   app.use(express.static(clientDist));
   app.get(/.*/, (_req, res) => {

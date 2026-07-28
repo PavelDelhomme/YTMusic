@@ -35,5 +35,5 @@ free_one 5173
 free_one 8787
 # Process orphelins fréquents
 pkill -f "tsx watch src/index.ts" 2>/dev/null || true
-pkill -f "vite.*YTMusic|vite.*client" 2>/dev/null || true
+pkill -f "vite.*web" 2>/dev/null || true
 echo "✅ Ports 5173 / 8787 libérés"
