@@ -81,25 +81,49 @@ export function hashToken(raw: string) {
 export function createEmailToken(userId: string, kind: 'verify' | 'reset', ttlMs = 48 * 3600 * 1000) {
   const raw = randomBytes(32).toString('base64url');
   const id = randomUUID();
+  const now = Date.now();
+  // Un seul lien actif par user/kind — invalide les anciens (évite confusion multi-mails)
+  db.prepare(
+    `UPDATE email_tokens SET used_at = ? WHERE user_id = ? AND kind = ? AND used_at IS NULL`,
+  ).run(now, userId, kind);
   db.prepare(
     `INSERT INTO email_tokens (id, user_id, token_hash, kind, expires_at, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(id, userId, hashToken(raw), kind, Date.now() + ttlMs, Date.now());
+  ).run(id, userId, hashToken(raw), kind, now + ttlMs, now);
   return raw;
 }
 
-export function consumeEmailToken(raw: string, kind: string) {
+export type EmailTokenRedeem =
+  | { ok: true; userId: string; already: boolean }
+  | { ok: false; reason: 'missing' | 'invalid' | 'expired' };
+
+/**
+ * Consomme un jeton email de façon idempotente :
+ * - 1er clic → ok, already=false
+ * - reclic / StrictMode / prefetch déjà passé en POST → ok, already=true si même token
+ */
+export function redeemEmailToken(raw: string, kind: string): EmailTokenRedeem {
+  const token = String(raw || '').trim();
+  if (!token) return { ok: false, reason: 'missing' };
+  const hash = hashToken(token);
   const row = db
-    .prepare(
-      `SELECT * FROM email_tokens WHERE token_hash = ? AND kind = ? AND used_at IS NULL`,
-    )
-    .get(hashToken(raw), kind) as
-    | { id: string; user_id: string; expires_at: number }
+    .prepare(`SELECT * FROM email_tokens WHERE token_hash = ? AND kind = ?`)
+    .get(hash, kind) as
+    | { id: string; user_id: string; expires_at: number; used_at: number | null }
     | undefined;
-  if (!row) return null;
-  if (row.expires_at < Date.now()) return null;
+  if (!row) return { ok: false, reason: 'invalid' };
+  if (row.used_at != null) {
+    return { ok: true, userId: row.user_id, already: true };
+  }
+  if (row.expires_at < Date.now()) return { ok: false, reason: 'expired' };
   db.prepare('UPDATE email_tokens SET used_at = ? WHERE id = ?').run(Date.now(), row.id);
-  return row.user_id;
+  return { ok: true, userId: row.user_id, already: false };
+}
+
+/** @deprecated préférer redeemEmailToken */
+export function consumeEmailToken(raw: string, kind: string) {
+  const r = redeemEmailToken(raw, kind);
+  return r.ok ? r.userId : null;
 }
 
 export function markEmailVerified(userId: string) {

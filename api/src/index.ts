@@ -108,12 +108,12 @@ import {
   suggestSearch,
 } from './reco.js';
 import {
-  consumeEmailToken,
   createEmailToken,
   insertTelemetry,
   listMailOutbox,
   listTelemetry,
   markEmailVerified,
+  redeemEmailToken,
   rotateRefreshToken,
   revokeRefreshToken,
   telemetryStats,
@@ -266,62 +266,123 @@ app.post('/api/auth/logout', (req, res) => {
 
 app.post('/api/auth/verify-email', async (req, res) => {
   try {
-    const token = String(req.body?.token || req.query?.token || '');
-    const userId = consumeEmailToken(token, 'verify');
-    if (!userId) {
-      res.status(400).json({ error: 'Lien invalide ou expiré' });
+    const token = String(req.body?.token || req.query?.token || '').trim();
+    const result = redeemEmailToken(token, 'verify');
+    if (!result.ok) {
+      const msg =
+        result.reason === 'expired'
+          ? 'Lien expiré — demande un nouvel email de validation'
+          : result.reason === 'missing'
+            ? 'Lien invalide — jeton manquant'
+            : 'Lien invalide ou déjà remplacé — demande un nouvel email de validation';
+      res.status(400).json({ error: msg, reason: result.reason });
       return;
     }
-    markEmailVerified(userId);
-    const user = findUserById(userId)!;
-    res.json({ ok: true, user: publicUser(user) });
+    markEmailVerified(result.userId);
+    const user = findUserById(result.userId)!;
+    res.json({
+      ok: true,
+      already: result.already,
+      user: publicUser(user),
+      message: result.already ? 'Email déjà validé' : 'Email validé',
+    });
   } catch (err) {
     res.status(400).json({ error: String((err as Error).message || err) });
   }
 });
 
-/** Lien email cliquable (web + mobile via adb reverse :8787) — pas besoin de Vite. */
+/**
+ * Landing email — NE consomme PAS le token (anti SafeLinks / prefetch).
+ * Le navigateur / mobile POST ensuite vers /api/auth/verify-email.
+ */
 app.get('/verify-email', (req, res) => {
-  const token = String(req.query.token || '');
+  const token = String(req.query.token || '').trim();
   const esc = (s: string) =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
-  const page = (title: string, body: string, ok: boolean) => `<!DOCTYPE html>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const tokenJs = JSON.stringify(token);
+
+  if (!token) {
+    res.status(400).type('html').send(`<!DOCTYPE html>
 <html lang="fr"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>${esc(title)} — YTMusic</title>
+<title>Lien invalide — YTMusic</title>
+<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;background:#030303;color:#fff}
+.card{max-width:420px;margin:24px;padding:28px;border-radius:16px;border:1px solid #222;background:#121212}
+.err{color:#f87171}a{color:#ff0033}</style></head>
+<body><div class="card"><h1 class="err">Lien invalide</h1><p>Aucun jeton dans l’URL.</p>
+<p><a href="/">Retour YTMusic</a></p></div></body></html>`);
+    return;
+  }
+
+  res.type('html').send(`<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Validation email — YTMusic</title>
 <style>
   body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
     font-family:system-ui,sans-serif;background:#030303;color:#fff}
-  .card{max-width:420px;margin:24px;padding:28px;border-radius:16px;border:1px solid #222;background:#121212}
-  h1{margin:0 0 12px;font-size:1.4rem}
+  .card{max-width:420px;margin:24px;padding:28px;border-radius:16px;border:1px solid #222;background:#121212;text-align:center}
+  h1{margin:0 0 12px;font-size:1.35rem}
   p{color:#aaa;line-height:1.5}
-  .ok{color:#34d399} .err{color:#f87171}
+  .ok{color:#34d399} .err{color:#f87171} .muted{color:#888;font-size:13px}
+  button{margin-top:16px;background:#ff0033;color:#fff;border:0;border-radius:999px;padding:12px 22px;font-size:15px;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
   a{color:#ff0033}
 </style></head><body><div class="card">
-  <h1 class="${ok ? 'ok' : 'err'}">${esc(title)}</h1>
-  <p>${body}</p>
+  <h1 id="title">Validation…</h1>
+  <p id="msg">Confirmation de ton adresse email.</p>
+  <button id="btn" type="button" style="display:none">Valider mon email</button>
+  <p class="muted" id="hint"></p>
   <p style="margin-top:20px"><a href="/">Retour YTMusic</a></p>
-</div></body></html>`;
-
-  if (!token) {
-    res.status(400).type('html').send(page('Lien invalide', 'Aucun jeton dans l’URL.', false));
-    return;
+</div>
+<script>
+(function () {
+  var token = ${tokenJs};
+  var title = document.getElementById('title');
+  var msg = document.getElementById('msg');
+  var btn = document.getElementById('btn');
+  var hint = document.getElementById('hint');
+  var once = false;
+  function show(ok, t, m) {
+    title.className = ok ? 'ok' : 'err';
+    title.textContent = t;
+    msg.innerHTML = m;
   }
-  const userId = consumeEmailToken(token, 'verify');
-  if (!userId) {
-    res.status(400).type('html').send(
-      page('Lien expiré', 'Ce lien de validation n’est plus valide. Demande un nouvel email depuis l’app.', false),
-    );
-    return;
+  async function verify() {
+    if (once) return;
+    once = true;
+    btn.disabled = true;
+    try {
+      var r = await fetch('/api/auth/verify-email', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: token }),
+        credentials: 'same-origin'
+      });
+      var j = await r.json().catch(function () { return {}; });
+      if (!r.ok) {
+        once = false;
+        btn.style.display = 'inline-block';
+        btn.disabled = false;
+        show(false, 'Échec', (j && j.error) ? j.error : ('Erreur HTTP ' + r.status));
+        hint.textContent = 'Tu peux réessayer ou demander un nouvel email depuis l’app.';
+        return;
+      }
+      var email = (j.user && j.user.email) ? j.user.email : '';
+      show(true, j.already ? 'Déjà validé' : 'Email validé',
+        email ? ('Compte <strong style="color:#fff">' + email + '</strong> confirmé. Tu peux revenir dans l’app.') : 'Tu peux revenir dans l’app web ou Android.');
+      btn.style.display = 'none';
+      hint.textContent = '';
+    } catch (e) {
+      once = false;
+      btn.style.display = 'inline-block';
+      btn.disabled = false;
+      show(false, 'Erreur réseau', String(e && e.message || e));
+    }
   }
-  markEmailVerified(userId);
-  const user = findUserById(userId);
-  res.type('html').send(
-    page(
-      'Email validé',
-      `Compte <strong style="color:#fff">${esc(user?.email || '')}</strong> confirmé. Tu peux revenir dans l’app web ou Android.`,
-      true,
-    ),
-  );
+  btn.addEventListener('click', verify);
+  // Auto-POST (pas sur GET) — SafeLinks ne consomme plus le jeton
+  verify();
+})();
+</script></body></html>`);
 });
 
 app.post('/api/auth/resend-verification', authRequired, async (req, res) => {

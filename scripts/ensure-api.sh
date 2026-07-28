@@ -61,14 +61,13 @@ free_port() {
 }
 
 start_server() {
-  echo "  Démarrage API (tsx watch, détaché) → $LOG"
+  echo "  Démarrage API (tsx, détaché) → $LOG"
   cd "$ROOT"
-  # setsid -f : survit à la fermeture du terminal agent / shell
-  # Toujours via workspace api (jamais l’ancien dossier server/)
-  setsid -f npm run dev:api >>"$LOG" 2>&1
+  # Sans `watch` en fond : plus stable (évite zombies tsx watch)
+  setsid -f bash -c "cd '$ROOT' && exec npx tsx api/src/index.ts" >>"$LOG" 2>&1
   sleep 1.2
-  pgrep -n -f "tsx watch src/index.ts" >"$PIDFILE" 2>/dev/null || true
-  echo "  PID tsx: $(cat "$PIDFILE" 2>/dev/null || echo '?')"
+  pgrep -n -f "tsx api/src/index.ts" >"$PIDFILE" 2>/dev/null || true
+  echo "  PID api: $(cat "$PIDFILE" 2>/dev/null || echo '?')"
 }
 
 wait_health() {

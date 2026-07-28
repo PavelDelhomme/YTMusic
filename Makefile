@@ -12,7 +12,7 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 	android-capacitor android-capacitor-prod \
 	ensure-api restart-api env-check \
 	update-apps status status-watch logs logs-tail logs-watch ports kill-dev \
-	push-dev push-prod deploy-hint seed-users
+	push-dev push-prod deploy-hint seed-users test-verify-email
 
 help: ## Affiche cette aide
 	@echo ""
@@ -35,6 +35,9 @@ install: ## Installe les dépendances (workspaces api + web)
 
 seed-users: ## Crée/maj paul@ + dev@ (SEED_PASSWORD dans .env)
 	cd $(ROOT) && node scripts/seed-users.mjs
+
+test-verify-email: ## Teste validation email (API locale)
+	cd $(ROOT) && node scripts/test-verify-email.mjs
 
 env-check: ## Vérifie que .env et .env.example ont les mêmes clés (sans afficher de secrets)
 	@chmod +x $(ROOT)/scripts/env-check.sh

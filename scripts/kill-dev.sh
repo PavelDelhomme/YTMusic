@@ -48,6 +48,7 @@ case "$MODE" in
   api-only)
     free_one 8787
     pkill -f "tsx watch src/index.ts" 2>/dev/null || true
+    pkill -f "tsx api/src/index.ts" 2>/dev/null || true
     echo "✅ Port API 8787 libéré"
     ;;
   *)
@@ -55,6 +56,7 @@ case "$MODE" in
     free_one 5174
     free_one 8787
     pkill -f "tsx watch src/index.ts" 2>/dev/null || true
+    pkill -f "tsx api/src/index.ts" 2>/dev/null || true
     pkill -f "vite.*(YTMusic|web)" 2>/dev/null || true
     echo "✅ Ports 5173 / 5174 / 8787 libérés"
     ;;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../store/auth';
@@ -9,18 +9,27 @@ export function VerifyEmailPage() {
   const [ok, setOk] = useState(false);
   const init = useAuth((s) => s.init);
   const navigate = useNavigate();
+  const ran = useRef(false);
 
   useEffect(() => {
-    const token = params.get('token');
+    // StrictMode monte 2× en dev — un seul POST
+    if (ran.current) return;
+    ran.current = true;
+
+    const token = params.get('token')?.trim();
     if (!token) {
-      setMsg('Lien invalide');
+      setMsg('Lien invalide — jeton manquant');
       return;
     }
     void api
       .verifyEmail(token)
-      .then(async () => {
+      .then(async (r) => {
         setOk(true);
-        setMsg('Email validé ! Tu peux profiter de toutes les fonctions.');
+        setMsg(
+          (r as { already?: boolean }).already
+            ? 'Email déjà validé — tu peux profiter de toutes les fonctions.'
+            : 'Email validé ! Tu peux profiter de toutes les fonctions.',
+        );
         await init();
         setTimeout(() => navigate('/'), 2000);
       })
