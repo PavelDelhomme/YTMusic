@@ -64,23 +64,23 @@ start_server() {
   echo "  Démarrage API (tsx watch, détaché) → $LOG"
   cd "$ROOT"
   # setsid -f : survit à la fermeture du terminal agent / shell
-  setsid -f npm run dev:server >>"$LOG" 2>&1
-  sleep 0.5
-  # mémorise le PID tsx si possible
+  # Toujours via workspace api (jamais l’ancien dossier server/)
+  setsid -f npm run dev:api >>"$LOG" 2>&1
+  sleep 1.2
   pgrep -n -f "tsx watch src/index.ts" >"$PIDFILE" 2>/dev/null || true
   echo "  PID tsx: $(cat "$PIDFILE" 2>/dev/null || echo '?')"
 }
 
 wait_health() {
   local i
-  for i in $(seq 1 50); do
+  for i in $(seq 1 80); do
     if is_up; then
       echo "✅ API UP sur :$PORT"
       curl -fsS --max-time 2 "$HEALTH_URL" 2>/dev/null | head -c 220 || true
       echo ""
       return 0
     fi
-    sleep 0.35
+    sleep 0.4
   done
   echo "❌ API ne répond pas sur $HEALTH_URL"
   echo "   tail -n 60 $LOG :"

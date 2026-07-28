@@ -280,6 +280,50 @@ app.post('/api/auth/verify-email', async (req, res) => {
   }
 });
 
+/** Lien email cliquable (web + mobile via adb reverse :8787) — pas besoin de Vite. */
+app.get('/verify-email', (req, res) => {
+  const token = String(req.query.token || '');
+  const esc = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const page = (title: string, body: string, ok: boolean) => `<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>${esc(title)} — YTMusic</title>
+<style>
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    font-family:system-ui,sans-serif;background:#030303;color:#fff}
+  .card{max-width:420px;margin:24px;padding:28px;border-radius:16px;border:1px solid #222;background:#121212}
+  h1{margin:0 0 12px;font-size:1.4rem}
+  p{color:#aaa;line-height:1.5}
+  .ok{color:#34d399} .err{color:#f87171}
+  a{color:#ff0033}
+</style></head><body><div class="card">
+  <h1 class="${ok ? 'ok' : 'err'}">${esc(title)}</h1>
+  <p>${body}</p>
+  <p style="margin-top:20px"><a href="/">Retour YTMusic</a></p>
+</div></body></html>`;
+
+  if (!token) {
+    res.status(400).type('html').send(page('Lien invalide', 'Aucun jeton dans l’URL.', false));
+    return;
+  }
+  const userId = consumeEmailToken(token, 'verify');
+  if (!userId) {
+    res.status(400).type('html').send(
+      page('Lien expiré', 'Ce lien de validation n’est plus valide. Demande un nouvel email depuis l’app.', false),
+    );
+    return;
+  }
+  markEmailVerified(userId);
+  const user = findUserById(userId);
+  res.type('html').send(
+    page(
+      'Email validé',
+      `Compte <strong style="color:#fff">${esc(user?.email || '')}</strong> confirmé. Tu peux revenir dans l’app web ou Android.`,
+      true,
+    ),
+  );
+});
+
 app.post('/api/auth/resend-verification', authRequired, async (req, res) => {
   try {
     if (req.user?.isGuest) {
@@ -292,7 +336,13 @@ app.post('/api/auth/resend-verification', authRequired, async (req, res) => {
     }
     const raw = createEmailToken(req.userId!, 'verify');
     await sendVerificationEmail(req.user!.email, req.user!.name, raw);
-    res.json({ ok: true });
+    const { appUrl } = await import('./mail.js');
+    const verifyUrl = `${appUrl()}/verify-email?token=${encodeURIComponent(raw)}`;
+    const env = process.env.APP_ENV || 'local';
+    res.json({
+      ok: true,
+      ...(env !== 'production' ? { verifyUrl, verifyToken: raw } : {}),
+    });
   } catch (err) {
     res.status(400).json({ error: String((err as Error).message || err) });
   }

@@ -4,7 +4,8 @@
   "private": true,
   "description": "YouTube Music — web, API, Android Kotlin & desktop",
   "scripts": {
-    "dev": "concurrently -n api,web -c red,cyan \"npm run dev -w api\" \"npm run dev -w web\"",
+    "dev": "npm run dev:web",
+    "dev:all": "concurrently -n api,web -c red,cyan \"npm run dev -w api\" \"npm run dev -w web\"",
     "dev:api": "npm run dev -w api",
     "dev:server": "npm run dev -w api",
     "dev:web": "npm run dev -w web",

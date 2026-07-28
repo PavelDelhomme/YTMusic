@@ -126,16 +126,25 @@ export async function sendMail(opts: {
 
 export async function sendVerificationEmail(email: string, name: string, rawToken: string) {
   const link = `${appUrl()}/verify-email?token=${encodeURIComponent(rawToken)}`;
+  const apiHint =
+    getAppEnv() === 'local'
+      ? `\n(Sur Android USB : adb reverse tcp:8787 tcp:8787 — le lien ouvre l’API locale.)\n`
+      : '\n';
   return sendMail({
     to: email,
     subject: 'Confirme ton adresse — YTMusic',
-    text: `Salut ${name},\n\nConfirme ton email : ${link}\n\nLien valable 48h.\n\n— YTMusic`,
+    text: `Salut ${name},\n\nConfirme ton email : ${link}${apiHint}\nLien valable 48h.\n\n— YTMusic`,
     html: `
       <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto">
         <h2 style="color:#111">Bienvenue sur YTMusic</h2>
         <p>Salut <strong>${name}</strong>, confirme ton adresse email :</p>
         <p><a href="${link}" style="display:inline-block;background:#ff0033;color:#fff;padding:12px 20px;border-radius:999px;text-decoration:none">Valider mon email</a></p>
         <p style="color:#666;font-size:12px">Ou copie ce lien :<br>${link}</p>
+        ${
+          getAppEnv() === 'local'
+            ? '<p style="color:#666;font-size:12px">Local + téléphone : <code>adb reverse tcp:8787 tcp:8787</code> puis ouvre le lien.</p>'
+            : ''
+        }
         <p style="color:#666;font-size:12px">Envoyé par <strong>YTMusic</strong> via ${cfgDomain()} · ${getAppEnv()}</p>
       </div>`,
   });
