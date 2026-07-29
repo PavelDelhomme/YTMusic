@@ -153,6 +153,10 @@ fun YtMusicAppContent(container: AppContainer) {
                     player.play(tracks, idx)
                     showNowPlaying = false
                 },
+                onPlayNamed = { tracks, idx, title ->
+                    player.play(tracks, idx, title)
+                    showNowPlaying = false
+                },
                 onLoggedOut = { loggedIn = false },
                 onStartRadioFromNowPlaying = {
                     val t = player.state.value.track ?: return@MainTabs
@@ -174,6 +178,7 @@ private fun MainTabs(
     onOpenPlayer: () -> Unit,
     onClosePlayer: () -> Unit,
     onPlayTracks: (List<TrackDto>, Int) -> Unit,
+    onPlayNamed: (List<TrackDto>, Int, String) -> Unit = { tracks, idx, _ -> onPlayTracks(tracks, idx) },
     onLoggedOut: () -> Unit,
     onStartRadioFromNowPlaying: () -> Unit,
 ) {
@@ -290,16 +295,47 @@ private fun MainTabs(
     // Signaux d’écoute pour le moteur de reco
     var lastListenStartId by remember { mutableStateOf<String?>(null) }
     var completedIds by remember { mutableStateOf(setOf<String>()) }
+    var lastProgressSentAt by remember { mutableStateOf(0L) }
+    var skipCandidate by remember {
+        mutableStateOf<Triple<TrackDto, Long, Long>?>(null) // track, pos, dur
+    }
+
     LaunchedEffect(playerUi.track?.id) {
-        val t = playerUi.track ?: return@LaunchedEffect
-        if (t.id == lastListenStartId) return@LaunchedEffect
-        lastListenStartId = t.id
-        runCatching {
-            container.api.listen(ListenBody(t.id, "start", track = t))
+        val next = playerUi.track
+        val prev = skipCandidate
+        if (prev != null && next?.id != prev.first.id) {
+            val (t, pos, dur) = prev
+            val pct = if (dur > 0) pos.toDouble() / dur else 0.0
+            if (t.id !in completedIds && (pct < 0.30 || pos < 15_000L)) {
+                runCatching {
+                    container.api.listen(
+                        ListenBody(
+                            t.id,
+                            "skip",
+                            progressPct = pct,
+                            durationMs = dur,
+                            track = t,
+                        ),
+                    )
+                }
+            }
+        }
+        if (next != null) {
+            skipCandidate = Triple(next, playerUi.positionMs, playerUi.durationMs)
+            if (next.id != lastListenStartId) {
+                lastListenStartId = next.id
+                runCatching {
+                    container.api.listen(ListenBody(next.id, "start", track = next))
+                }
+            }
+        } else {
+            skipCandidate = null
         }
     }
-    LaunchedEffect(playerUi.track?.id, playerUi.positionMs, playerUi.durationMs) {
+
+    LaunchedEffect(playerUi.positionMs, playerUi.durationMs, playerUi.track?.id) {
         val t = playerUi.track ?: return@LaunchedEffect
+        skipCandidate = Triple(t, playerUi.positionMs, playerUi.durationMs)
         if (playerUi.durationMs <= 0 || t.id in completedIds) return@LaunchedEffect
         val pct = playerUi.positionMs.toDouble() / playerUi.durationMs
         if (pct >= 0.85) {
@@ -311,6 +347,35 @@ private fun MainTabs(
                         "complete",
                         progressPct = pct,
                         durationMs = playerUi.durationMs,
+                        track = t,
+                    ),
+                )
+            }
+        }
+    }
+
+    LaunchedEffect(playerUi.playing, playerUi.track?.id) {
+        if (!playerUi.playing || playerUi.track == null) return@LaunchedEffect
+        while (true) {
+            kotlinx.coroutines.delay(15_000)
+            val t = player.state.value.track ?: break
+            val ui = player.state.value
+            if (!ui.playing) break
+            val now = System.currentTimeMillis()
+            if (now - lastProgressSentAt < 12_000) continue
+            lastProgressSentAt = now
+            val pct = if (ui.durationMs > 0) {
+                ui.positionMs.toDouble() / ui.durationMs * 100.0
+            } else {
+                0.0
+            }
+            runCatching {
+                container.api.listen(
+                    ListenBody(
+                        t.id,
+                        "progress",
+                        progressPct = pct,
+                        durationMs = ui.durationMs,
                         track = t,
                     ),
                 )
@@ -391,6 +456,7 @@ private fun MainTabs(
                 HomeScreen(
                     container = container,
                     onPlay = onPlayTracks,
+                    onPlayNamed = onPlayNamed,
                     onMore = { menuTrack = it; menuPlaylistId = null },
                     onOpenDetail = ::openDetail,
                     onOpenRecoPrefs = { nav.navigate("reco_prefs") },

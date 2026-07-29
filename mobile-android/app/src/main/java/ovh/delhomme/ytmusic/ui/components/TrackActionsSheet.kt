@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.material.icons.filled.LibraryAddCheck
 import androidx.compose.material.icons.filled.Mic
@@ -78,6 +79,7 @@ import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.CreatePlaylistBody
 import ovh.delhomme.ytmusic.data.PlaylistDto
+import ovh.delhomme.ytmusic.data.RecoFeedbackBody
 import ovh.delhomme.ytmusic.data.TrackDto
 import ovh.delhomme.ytmusic.data.buildRadioQueue
 import ovh.delhomme.ytmusic.player.PlayerController
@@ -104,20 +106,29 @@ fun TrackActionsSheet(
     var showSleep by remember { mutableStateOf(false) }
     var downloaded by remember { mutableStateOf(false) }
     var albumInLibrary by remember { mutableStateOf(false) }
+    var liked by remember(track.id) { mutableStateOf(track.id in likedIds) }
     val playerUi by player.state.collectAsState()
     val queueIndex = playerUi.queue.indexOfFirst { it.id == track.id }
     val inQueue = queueIndex >= 0
     val isCurrent = inQueue && queueIndex == playerUi.queueIndex
-    val inLibrary = track.id in likedIds ||
+    val inLibrary = liked ||
         (track.isAlbum() && albumInLibrary) ||
         (track.album?.id != null && albumInLibrary && !track.isPlayable())
 
-    LaunchedEffect(track.id) {
+    LaunchedEffect(track.id, likedIds) {
+        liked = track.id in likedIds
         pinned = container.quickAccess.isPinned(track.id)
         runCatching {
             container.ensureFreshToken()
             val lib = container.api.library()
             downloaded = track.id in lib.downloaded
+            val serverLiked = lib.liked.any { it.id == track.id }
+            liked = serverLiked
+            if (serverLiked != (track.id in likedIds)) {
+                onLikedChanged(
+                    if (serverLiked) likedIds + track.id else likedIds - track.id,
+                )
+            }
             val albumId = track.album?.id ?: track.id.takeIf { track.isAlbum() }
             albumInLibrary = albumId != null && lib.albums.any { it.id == albumId }
         }
@@ -128,7 +139,6 @@ fun TrackActionsSheet(
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surface,
     ) {
-        val liked = track.id in likedIds
         val onSurface = MaterialTheme.colorScheme.onSurface
         val muted = MaterialTheme.colorScheme.onSurfaceVariant
 
@@ -169,8 +179,16 @@ fun TrackActionsSheet(
                         scope.launch {
                             runCatching {
                                 val r = container.api.like(track)
+                                liked = r.liked
                                 onLikedChanged(
                                     if (r.liked) likedIds + track.id else likedIds - track.id,
+                                )
+                                container.api.recoFeedback(
+                                    RecoFeedbackBody(
+                                        track.id,
+                                        if (r.liked) "good" else "bad",
+                                        "actions_like",
+                                    ),
                                 )
                             }
                         }
@@ -219,14 +237,25 @@ fun TrackActionsSheet(
         }
 
         if (track.isPlayable()) {
-            SheetAction(Icons.Default.AutoAwesome, "Mix", "Similaires + découverte") {
+            SheetAction(Icons.Default.AutoAwesome, "En rapport", "Mix · similaires + découverte") {
                 scope.launch {
                     runCatching {
                         val mix = buildRadioQueue(container.api, "track", track.id, track)
                         if (mix.isNotEmpty()) {
-                            player.play(mix, 0, title = "Mix")
+                            player.play(mix, 0, title = "En rapport")
                             Toast.makeText(context, "Mix démarré", Toast.LENGTH_SHORT).show()
                         }
+                    }
+                    onDismiss()
+                }
+            }
+            SheetAction(Icons.Default.ThumbDown, "Je n'aime pas", "Signale au moteur de reco") {
+                scope.launch {
+                    runCatching {
+                        container.api.recoFeedback(
+                            RecoFeedbackBody(track.id, "bad", "actions_dislike"),
+                        )
+                        Toast.makeText(context, "Retour enregistré", Toast.LENGTH_SHORT).show()
                     }
                     onDismiss()
                 }
@@ -303,10 +332,12 @@ fun TrackActionsSheet(
             SheetAction(
                 if (liked) Icons.Default.LibraryAddCheck else Icons.Default.LibraryAdd,
                 if (liked) "Dans la bibliothèque" else "Enregistrer dans la bibliothèque",
+                if (liked) "Appuyer pour retirer" else "Ajoute aux titres J'aime",
             ) {
                 scope.launch {
                     runCatching {
                         val r = container.api.like(track)
+                        liked = r.liked
                         onLikedChanged(if (r.liked) likedIds + track.id else likedIds - track.id)
                         Toast.makeText(
                             context,
@@ -423,7 +454,7 @@ fun TrackActionsSheet(
             if (pinned) "Retirer de l'accès rapide" else "Épingler à l'accès rapide",
         ) {
             scope.launch {
-                pinned = container.quickAccess.toggle(track)
+                pinned = container.quickAccess.toggle(track, container.api)
                 Toast.makeText(
                     context,
                     if (pinned) "Épinglé" else "Retiré de l'accès rapide",
@@ -525,22 +556,22 @@ private fun QuickAction(icon: ImageVector, label: String, onClick: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 4.dp)
-            .width(110.dp),
+            .padding(horizontal = 6.dp, vertical = 8.dp)
+            .width(118.dp),
     ) {
         Box(
             Modifier
-                .size(48.dp)
+                .size(56.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface)
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(28.dp))
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
             label,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurface,
             textAlign = TextAlign.Center,
             maxLines = 2,
@@ -560,10 +591,10 @@ private fun SheetAction(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 14.dp),
+            .padding(horizontal = 20.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.onSurface)
+        Icon(icon, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(26.dp))
         Spacer(Modifier.width(18.dp))
         Column {
             Text(

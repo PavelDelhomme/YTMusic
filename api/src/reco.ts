@@ -8,16 +8,17 @@ import {
   listPins,
   listSearchHistory,
 } from './prefs.js';
-import { getHistory, getTopListened } from './library.js';
+import { getForgottenFavorites, getHistory, getTopListened } from './library.js';
 
 export const RADIO_CATEGORIES = [
-  { id: 'focus', title: 'Focus', query: 'focus concentration playlist', mode: 'focus' },
-  { id: 'chill', title: 'Chill', query: 'chill lo-fi playlist', mode: 'radio' },
+  { id: 'focus', title: 'Concentration', query: 'focus concentration playlist', mode: 'focus' },
+  { id: 'chill', title: 'Détente', query: 'chill lo-fi playlist', mode: 'radio' },
   { id: 'workout', title: 'Sport', query: 'workout energy playlist', mode: 'radio' },
-  { id: 'party', title: 'Soirée', query: 'party hits playlist', mode: 'radio' },
-  { id: 'night', title: 'Nuit', query: 'late night jazz chill', mode: 'radio' },
-  { id: 'morning', title: 'Matin', query: 'morning acoustic pop', mode: 'radio' },
-  { id: 'discover', title: 'Découverte', query: 'new music friday indie', mode: 'discover' },
+  { id: 'party', title: 'Fête', query: 'party hits playlist', mode: 'radio' },
+  { id: 'night', title: 'Sommeil', query: 'late night jazz chill', mode: 'radio' },
+  { id: 'morning', title: 'Bonne humeur', query: 'morning acoustic pop', mode: 'radio' },
+  { id: 'discover', title: 'Nouveautés', query: 'new music friday indie', mode: 'discover' },
+  /** Radio seedée sur les tops écoutés — distinct du rayon Accueil « Favoris à redécouvrir ». */
   { id: 'liked-radio', title: 'Radio J’aime', query: '', mode: 'radio' },
 ] as const;
 
@@ -246,6 +247,13 @@ export async function homeReco(userId: string) {
   if (history.length) {
     shelves.push({ title: 'Écouté récemment', items: history.slice(0, 20) });
   }
+
+  // YTM « Favoris à redécouvrir » / Forgotten favorites
+  const forgotten = getForgottenFavorites(userId, 8);
+  if (forgotten.length >= 2) {
+    shelves.push({ title: 'Favoris à redécouvrir', items: forgotten });
+  }
+
   if (top.length >= 3) {
     shelves.push({ title: 'Tes plus écoutés', items: top.slice(0, 20) });
   }

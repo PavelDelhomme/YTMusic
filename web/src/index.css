@@ -118,3 +118,16 @@ html.native-app ::-webkit-scrollbar {
 .progress-range:hover::-webkit-slider-thumb {
   transform: scale(1.15);
 }
+
+/* Zones de clic plus généreuses (mobile / tactile) */
+button:not([disabled]),
+[role='button']:not([aria-disabled='true']) {
+  touch-action: manipulation;
+}
+
+@media (pointer: coarse) {
+  button:not(.no-touch-grow),
+  [role='button'] {
+    min-height: 2.75rem;
+  }
+}

@@ -3,6 +3,7 @@ import { extractThumbs, mapAny, mapListItem, parseAuthorField, artistsFromHeader
 import { getFullLibrary, getHistory } from './library.js';
 import { listFollows, listSearchHistory } from './prefs.js';
 import {
+  dedupeArtists,
   foldText,
   mergeTracks,
   pickTopResult,
@@ -377,10 +378,13 @@ export async function search(
     q,
     personalization,
   );
-  const artists = rankByQuery(
-    mergeTracks(fromArtists.artists, main.artists, personalArtists),
+  const artists = dedupeArtists(
+    rankByQuery(
+      mergeTracks(fromArtists.artists, main.artists, personalArtists),
+      q,
+      personalization,
+    ),
     q,
-    personalization,
   );
   const albums = rankByQuery(mergeTracks(fromAlbums.albums, main.albums), q, personalization);
   const videos = rankByQuery(mergeTracks(main.videos, fromSongs.videos), q, personalization);
@@ -423,7 +427,21 @@ export async function search(
     return { topResult: only[0] || null, songs: [], videos: [], albums: only, artists: [], playlists: [] };
   }
   if (filterNorm === 'artist') {
-    const only = rankByQuery(main.artists, q, personalization);
+    // Préférer les vrais artistes ; si YT renvoie peu, enrichir via topResult / all
+    let only = rankByQuery(main.artists, q, personalization);
+    if (only.length < 3) {
+      const all = await innertubeSearch(q).catch(() => null);
+      if (all) {
+        const extra = collectFromResult(all);
+        const merged = mergeTracks(only, extra.artists);
+        if (extra.topResult?.type === 'artist') merged.unshift(extra.topResult);
+        only = rankByQuery(merged, q, personalization);
+      }
+    }
+    if (main.topResult?.type === 'artist') {
+      only = mergeTracks([main.topResult], only);
+    }
+    only = dedupeArtists(only, q);
     return { topResult: only[0] || null, songs: [], videos: [], albums: [], artists: only, playlists: [] };
   }
   if (filterNorm === 'playlist') {

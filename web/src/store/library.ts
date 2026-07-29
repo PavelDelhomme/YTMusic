@@ -4,8 +4,8 @@ import { api, type LibraryData, type Track } from '../api';
 type LibraryState = LibraryData & {
   loaded: boolean;
   refresh: () => Promise<void>;
-  applyLibrary: (lib: LibraryData) => void;
-  toggleLike: (track: Track) => Promise<void>;
+  applyLibrary: (lib: LibraryData | null | undefined) => void;
+  toggleLike: (track: Track) => Promise<boolean>;
   createPlaylist: (name: string, description?: string) => Promise<import('../api').LibraryPlaylist | void>;
   deletePlaylist: (id: string) => Promise<void>;
   addToPlaylist: (playlistId: string, track: Track) => Promise<void>;
@@ -26,24 +26,64 @@ const empty: LibraryData = {
   downloaded: [],
 };
 
+function mergeLibrary(lib: LibraryData): LibraryData {
+  return {
+    liked: Array.isArray(lib.liked) ? lib.liked : [],
+    likedPlaylists: Array.isArray(lib.likedPlaylists) ? lib.likedPlaylists : [],
+    albums: Array.isArray(lib.albums) ? lib.albums : [],
+    artists: Array.isArray(lib.artists) ? lib.artists : [],
+    playlists: Array.isArray(lib.playlists) ? lib.playlists : [],
+    history: Array.isArray(lib.history) ? lib.history : [],
+    downloaded: Array.isArray(lib.downloaded) ? lib.downloaded : [],
+  };
+}
+
 export const useLibrary = create<LibraryState>((set, get) => ({
   ...empty,
   loaded: false,
 
-  applyLibrary: (lib) => set({ ...empty, ...lib, loaded: true }),
+  applyLibrary: (lib) => {
+    if (!lib || typeof lib !== 'object') return;
+    set({ ...mergeLibrary(lib), loaded: true });
+  },
 
   refresh: async () => {
     try {
       const data = await api.library();
-      set({ ...empty, ...data, loaded: true });
+      set({ ...mergeLibrary(data), loaded: true });
     } catch {
-      set({ ...empty, loaded: true });
+      set({ loaded: true });
     }
   },
 
   toggleLike: async (track) => {
-    const { library } = await api.like(track);
-    get().applyLibrary(library);
+    const wasLiked = get().isLiked(track.id);
+    // Optimiste : l’UI affiche tout de suite « Dans la bibliothèque » / retrait
+    set((s) => ({
+      liked: wasLiked
+        ? s.liked.filter((t) => t.id !== track.id)
+        : [track, ...s.liked.filter((t) => t.id !== track.id)],
+    }));
+    try {
+      const r = await api.like(track);
+      if (r.library) {
+        get().applyLibrary(r.library);
+      } else {
+        set((s) => ({
+          liked: r.liked
+            ? [track, ...s.liked.filter((t) => t.id !== track.id)]
+            : s.liked.filter((t) => t.id !== track.id),
+        }));
+      }
+      return r.liked;
+    } catch {
+      set((s) => ({
+        liked: wasLiked
+          ? [track, ...s.liked.filter((t) => t.id !== track.id)]
+          : s.liked.filter((t) => t.id !== track.id),
+      }));
+      throw new Error('like failed');
+    }
   },
 
   createPlaylist: async (name, description = '') => {
@@ -63,7 +103,6 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   },
 
   recordPlay: async (track: Track) => {
-    // Optimistic: appear instantly even if listen is interrupted
     set((s) => ({
       history: [track, ...s.history.filter((t) => t.id !== track.id)].slice(0, 500),
     }));

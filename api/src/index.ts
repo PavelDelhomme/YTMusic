@@ -95,6 +95,7 @@ import {
   recoAdminStats,
   recordListenEvent,
   removePin,
+  removePinByTarget,
   savePrefs,
   saveWeights,
   unfollowArtist,
@@ -768,12 +769,16 @@ app.get('/api/explore', accountRequired, async (req, res) => {
 
 app.get('/api/search', accountRequired, async (req, res) => {
   try {
-    const q = String(req.query.q || '').trim();
+    const q = String(req.query.q || '').trim().replace(/\s+/g, ' ');
     if (!q) {
       res.status(400).json({ error: 'query requise' });
       return;
     }
-    addSearchHistory(req.userId!, q);
+    const noHistory =
+      req.query.noHistory === '1' ||
+      req.query.noHistory === 'true' ||
+      String(req.query.source || '') === 'prefs';
+    if (!noHistory) addSearchHistory(req.userId!, q);
     res.json(await search(q, String(req.query.filter || 'all'), { userId: req.userId! }));
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -921,7 +926,13 @@ app.post('/api/pins', accountRequired, (req, res) => {
 });
 
 app.delete('/api/pins/:id', accountRequired, (req, res) => {
-  res.json({ pins: removePin(req.userId!, p(req.params.id)) });
+  const id = p(req.params.id);
+  const byId = listPins(req.userId!).find((x) => x.id === id);
+  if (byId) {
+    res.json({ pins: removePin(req.userId!, id) });
+    return;
+  }
+  res.json({ pins: removePinByTarget(req.userId!, id) });
 });
 
 app.post('/api/artists/:id/follow', accountRequired, (req, res) => {

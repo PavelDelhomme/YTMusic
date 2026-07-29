@@ -169,6 +169,47 @@ function uniqById(arr: Track[]): Track[] {
   });
 }
 
+/** Qualité d’une fiche artiste pour départager les doublons. */
+function artistQuality(a: Track, query?: string): number {
+  let q = 0;
+  const id = String(a.id || '');
+  if (id.startsWith('UC')) q += 80; // channel YouTube canonique
+  else if (id.startsWith('MP')) q += 40;
+  if (a.type === 'artist') q += 30;
+  const thumbs = a.thumbnails?.length || 0;
+  q += Math.min(20, thumbs * 4);
+  const bestThumb = Math.max(0, ...(a.thumbnails || []).map((t) => t.width || 0));
+  q += Math.min(25, Math.floor(bestThumb / 40));
+  if (query) q += Math.min(200, scoreSearchItem(a, query));
+  return q;
+}
+
+/**
+ * Déduplique une liste d’artistes : même id OU même nom (foldé).
+ * Garde la meilleure fiche (UC id, thumbs, score vs requête).
+ */
+export function dedupeArtists(items: Track[], query?: string): Track[] {
+  type Slot = { track: Track; name: string };
+  const slots: Slot[] = [];
+
+  for (const raw of items) {
+    if (!raw?.id) continue;
+    const name = foldText(raw.title || raw.artists?.[0]?.name || '');
+    const idx = slots.findIndex(
+      (s) => s.track.id === raw.id || (name.length >= 2 && s.name === name),
+    );
+    if (idx < 0) {
+      slots.push({ track: raw, name });
+      continue;
+    }
+    if (artistQuality(raw, query) > artistQuality(slots[idx].track, query)) {
+      slots[idx] = { track: raw, name: name || slots[idx].name };
+    }
+  }
+
+  return slots.map((s) => s.track);
+}
+
 export function mergeTracks(...lists: Track[][]): Track[] {
   return uniqById(lists.flat());
 }

@@ -288,6 +288,11 @@ export function removePin(userId: string, pinId: string) {
   return listPins(userId);
 }
 
+export function removePinByTarget(userId: string, targetId: string) {
+  db.prepare('DELETE FROM pins WHERE user_id = ? AND target_id = ?').run(userId, targetId);
+  return listPins(userId);
+}
+
 export function addRecoFeedback(opts: {
   userId: string;
   trackId: string;
