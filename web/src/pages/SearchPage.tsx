@@ -59,6 +59,11 @@ export function SearchPage() {
       .finally(() => setLoading(false));
   }, [q, filter]);
 
+  const noteClick = (track: Track) => {
+    if (!q) return;
+    void api.recordSearchClick(q, track);
+  };
+
   if (!q) {
     return (
       <div className="animate-fade-up">
@@ -113,12 +118,39 @@ export function SearchPage() {
 
       {data && (
         <div className="space-y-8">
+          {data.topResult && filter === 'all' && (
+            <section>
+              <h2 className="mb-3 font-display text-xl font-semibold">Meilleur résultat</h2>
+              {data.topResult.type === 'artist' ||
+              data.topResult.type === 'album' ||
+              data.topResult.type === 'playlist' ? (
+                <div className="max-w-xs" onClick={() => noteClick(data.topResult!)}>
+                  <MediaCard item={data.topResult} />
+                </div>
+              ) : (
+                <div
+                  className="rounded-xl bg-[#ff0033]/12 ring-1 ring-[#ff0033]/40"
+                  onClick={() => noteClick(data.topResult!)}
+                >
+                  <TrackRow
+                    track={data.topResult}
+                    queue={data.songs.length ? data.songs : [data.topResult]}
+                    showAlbum
+                    alwaysActions
+                  />
+                </div>
+              )}
+            </section>
+          )}
+
           {data.songs.length > 0 && (filter === 'all' || filter === 'song') && (
             <section>
               <h2 className="mb-3 font-display text-xl font-semibold">Titres</h2>
               <div className="space-y-0.5">
-                {data.songs.slice(0, filter === 'all' ? 8 : 40).map((t) => (
-                  <TrackRow key={t.id} track={t} queue={data.songs} showAlbum />
+                {data.songs.slice(0, filter === 'all' ? 12 : 40).map((t) => (
+                  <div key={t.id} onClick={() => noteClick(t)}>
+                    <TrackRow track={t} queue={data.songs} showAlbum />
+                  </div>
                 ))}
               </div>
             </section>
@@ -129,7 +161,9 @@ export function SearchPage() {
               <h2 className="mb-3 font-display text-xl font-semibold">Artistes</h2>
               <div className="shelf-scroll">
                 {data.artists.map((a) => (
-                  <MediaCard key={a.id} item={{ ...a, type: 'artist' }} />
+                  <div key={a.id} onClick={() => noteClick(a)}>
+                    <MediaCard item={{ ...a, type: 'artist' }} />
+                  </div>
                 ))}
               </div>
             </section>

@@ -1,5 +1,16 @@
 import { Innertube, UniversalCache, ClientType } from 'youtubei.js';
-import { extractThumbs, mapAny, mapListItem, parseAuthorField } from './mappers.js';
+import { extractThumbs, mapAny, mapListItem, parseAuthorField, artistsFromHeader, extractYear } from './mappers.js';
+import { getFullLibrary, getHistory } from './library.js';
+import { listFollows, listSearchHistory } from './prefs.js';
+import {
+  foldText,
+  mergeTracks,
+  pickTopResult,
+  rankByQuery,
+  shelfBucketFromTitle,
+  tokenize,
+  type SearchPersonalization,
+} from './searchRank.js';
 import type { AlbumMeta, ArtistMeta, PlaylistMeta, Shelf, Track } from './types.js';
 
 let yt: Innertube | null = null;
@@ -153,89 +164,280 @@ export async function getExplore(): Promise<Shelf[]> {
   return shelvesFrom(Array.isArray(sections) ? sections : []);
 }
 
-export async function search(query: string, filter?: string) {
-  const innertube = await getYT();
-  const filters =
-    filter && filter !== 'all'
-      ? ({ type: filter } as any)
-      : undefined;
-  const result = await innertube.music.search(query, filters);
+type SearchBuckets = {
+  topResult: Track | null;
+  songs: Track[];
+  videos: Track[];
+  albums: Track[];
+  artists: Track[];
+  playlists: Track[];
+};
 
-  const songs: Track[] = [];
-  const videos: Track[] = [];
-  const albums: Track[] = [];
-  const artists: Track[] = [];
-  const playlists: Track[] = [];
+function emptyBuckets(): SearchBuckets {
+  return { topResult: null, songs: [], videos: [], albums: [], artists: [], playlists: [] };
+}
 
-  const pushMapped = (item: any, bucket: Track[]) => {
-    const mapped = mapAny(item);
-    if (mapped) bucket.push(mapped);
+function collectFromResult(result: any): SearchBuckets {
+  const buckets = emptyBuckets();
+
+  const push = (mapped: Track | null | undefined, forced?: keyof Omit<SearchBuckets, 'topResult'>) => {
+    if (!mapped?.id) return;
+    if (forced) {
+      buckets[forced].push(mapped);
+      return;
+    }
+    if (mapped.type === 'album') buckets.albums.push(mapped);
+    else if (mapped.type === 'artist') buckets.artists.push(mapped);
+    else if (mapped.type === 'playlist') buckets.playlists.push(mapped);
+    else if (mapped.type === 'video') buckets.videos.push(mapped);
+    else buckets.songs.push(mapped);
   };
 
-  const contents = (result as any).contents || [];
+  const contents = result?.contents || [];
   for (const shelf of contents) {
     const title = String(
       shelf?.header?.title?.text || shelf?.title?.text || shelf?.header?.title || '',
-    ).toLowerCase();
+    );
+    const shelfBucket = shelfBucketFromTitle(title);
     const shelfType = String(shelf?.type || '');
     let items = shelf?.contents || shelf?.items || [];
 
-    // MusicCardShelf: top card + nested list items
+    // MusicCardShelf: carte top + liste imbriquée — bucket selon le type mappé
     if (shelfType === 'MusicCardShelf') {
-      if (shelf) pushMapped(shelf, songs);
+      if (shelf) {
+        const card = mapAny(shelf);
+        if (card) {
+          if (card.type === 'artist') push(card, 'artists');
+          else if (card.type === 'album') push(card, 'albums');
+          else if (card.type === 'playlist') push(card, 'playlists');
+          else if (card.type === 'video') push(card, 'videos');
+          else push(card, 'songs');
+          if (!buckets.topResult) buckets.topResult = card;
+        }
+      }
       items = items.filter((i: any) => i?.type === 'MusicResponsiveListItem');
     }
 
     for (const item of items) {
       const mapped = mapAny(item);
       if (!mapped) continue;
-      if (mapped.type === 'album' || title.includes('album')) albums.push(mapped);
-      else if (mapped.type === 'artist' || title.includes('artist')) artists.push(mapped);
-      else if (mapped.type === 'playlist' || title.includes('playlist') || title.includes('communaut'))
-        playlists.push(mapped);
-      else if (mapped.type === 'video' || title.includes('video')) videos.push(mapped);
-      else songs.push(mapped);
+      if (shelfBucket) push(mapped, shelfBucket);
+      else push(mapped);
     }
   }
 
-  // Top result
-  const top = (result as any).header || (result as any).top_result;
-  let topResult: Track | null = null;
-  if (top) topResult = mapAny(top?.contents?.[0] || top) || null;
-
-  // Also try dedicated getters if present
-  for (const key of ['songs', 'videos', 'albums', 'artists', 'playlists'] as const) {
-    const shelf = (result as any)[key];
-    const items = shelf?.contents || shelf?.items || [];
-    const bucket =
-      key === 'songs'
-        ? songs
-        : key === 'videos'
-          ? videos
-          : key === 'albums'
-            ? albums
-            : key === 'artists'
-              ? artists
-              : playlists;
-    for (const item of items) pushMapped(item, bucket);
+  const top = result?.header || result?.top_result;
+  if (top && !buckets.topResult) {
+    buckets.topResult = mapAny(top?.contents?.[0] || top) || null;
   }
 
-  const uniq = (arr: Track[]) => {
-    const seen = new Set<string>();
-    return arr.filter((t) => {
-      if (seen.has(t.id)) return false;
-      seen.add(t.id);
-      return true;
-    });
+  for (const key of ['songs', 'videos', 'albums', 'artists', 'playlists'] as const) {
+    const shelf = result?.[key];
+    const items = shelf?.contents || shelf?.items || [];
+    for (const item of items) {
+      const mapped = mapAny(item);
+      if (mapped) buckets[key].push(mapped);
+    }
+  }
+
+  return buckets;
+}
+
+async function innertubeSearch(query: string, filter?: string) {
+  const innertube = await getYT();
+  const filters =
+    filter && filter !== 'all' ? ({ type: filter } as any) : undefined;
+  return innertube.music.search(query, filters);
+}
+
+function buildSearchPersonalization(userId: string): SearchPersonalization {
+  const artistWeights = new Map<string, number>();
+  const bump = (name: string | undefined | null, w: number) => {
+    const f = foldText(String(name || ''));
+    if (f.length < 2) return;
+    artistWeights.set(f, (artistWeights.get(f) || 0) + w);
   };
+
+  try {
+    for (const f of listFollows(userId)) {
+      bump(f.artist_name, 6);
+      try {
+        const p = JSON.parse(f.payload || '{}');
+        bump(p?.name || p?.title, 4);
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const lib = getFullLibrary(userId);
+    for (const t of lib.liked || []) {
+      for (const a of t.artists || []) bump(a.name, 4);
+    }
+    for (const a of lib.artists || []) bump(a.name || a.title, 5);
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    for (const t of getHistory(userId, 60)) {
+      for (const a of t.artists || []) bump(a.name, 3);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    for (const s of listSearchHistory(userId, 40)) {
+      const qq = String(s.query || '');
+      const toks = tokenize(qq);
+      if (toks.length >= 2) {
+        bump(toks.slice(-2).join(' '), 3);
+        bump(toks.slice(-3).join(' '), 2);
+      }
+      if (toks.length <= 3) bump(qq, 2);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  const artistNames = [...artistWeights.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([n]) => n);
+
+  let trackIds: string[] = [];
+  try {
+    trackIds = getHistory(userId, 80).map((t) => t.id);
+  } catch {
+    trackIds = [];
+  }
+
+  return { artistNames, trackIds };
+}
+
+export async function search(
+  query: string,
+  filter?: string,
+  opts?: { userId?: string },
+) {
+  const q = String(query || '').trim();
+  if (!q) return emptyBuckets();
+
+  const filterNorm = filter && filter !== 'all' ? filter : 'all';
+  const personalization = opts?.userId ? buildSearchPersonalization(opts.userId) : undefined;
+
+  let primary: any;
+  let songExtra: any = null;
+  let artistExtra: any = null;
+  let albumExtra: any = null;
+
+  if (filterNorm === 'all') {
+    [primary, songExtra, artistExtra, albumExtra] = await Promise.all([
+      innertubeSearch(q),
+      innertubeSearch(q, 'song').catch(() => null),
+      innertubeSearch(q, 'artist').catch(() => null),
+      innertubeSearch(q, 'album').catch(() => null),
+    ]);
+  } else {
+    primary = await innertubeSearch(q, filterNorm);
+  }
+
+  const main = collectFromResult(primary);
+  const fromSongs = songExtra ? collectFromResult(songExtra) : emptyBuckets();
+  const fromArtists = artistExtra ? collectFromResult(artistExtra) : emptyBuckets();
+  const fromAlbums = albumExtra ? collectFromResult(albumExtra) : emptyBuckets();
+
+  const personalSongs: Track[] = [];
+  const personalArtists: Track[] = [];
+  if (
+    (filterNorm === 'all' || filterNorm === 'song') &&
+    tokenize(q).length <= 2 &&
+    personalization?.artistNames?.length
+  ) {
+    const hints = personalization.artistNames
+      .filter((name) => name && !foldText(q).includes(name))
+      .slice(0, 3);
+    const extras = await Promise.all(
+      hints.map((name) => innertubeSearch(`${q} ${name}`, 'song').catch(() => null)),
+    );
+    for (const extra of extras) {
+      if (!extra) continue;
+      const b = collectFromResult(extra);
+      personalSongs.push(...b.songs);
+      personalArtists.push(...b.artists);
+    }
+  }
+
+  const songs = rankByQuery(
+    mergeTracks(personalSongs, fromSongs.songs, main.songs, fromSongs.videos.slice(0, 5)),
+    q,
+    personalization,
+  );
+  const artists = rankByQuery(
+    mergeTracks(fromArtists.artists, main.artists, personalArtists),
+    q,
+    personalization,
+  );
+  const albums = rankByQuery(mergeTracks(fromAlbums.albums, main.albums), q, personalization);
+  const videos = rankByQuery(mergeTracks(main.videos, fromSongs.videos), q, personalization);
+  const playlists = rankByQuery(main.playlists, q, personalization);
+
+  const topResult = pickTopResult(
+    q,
+    {
+      topResult: main.topResult || fromSongs.topResult || fromArtists.topResult,
+      songs,
+      artists,
+      albums,
+      videos,
+      playlists,
+    },
+    personalization,
+  );
+
+  if (filterNorm === 'song') {
+    const only = rankByQuery(
+      mergeTracks(personalSongs, main.songs, main.videos),
+      q,
+      personalization,
+    );
+    return {
+      topResult: only[0] || topResult,
+      songs: only,
+      videos: [],
+      albums: [],
+      artists: [],
+      playlists: [],
+    };
+  }
+  if (filterNorm === 'video') {
+    const only = rankByQuery(main.videos.length ? main.videos : main.songs, q, personalization);
+    return { topResult: only[0] || null, songs: [], videos: only, albums: [], artists: [], playlists: [] };
+  }
+  if (filterNorm === 'album') {
+    const only = rankByQuery(main.albums, q, personalization);
+    return { topResult: only[0] || null, songs: [], videos: [], albums: only, artists: [], playlists: [] };
+  }
+  if (filterNorm === 'artist') {
+    const only = rankByQuery(main.artists, q, personalization);
+    return { topResult: only[0] || null, songs: [], videos: [], albums: [], artists: only, playlists: [] };
+  }
+  if (filterNorm === 'playlist') {
+    const only = rankByQuery(main.playlists, q, personalization);
+    return { topResult: only[0] || null, songs: [], videos: [], albums: [], artists: [], playlists: only };
+  }
 
   return {
     topResult,
-    songs: uniq(songs),
-    videos: uniq(videos),
-    albums: uniq(albums),
-    artists: uniq(artists),
-    playlists: uniq(playlists),
+    songs,
+    videos,
+    albums,
+    artists,
+    playlists,
   };
 }
 
@@ -518,16 +720,13 @@ export async function getAlbum(albumId: string): Promise<{
   const album = await innertube.music.getAlbum(albumId);
   const header = (album as any).header || {};
   const cover = extractThumbs(header, album);
-  const meta: AlbumMeta = {
-    id: albumId,
-    title: String(header.title?.text || header.title || 'Album'),
-    year: header.year || header.subtitle?.text,
-    artists: (header.author
-      ? [{ name: String(header.author.name || header.author), id: header.author.channel_id }]
-      : []
-    ),
-    thumbnails: cover,
-  };
+
+  let artists = artistsFromHeader(header);
+  const year =
+    extractYear(header.year) ||
+    extractYear(header.subtitle) ||
+    extractYear(header.second_subtitle) ||
+    undefined;
 
   const contents = (album as any).contents || (album as any).sections?.[0]?.contents || [];
   const tracks = contents
@@ -535,9 +734,43 @@ export async function getAlbum(albumId: string): Promise<{
     .filter(Boolean)
     .map((t: Track) => {
       if (!t.thumbnails?.length && cover.length) t.thumbnails = cover;
-      if (!t.album) t.album = { name: meta.title, id: albumId };
+      if (!t.album) t.album = { name: String(header.title?.text || header.title || 'Album'), id: albumId };
       return t;
     }) as Track[];
+
+  // Fallback : artistes les plus fréquents dans les pistes
+  if (!artists.length) {
+    const counts = new Map<string, { name: string; id?: string; n: number }>();
+    for (const t of tracks) {
+      for (const a of t.artists || []) {
+        if (!a.name) continue;
+        const key = (a.id || a.name).toLowerCase();
+        const cur = counts.get(key);
+        if (cur) cur.n += 1;
+        else counts.set(key, { name: a.name, id: a.id, n: 1 });
+      }
+    }
+    artists = [...counts.values()]
+      .sort((a, b) => b.n - a.n)
+      .slice(0, 4)
+      .map(({ name, id }) => ({ name, id }));
+  }
+
+  // Enrichir les pistes sans artiste
+  if (artists.length) {
+    for (const t of tracks) {
+      if (!t.artists?.length) t.artists = artists;
+    }
+  }
+
+  const meta: AlbumMeta = {
+    id: albumId,
+    title: String(header.title?.text || header.title || 'Album'),
+    year,
+    artists,
+    thumbnails: cover,
+  };
+
   return { album: meta, tracks };
 }
 
@@ -550,10 +783,14 @@ export async function getPlaylist(playlistId: string): Promise<{
   const playlist = await innertube.music.getPlaylist(id);
   const header = (playlist as any).header || {};
   const cover = extractThumbs(header, playlist);
+  const fromHeaderArtists = artistsFromHeader(header);
   const meta: PlaylistMeta = {
     id: playlistId,
     title: String(header.title?.text || header.title || 'Playlist'),
-    author: header.author?.name || header.subtitle?.text,
+    author:
+      (typeof header.author === 'string' ? header.author : header.author?.name) ||
+      fromHeaderArtists[0]?.name ||
+      undefined,
     trackCount: header.second_subtitle?.text || header.song_count,
     thumbnails: cover,
     description: header.description?.text,

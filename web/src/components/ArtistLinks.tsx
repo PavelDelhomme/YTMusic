@@ -7,15 +7,19 @@ export function ArtistLinks({
   className = '',
   separator = ', ',
   onArtistClick,
+  emptyLabel = 'Artiste',
 }: {
   track: Track | { artists?: { name: string; id?: string }[] };
   className?: string;
   separator?: string;
   onArtistClick?: (id: string) => void;
+  emptyLabel?: string;
 }) {
-  const artists = track.artists || [];
+  const artists = (track.artists || []).filter(
+    (a) => a?.name && !/^(inconnu|unknown|n\/a)$/i.test(a.name.trim()),
+  );
   if (!artists.length) {
-    return <span className={className}>Artiste inconnu</span>;
+    return emptyLabel ? <span className={className}>{emptyLabel}</span> : null;
   }
 
   return (

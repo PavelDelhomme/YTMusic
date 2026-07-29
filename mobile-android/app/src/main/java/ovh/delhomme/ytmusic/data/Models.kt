@@ -63,19 +63,35 @@ data class TrackDto(
     val thumbnails: List<Thumb>? = emptyList(),
     val type: String? = "song",
 ) {
-    fun artistLine(): String =
-        artists?.joinToString(", ") { it.name }?.ifBlank { "Artiste" } ?: "Artiste"
+    fun artistLine(): String {
+        val names = artists?.mapNotNull { it.name.trim().takeIf { n -> n.isNotEmpty() } }
+            ?.filter { !it.equals("Inconnu", true) && !it.equals("Unknown", true) }
+            .orEmpty()
+        return names.joinToString(", ").ifBlank { "Artiste" }
+    }
 
     fun coverUrl(sizeHint: Int = 400): String? {
         val sorted = thumbnails?.sortedByDescending { it.width ?: 0 }.orEmpty()
-        return sorted.firstOrNull()?.url
-            ?: if (id.matches(Regex("^[a-zA-Z0-9_-]{11}$"))) {
-                "https://i.ytimg.com/vi/$id/hqdefault.jpg"
-            } else null
+        val fromThumbs = sorted.firstOrNull()?.url
+            ?: thumbnails?.firstOrNull()?.url
+        if (!fromThumbs.isNullOrBlank()) return fromThumbs
+        return if (id.matches(Regex("^[a-zA-Z0-9_-]{11}$"))) {
+            "https://i.ytimg.com/vi/$id/hqdefault.jpg"
+        } else {
+            null
+        }
     }
 
+    fun kind(): String = (type ?: "song").lowercase()
+
+    fun isPlaylist(): Boolean = kind() in setOf("playlist", "community_playlist")
+
+    fun isArtist(): Boolean = kind() == "artist"
+
+    fun isAlbum(): Boolean = kind() == "album"
+
     fun isPlayable(): Boolean =
-        type in setOf("song", "video", "unknown", null) &&
+        !isPlaylist() && !isArtist() && !isAlbum() &&
             id.matches(Regex("^[a-zA-Z0-9_-]{11}$"))
 }
 

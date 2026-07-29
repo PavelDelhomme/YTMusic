@@ -3,8 +3,9 @@ import { startRegistration } from '@simplewebauthn/browser';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api';
 import { useAuth } from '../store/auth';
-import { Fingerprint, KeyRound, Shield, Smartphone, Trash2 } from 'lucide-react';
+import { Fingerprint, KeyRound, Shield, Smartphone, Sparkles, Trash2 } from 'lucide-react';
 import type { User } from '../api';
+import { OnboardingWizard } from '../components/OnboardingWizard';
 
 function TwoFactorSection({ user, onUpdated }: { user: User; onUpdated: () => Promise<void> }) {
   const [secret, setSecret] = useState<string | null>(null);
@@ -132,6 +133,7 @@ export function ProfilePage() {
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [deployUrl, setDeployUrl] = useState('');
+  const [editReco, setEditReco] = useState(false);
 
   const isGuest = !user || user.isGuest || user.email.includes('@local.ytmusic');
 
@@ -239,7 +241,36 @@ export function ProfilePage() {
             </form>
           </section>
 
+          <section className="mb-8 rounded-2xl border border-yt-border bg-yt-surface p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-yt-red" />
+              <h2 className="font-display text-lg font-semibold">Recommandations</h2>
+            </div>
+            <p className="mb-4 text-sm text-yt-muted">
+              Affiner genres, ambiances, moments d’écoute, biais découverte et artistes suivis —
+              ça recalibre l’accueil, Explorer et la radio.
+            </p>
+            <button
+              type="button"
+              className="rounded-full bg-yt-red px-5 py-2 text-sm font-medium"
+              onClick={() => setEditReco(true)}
+            >
+              Affiner mes recommandations
+            </button>
+          </section>
+
           <TwoFactorSection user={user} onUpdated={init} />
+
+          {editReco && (
+            <OnboardingWizard
+              mode="edit"
+              onCancel={() => setEditReco(false)}
+              onDone={() => {
+                setEditReco(false);
+                setMsg('Recommandations mises à jour');
+              }}
+            />
+          )}
 
           <section className="mb-8 rounded-2xl border border-yt-border bg-yt-surface p-5">
             <div className="mb-4 flex items-center gap-2">

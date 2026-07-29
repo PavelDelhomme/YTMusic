@@ -1,11 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="yt_bg">#FF030303</color>
+    <color name="yt_bg">#FF0A0A0A</color>
+    <color name="yt_surface">#FF1A1A1A</color>
+    <color name="yt_elevated">#FF282828</color>
     <color name="yt_red">#FFFF0033</color>
+    <color name="yt_muted">#FFB3B3B3</color>
+
     <style name="Theme.YTMusic" parent="android:Theme.Material.NoActionBar">
         <item name="android:statusBarColor">@color/yt_bg</item>
         <item name="android:navigationBarColor">@color/yt_bg</item>
         <item name="android:windowBackground">@color/yt_bg</item>
         <item name="android:colorPrimary">@color/yt_red</item>
+    </style>
+
+    <style name="Theme.YTMusic.Splash" parent="Theme.YTMusic">
+        <item name="android:windowBackground">@drawable/splash_background</item>
     </style>
 </resources>

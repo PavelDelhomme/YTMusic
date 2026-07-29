@@ -1,6 +1,9 @@
 package ovh.delhomme.ytmusic.ui.home
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -8,6 +11,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -16,114 +20,302 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
+import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.TrackDto
+import ovh.delhomme.ytmusic.ui.components.AccountSheet
+import ovh.delhomme.ytmusic.ui.components.AppTopBar
+import ovh.delhomme.ytmusic.ui.components.HistorySheet
+import ovh.delhomme.ytmusic.ui.components.MediaCover
 import ovh.delhomme.ytmusic.ui.components.TrackRow
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     container: AppContainer,
     onPlay: (List<TrackDto>, Int) -> Unit,
+    onMore: (TrackDto) -> Unit,
+    onOpenDetail: (TrackDto) -> Unit,
+    onOpenRecoPrefs: () -> Unit = {},
+    onLoggedOut: () -> Unit = {},
     vm: HomeViewModel = viewModel(factory = HomeViewModel.factory(container)),
 ) {
     val state by vm.state.collectAsState()
+    val pins by container.quickAccess.pins.collectAsState(initial = emptyList())
+    val scope = rememberCoroutineScope()
+    var showAccount by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
+    var userPicture by remember { mutableStateOf<String?>(null) }
 
-    when {
-        state.loading && state.shelves.isEmpty() -> {
-            Column(
-                Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                CircularProgressIndicator()
+    LaunchedEffect(Unit) {
+        userPicture = runCatching {
+            container.ensureFreshToken()
+            container.api.me().user?.picture
+        }.getOrNull()
+    }
+
+    fun playItem(item: TrackDto, shelfItems: List<TrackDto>) {
+        if (item.isPlaylist() || item.isAlbum() || item.isArtist()) {
+            onOpenDetail(item)
+            return
+        }
+        scope.launch {
+            if (item.isPlayable()) {
+                val list = shelfItems.filter { it.isPlayable() }.ifEmpty { listOf(item) }
+                val idx = list.indexOfFirst { it.id == item.id }.coerceAtLeast(0)
+                onPlay(list, idx)
+            } else {
+                onOpenDetail(item)
             }
         }
-        state.error != null && state.shelves.isEmpty() -> {
-            Column(
-                Modifier.fillMaxSize().padding(24.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(state.error!!, color = MaterialTheme.colorScheme.error)
-                TextButton(onClick = vm::refresh) { Text("Réessayer") }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        AppTopBar(
+            title = "Music",
+            showBrandLogo = true,
+            userPictureUrl = userPicture,
+            onAccountClick = { showAccount = true },
+        )
+
+        when {
+            state.loading && state.shelves.isEmpty() -> {
+                Column(
+                    Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    CircularProgressIndicator()
+                }
             }
-        }
-        else -> {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 96.dp),
-            ) {
+            state.error != null && state.shelves.isEmpty() -> {
+                Column(
+                    Modifier.fillMaxSize().padding(24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(state.error!!, color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = vm::refresh) { Text("Réessayer") }
+                }
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 24.dp),
+                ) {
                 item {
-                    Text(
-                        "Accueil",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(16.dp),
+                    QuickAccessHomeCard(
+                        pins = pins,
+                        onPlayItem = { playItem(it, pins.filter { p -> p.isPlayable() }) },
+                        onOpenDetail = onOpenDetail,
+                        onMore = onMore,
                     )
                 }
+
                 items(state.shelves, key = { it.title }) { shelf ->
+                    val items = shelf.items
+                    val mostlyCards = items.count {
+                        it.isPlaylist() || it.isAlbum() || it.isArtist()
+                    } >= items.size / 2 && items.isNotEmpty()
+
                     Text(
                         shelf.title,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                     )
-                    if (shelf.items.size > 4 && shelf.items.take(6).all { it.isPlayable() }) {
+
+                    if (mostlyCards || items.size > 5) {
                         Row(
                             Modifier
                                 .horizontalScroll(rememberScrollState())
                                 .padding(horizontal = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            shelf.items.filter { it.isPlayable() }.take(12).forEach { track ->
+                            items.take(16).forEach { track ->
                                 Column(
                                     Modifier
-                                        .width(128.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            val (list, idx) = vm.playableFrom(track, shelf)
-                                            onPlay(list, idx)
-                                        }
+                                        .width(140.dp)
+                                        .combinedClickable(
+                                            onClick = { playItem(track, items) },
+                                            onLongClick = { onMore(track) },
+                                        )
                                         .padding(4.dp),
                                 ) {
-                                    AsyncImage(
-                                        model = track.coverUrl(300),
-                                        contentDescription = track.title,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .size(120.dp)
-                                            .clip(RoundedCornerShape(8.dp)),
+                                    MediaCover(
+                                        track,
+                                        132.dp,
+                                        circle = track.isArtist(),
                                     )
-                                    Spacer(Modifier.height(6.dp))
-                                    Text(track.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        track.title,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onBackground,
+                                    )
+                                    Text(
+                                        when {
+                                            track.isPlaylist() -> "Playlist"
+                                            track.isAlbum() -> "Album"
+                                            track.isArtist() -> "Artiste"
+                                            else -> track.artistLine()
+                                        },
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
                                 }
                             }
                         }
-                        Spacer(Modifier.height(12.dp))
+                        Spacer(Modifier.height(16.dp))
                     } else {
-                        shelf.items.filter { it.isPlayable() }.take(8).forEach { track ->
-                            TrackRow(track = track, onClick = {
-                                val (list, idx) = vm.playableFrom(track, shelf)
-                                onPlay(list, idx)
-                            })
+                        items.take(10).forEach { track ->
+                            TrackRow(
+                                track = track,
+                                onClick = { playItem(track, items) },
+                                onMore = { onMore(track) },
+                            )
                         }
                         Spacer(Modifier.height(8.dp))
+                    }
+                }
+                }
+            }
+        }
+    }
+
+    if (showAccount) {
+        AccountSheet(
+            container = container,
+            onDismiss = { showAccount = false },
+            onOpenRecoPrefs = onOpenRecoPrefs,
+            onOpenHistory = { showHistory = true },
+            onLoggedOut = onLoggedOut,
+        )
+    }
+    if (showHistory) {
+        HistorySheet(
+            container = container,
+            onDismiss = { showHistory = false },
+            onPlay = onPlay,
+            onMore = onMore,
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun QuickAccessHomeCard(
+    pins: List<TrackDto>,
+    onPlayItem: (TrackDto) -> Unit,
+    onOpenDetail: (TrackDto) -> Unit,
+    onMore: (TrackDto) -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(vertical = 12.dp),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                Icons.Default.PushPin,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                "Accès rapide",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Text(
+            if (pins.isEmpty()) {
+                "Épingle titres, playlists ou artistes depuis le menu ⋮"
+            } else {
+                "${pins.size} épinglé${if (pins.size > 1) "s" else ""}"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+        )
+
+        if (pins.isEmpty()) {
+            Text(
+                "Rien d'épinglé pour l'instant",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            )
+        } else {
+            Row(
+                Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                pins.take(16).forEach { track ->
+                    Column(
+                        Modifier
+                            .width(108.dp)
+                            .combinedClickable(
+                                onClick = {
+                                    if (track.isPlaylist() || track.isAlbum() || track.isArtist()) {
+                                        onOpenDetail(track)
+                                    } else {
+                                        onPlayItem(track)
+                                    }
+                                },
+                                onLongClick = { onMore(track) },
+                            )
+                            .padding(4.dp),
+                    ) {
+                        MediaCover(track, 100.dp, circle = track.isArtist())
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            track.title,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                        )
                     }
                 }
             }

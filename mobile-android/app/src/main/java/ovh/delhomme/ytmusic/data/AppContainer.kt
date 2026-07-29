@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit
 
 class AppContainer(context: Context) {
     val tokenStore = TokenStore(context.applicationContext)
+    val quickAccess = QuickAccessStore(context.applicationContext)
     val deviceId: String by lazy {
         val prefs = context.getSharedPreferences("ytm_device", Context.MODE_PRIVATE)
         prefs.getString("id", null) ?: UUID.randomUUID().toString().also {

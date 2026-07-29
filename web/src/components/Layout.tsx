@@ -10,6 +10,7 @@ import {
   Settings2,
   Upload,
   UserRound,
+  X,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { PlayerBar } from './PlayerBar';
@@ -17,6 +18,7 @@ import { QueuePanel } from './QueuePanel';
 import { AuthModal } from './AuthModal';
 import { DevicePicker } from './DevicePicker';
 import { InstallBanner } from './InstallBanner';
+import { ItemActionsSheet } from './ItemActionsSheet';
 import { NowPlaying, type NowPlayingTab } from './NowPlaying';
 import { OnboardingWizard } from './OnboardingWizard';
 import { BrandLogo } from './BrandLogo';
@@ -25,6 +27,7 @@ import { usePlayer, wireRemotePlayer, reportListenProgress, flushPlayerPersist }
 import { useAuth } from '../store/auth';
 import { useSession } from '../store/session';
 import { api } from '../api';
+import { installMediaKeys } from '../lib/mediaKeys';
 
 const links = [
   { to: '/', label: 'Accueil', icon: Home },
@@ -125,6 +128,9 @@ export function Layout() {
   useEffect(() => {
     bindAudio(audioRef.current);
   }, [bindAudio]);
+
+  // Play/pause, suivant, précédent : clavier + touches média OS, toutes pages
+  useEffect(() => installMediaKeys(), []);
 
   useEffect(() => {
     const t = setTimeout(() => void hydrate(), 50);
@@ -310,9 +316,39 @@ export function Layout() {
                   setOpenSug(true);
                 }}
                 onFocus={() => setOpenSug(true)}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Escape') return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setOpenSug(false);
+                  setSuggestions([]);
+                  if (q) setQ('');
+                }}
+                onBlur={() => {
+                  // Laisse le temps au clic sur une suggestion
+                  window.setTimeout(() => setOpenSug(false), 120);
+                }}
                 placeholder="Rechercher titres, albums, artistes…"
-                className="w-full rounded-full border border-yt-border bg-yt-surface py-2.5 pl-10 pr-4 text-sm outline-none transition focus:border-white/30"
+                className={`w-full rounded-full border border-yt-border bg-yt-surface py-2.5 pl-10 text-sm outline-none transition focus:border-white/30 ${
+                  q ? 'pr-10' : 'pr-4'
+                }`}
+                aria-label="Recherche"
               />
+              {q ? (
+                <button
+                  type="button"
+                  aria-label="Effacer la recherche"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-yt-muted transition hover:bg-white/10 hover:text-white"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    setQ('');
+                    setSuggestions([]);
+                    setOpenSug(false);
+                  }}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              ) : null}
               {openSug && suggestions.length > 0 && (
                 <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-xl border border-yt-border bg-yt-elevated shadow-2xl">
                   {suggestions.map((s) => (
@@ -452,6 +488,7 @@ export function Layout() {
         />
       )}
       <DevicePicker open={devicesOpen} onClose={() => setDevicesOpen(false)} />
+      <ItemActionsSheet />
 
       <audio
         ref={audioRef}

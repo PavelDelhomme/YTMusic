@@ -6,16 +6,19 @@ import { ShelfRow } from '../components/MediaCard';
 import { CoverImage } from '../components/CoverImage';
 import { usePlayer } from '../store/player';
 import { useLibrary } from '../store/library';
-import { Play, Download, Library, Heart } from 'lucide-react';
+import { Play, Download, Library, Heart, Radio } from 'lucide-react';
 import { ArtistLinks } from '../components/ArtistLinks';
+import { BackButton } from '../components/BackButton';
 
 export function ArtistPage() {
   const { id = '' } = useParams();
   const [data, setData] = useState<Awaited<ReturnType<typeof api.artist>> | null>(null);
   const [radio, setRadio] = useState<Track[]>([]);
   const playQueue = usePlayer((s) => s.playQueue);
+  const startRadio = usePlayer((s) => s.startRadio);
   const { hasArtist, applyLibrary } = useLibrary();
   const [busy, setBusy] = useState(false);
+  const [radioBusy, setRadioBusy] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -24,15 +27,24 @@ export function ArtistPage() {
     api.artistRadio(id).then((r) => setRadio(r.tracks)).catch(() => setRadio([]));
   }, [id]);
 
-  if (!data) return <p className="text-yt-muted">Chargement…</p>;
+  if (!data) {
+    return (
+      <div>
+        <BackButton />
+        <p className="text-yt-muted">Chargement…</p>
+      </div>
+    );
+  }
   const inLib = hasArtist(data.artist.id);
 
   return (
     <div className="animate-fade-up">
+      <BackButton />
       <div className="mb-8 flex flex-col items-start gap-6 sm:flex-row sm:items-end">
         <div className="h-40 w-40 shrink-0 shadow-2xl sm:h-52 sm:w-52">
           <CoverImage item={data.artist} size={800} rounded="full" />
-        </div>        <div>
+        </div>
+        <div>
           <p className="text-xs uppercase tracking-widest text-yt-muted">Artiste</p>
           <h1 className="font-display text-4xl font-semibold tracking-tight sm:text-5xl">{data.artist.name}</h1>
           {data.artist.subscribers && <p className="mt-2 text-sm text-yt-muted">{data.artist.subscribers}</p>}
@@ -46,6 +58,23 @@ export function ArtistPage() {
                 <Play className="h-4 w-4 fill-white" /> Lecture
               </button>
             )}
+            <button
+              type="button"
+              disabled={radioBusy}
+              onClick={() => {
+                setRadioBusy(true);
+                void startRadio({
+                  kind: 'artist',
+                  id: data.artist.id,
+                  seed: data.songs[0],
+                }).finally(() => setRadioBusy(false));
+              }}
+              className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-4 py-2.5 text-sm text-yt-muted hover:text-white disabled:opacity-60"
+              title="Radio artiste — titres similaires liés à cet artiste"
+            >
+              <Radio className="h-4 w-4" />
+              {radioBusy ? 'Radio…' : 'Radio'}
+            </button>
             <button
               type="button"
               disabled={busy || inLib}
@@ -114,7 +143,9 @@ export function AlbumPage() {
   const [data, setData] = useState<Awaited<ReturnType<typeof api.album>> | null>(null);
   const [radio, setRadio] = useState<Track[]>([]);
   const playQueue = usePlayer((s) => s.playQueue);
+  const startRadio = usePlayer((s) => s.startRadio);
   const { hasAlbum, applyLibrary } = useLibrary();
+  const [radioBusy, setRadioBusy] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -122,7 +153,14 @@ export function AlbumPage() {
     api.albumRadio(id).then((r) => setRadio(r.tracks)).catch(() => setRadio([]));
   }, [id]);
 
-  if (!data) return <p className="text-yt-muted">Chargement…</p>;
+  if (!data) {
+    return (
+      <div>
+        <BackButton />
+        <p className="text-yt-muted">Chargement…</p>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -131,14 +169,31 @@ export function AlbumPage() {
         title={data.album.title}
         subtitle={
           <>
-            <ArtistLinks track={{ artists: data.album.artists }} />
-            {data.album.year ? ` · ${data.album.year}` : ''}
+            <ArtistLinks
+              track={{ artists: data.album.artists }}
+              emptyLabel={data.album.year ? undefined : 'Album'}
+            />
+            {data.album.year ? (
+              <>
+                {data.album.artists?.length ? ' · ' : ''}
+                {data.album.year}
+              </>
+            ) : null}
           </>
         }
         cover={data.album}
         tracks={data.tracks}
         inLibrary={hasAlbum(data.album.id)}
         onPlay={() => void playQueue(data.tracks, 0)}
+        onRadio={() => {
+          setRadioBusy(true);
+          void startRadio({
+            kind: 'album',
+            id: data.album.id,
+            seed: data.tracks.find((t) => t.id?.length === 11) || data.tracks[0],
+          }).finally(() => setRadioBusy(false));
+        }}
+        radioBusy={radioBusy}
         onAddLibrary={async () => {
           const r = await api.import({ kind: 'album', id: data.album.id });
           applyLibrary(r.library);
@@ -168,13 +223,20 @@ export function PlaylistPage() {
     api.playlist(id).then(setData).catch(console.error);
   }, [id]);
 
-  if (!data) return <p className="text-yt-muted">Chargement…</p>;
+  if (!data) {
+    return (
+      <div>
+        <BackButton />
+        <p className="text-yt-muted">Chargement…</p>
+      </div>
+    );
+  }
 
   return (
     <CollectionHeader
       kind="Playlist"
       title={data.playlist.title}
-      subtitle={[data.playlist.author, data.playlist.trackCount].filter(Boolean).join(' · ')}
+      subtitle={[data.playlist.author, data.playlist.trackCount].filter(Boolean).join(' · ') || 'Playlist'}
       cover={data.playlist}
       tracks={data.tracks}
       liked={isPlaylistLiked(data.playlist.id)}
@@ -205,6 +267,8 @@ function CollectionHeader({
   cover,
   tracks,
   onPlay,
+  onRadio,
+  radioBusy,
   onAddLibrary,
   onOffline,
   onLike,
@@ -217,6 +281,8 @@ function CollectionHeader({
   cover: { thumbnails?: Track['thumbnails']; title?: string; name?: string };
   tracks: Track[];
   onPlay: () => void;
+  onRadio?: () => void;
+  radioBusy?: boolean;
   onAddLibrary?: () => Promise<void>;
   onOffline?: () => void;
   onLike?: () => Promise<void>;
@@ -227,10 +293,12 @@ function CollectionHeader({
 
   return (
     <div className="animate-fade-up">
+      <BackButton />
       <div className="mb-8 flex flex-col gap-6 sm:flex-row sm:items-end">
         <div className="h-44 w-44 shrink-0 shadow-2xl sm:h-56 sm:w-56">
           <CoverImage item={{ ...cover, title: cover.title || title }} size={800} rounded="lg" />
-        </div>        <div>
+        </div>
+        <div>
           <p className="text-xs uppercase tracking-widest text-yt-muted">{kind}</p>
           <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-5xl">{title}</h1>
           <p className="mt-2 text-sm text-yt-muted">{subtitle}</p>
@@ -242,6 +310,18 @@ function CollectionHeader({
             >
               <Play className="h-4 w-4 fill-white" /> Lecture
             </button>
+            {onRadio && (
+              <button
+                type="button"
+                disabled={radioBusy}
+                onClick={onRadio}
+                className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-4 py-2.5 text-sm text-yt-muted hover:text-white disabled:opacity-60"
+                title={`Radio ${kind.toLowerCase()} — enchaîne des titres similaires`}
+              >
+                <Radio className="h-4 w-4" />
+                {radioBusy ? 'Radio…' : 'Radio'}
+              </button>
+            )}
             {onAddLibrary && (
               <button
                 type="button"

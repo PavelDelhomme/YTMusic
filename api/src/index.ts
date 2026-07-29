@@ -774,7 +774,7 @@ app.get('/api/search', accountRequired, async (req, res) => {
       return;
     }
     addSearchHistory(req.userId!, q);
-    res.json(await search(q, String(req.query.filter || 'all')));
+    res.json(await search(q, String(req.query.filter || 'all'), { userId: req.userId! }));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

@@ -4,6 +4,7 @@ import { TrackRow } from '../components/TrackRow';
 import { usePlayer } from '../store/player';
 import { Play } from 'lucide-react';
 import { CoverImage } from '../components/CoverImage';
+import { BackButton } from '../components/BackButton';
 
 export function LocalPlaylistPage() {
   const { id = '' } = useParams();
@@ -11,10 +12,18 @@ export function LocalPlaylistPage() {
   const playQueue = usePlayer((s) => s.playQueue);
   const pl = playlists.find((p) => p.id === id);
 
-  if (!pl) return <p className="text-yt-muted">Playlist introuvable.</p>;
+  if (!pl) {
+    return (
+      <div>
+        <BackButton fallback="/library" />
+        <p className="text-yt-muted">Playlist introuvable.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="animate-fade-up">
+      <BackButton fallback="/library" />
       <div className="mb-8 flex flex-col gap-6 sm:flex-row sm:items-end">
         <div className="h-44 w-44 shrink-0 shadow-2xl sm:h-56 sm:w-56">
           <CoverImage

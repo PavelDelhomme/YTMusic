@@ -39,9 +39,18 @@ type PlayerState = {
   addNext: (track: Track) => void;
   addToQueue: (track: Track) => void;
   moveInQueue: (fromIndex: number, toIndex: number) => void;
+  removeFromQueue: (index: number) => void;
   appendRelated: (tracks: Track[]) => void;
   clearQueue: () => void;
   startMix: (track: Track) => Promise<void>;
+  /** Radio style YTM : depuis un titre, album ou artiste. */
+  startRadio: (opts: {
+    kind: 'track' | 'album' | 'artist';
+    id: string;
+    seed?: Track;
+    /** Si true, favorise les titres du même artiste (quand kind=track). */
+    stayClose?: boolean;
+  }) => Promise<void>;
   hydrate: () => Promise<void>;
   applyRemoteState: (state: Partial<PlayerState> & { current?: Track | null }, playAudio?: boolean) => Promise<void>;
   loadRelated: (trackId: string) => Promise<void>;
@@ -100,12 +109,32 @@ function setupMediaSession(
         ]
       : [],
   });
-  navigator.mediaSession.setActionHandler('play', handlers.play);
-  navigator.mediaSession.setActionHandler('pause', handlers.pause);
-  navigator.mediaSession.setActionHandler('previoustrack', handlers.prev);
-  navigator.mediaSession.setActionHandler('nexttrack', handlers.next);
-  navigator.mediaSession.setActionHandler('seekto', (details) => {
+  const set = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+    try {
+      navigator.mediaSession.setActionHandler(action, handler);
+    } catch {
+      /* ignore */
+    }
+  };
+  set('play', handlers.play);
+  set('pause', handlers.pause);
+  set('stop', handlers.pause);
+  set('previoustrack', handlers.prev);
+  set('nexttrack', handlers.next);
+  set('seekto', (details) => {
     if (typeof details.seekTime === 'number') handlers.seek(details.seekTime);
+  });
+  set('seekbackward', (details) => {
+    const audio = usePlayer.getState().audioEl;
+    if (!audio) return;
+    const off = details.seekOffset ?? 10;
+    handlers.seek(Math.max(0, audio.currentTime - off));
+  });
+  set('seekforward', (details) => {
+    const audio = usePlayer.getState().audioEl;
+    if (!audio) return;
+    const off = details.seekOffset ?? 10;
+    handlers.seek(Math.min(audio.duration || audio.currentTime + off, audio.currentTime + off));
   });
 }
 
@@ -888,6 +917,18 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     publish();
   },
 
+  removeFromQueue: (index) => {
+    set((s) => {
+      if (index < 0 || index >= s.queue.length) return s;
+      // Ne pas retirer le titre en cours via cette action (utiliser next)
+      if (index === s.queueIndex) return s;
+      const q = s.queue.filter((_, i) => i !== index);
+      const qi = index < s.queueIndex ? s.queueIndex - 1 : s.queueIndex;
+      return { queue: q, queueIndex: Math.max(0, Math.min(qi, q.length - 1)) };
+    });
+    publish();
+  },
+
   appendRelated: (tracks) => {
     set((s) => {
       const ids = new Set(s.queue.map((t) => t.id));
@@ -903,18 +944,107 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
 
   startMix: async (track) => {
+    await get().startRadio({ kind: 'track', id: track.id, seed: track });
+  },
+
+  startRadio: async ({ kind, id, seed, stayClose }) => {
     set({ isLoading: true, showQueue: true, showLyrics: false });
     try {
-      const { radio, related } = await api.related(track.id);
-      const pool = (radio.length ? radio : related).filter(
-        (t) => t.id !== track.id && isPlayable(t),
-      );
-      const mix = [track, ...pool];
+      let seedTrack: Track | null = seed && isPlayable(seed) ? seed : null;
+      let pool: Track[] = [];
+
+      if (kind === 'track') {
+        const trackId = id;
+        const [rel, up, sim] = await Promise.all([
+          api.related(trackId).catch(() => ({ related: [] as Track[], radio: [] as Track[] })),
+          api.upNext(trackId).catch(() => ({ tracks: [] as Track[] })),
+          api.recoSimilar(trackId).catch(() => ({ tracks: [] as Track[], related: [], radio: [] })),
+        ]);
+        const raw = [
+          ...(up.tracks || []),
+          ...(rel.radio || []),
+          ...(rel.related || []),
+          ...(sim.tracks || []),
+        ];
+        pool = raw.filter((t) => t.id !== trackId && isPlayable(t));
+        if (stayClose && seedTrack?.artists?.[0]) {
+          const artistKey = (
+            seedTrack.artists[0].id ||
+            seedTrack.artists[0].name ||
+            ''
+          ).toLowerCase();
+          const close = pool.filter((t) =>
+            (t.artists || []).some(
+              (a) => (a.id || a.name || '').toLowerCase() === artistKey,
+            ),
+          );
+          const far = pool.filter(
+            (t) =>
+              !(t.artists || []).some(
+                (a) => (a.id || a.name || '').toLowerCase() === artistKey,
+              ),
+          );
+          // Mix : ~70 % même artiste / proches, le reste découverte
+          pool = [...close, ...far].slice(0, 80);
+          if (close.length >= 8) {
+            pool = [...close.slice(0, 24), ...far.slice(0, 40)];
+          }
+        }
+        if (!seedTrack) {
+          seedTrack = { id: trackId, title: 'Radio', artists: [], thumbnails: [], type: 'song' };
+        }
+      } else if (kind === 'album') {
+        const [radioRes, albumRes] = await Promise.all([
+          api.albumRadio(id).catch(() => ({ tracks: [] as Track[] })),
+          api.album(id).catch(() => null),
+        ]);
+        const albumTracks = (albumRes?.tracks || []).filter(isPlayable);
+        seedTrack = seedTrack || albumTracks[0] || null;
+        // Radio album = similaires (souvent hors album) + un peu de l’album en amorçage
+        const radio = (radioRes.tracks || []).filter(
+          (t) => isPlayable(t) && t.id !== seedTrack?.id,
+        );
+        const albumRest = albumTracks.filter((t) => t.id !== seedTrack?.id).slice(0, 6);
+        pool = [...radio, ...albumRest];
+      } else {
+        const [radioRes, artistRes] = await Promise.all([
+          api.artistRadio(id).catch(() => ({ tracks: [] as Track[] })),
+          api.artist(id).catch(() => null),
+        ]);
+        const songs = (artistRes?.songs || []).filter(isPlayable);
+        seedTrack = seedTrack || songs[0] || (radioRes.tracks || []).find(isPlayable) || null;
+        const radio = (radioRes.tracks || []).filter(
+          (t) => isPlayable(t) && t.id !== seedTrack?.id,
+        );
+        // Amorçage avec tops artiste puis radio (similaires liés / voisins)
+        pool = [...songs.filter((t) => t.id !== seedTrack?.id).slice(0, 8), ...radio];
+      }
+
+      // Dédup
+      const seen = new Set<string>();
+      const uniq: Track[] = [];
+      for (const t of pool) {
+        if (!t.id || seen.has(t.id)) continue;
+        seen.add(t.id);
+        uniq.push(t);
+        if (uniq.length >= 90) break;
+      }
+      pool = uniq;
+
+      if (!seedTrack || !isPlayable(seedTrack)) {
+        seedTrack = pool[0] || null;
+        if (seedTrack) pool = pool.slice(1);
+      }
+      if (!seedTrack) return;
+
+      const mix = [seedTrack, ...pool.filter((t) => t.id !== seedTrack!.id)];
       set({ related: pool });
-      await get().play(track, mix, { preserveQueue: true });
+      await get().play(seedTrack, mix, { preserveQueue: true, noAutoRadio: false });
     } catch (err) {
-      console.error(err);
-      await get().play(track, [track], { preserveQueue: true });
+      console.error('startRadio', err);
+      if (seed && isPlayable(seed)) {
+        await get().play(seed, [seed], { preserveQueue: true });
+      }
     } finally {
       set({ isLoading: false });
     }
