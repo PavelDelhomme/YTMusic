@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,6 +57,7 @@ fun TrackRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     onMore: (() -> Unit)? = null,
+    onOpenArtist: ((id: String?, name: String) -> Unit)? = null,
     subtitle: String? = null,
     trailing: String? = null,
     indexLabel: String? = null,
@@ -96,18 +98,47 @@ fun TrackRow(
                 color = if (highlighted) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurface,
             )
-            Text(
-                subtitle ?: when {
-                    track.isPlaylist() -> "Playlist · ${track.artistLine()}"
-                    track.isAlbum() -> "Album · ${track.artistLine()}"
-                    track.isArtist() -> "Artiste"
-                    else -> track.artistLine()
-                },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            when {
+                subtitle != null -> Text(
+                    subtitle,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                track.isPlaylist() -> Text(
+                    "Playlist · ${track.artistLine()}",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                track.isAlbum() -> Text(
+                    "Album · ${track.artistLine()}",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                track.isArtist() -> Text(
+                    "Artiste",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                onOpenArtist != null -> ArtistLinksText(
+                    track = track,
+                    onOpenArtist = onOpenArtist,
+                )
+                else -> Text(
+                    track.artistLine(),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         val durationLabel = trailing ?: track.duration?.takeIf { it.isNotBlank() }
         if (durationLabel != null) {
@@ -140,6 +171,7 @@ fun MiniPlayerBar(
     onCast: () -> Unit,
     onOpen: () -> Unit,
     onSeek: ((Float) -> Unit)? = null,
+    onOpenArtist: ((id: String?, name: String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var scrub by remember(track.id) { mutableFloatStateOf(-1f) }
@@ -211,6 +243,20 @@ fun MiniPlayerBar(
                 .fillMaxWidth()
                 .height(64.dp)
                 .clickable(onClick = onOpen)
+                .pointerInput(Unit) {
+                    var total = 0f
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { _, amount ->
+                            total += amount
+                        },
+                        onDragEnd = {
+                            // Swipe vers le haut → ouvrir le lecteur plein écran
+                            if (total < -48f) onOpen()
+                            total = 0f
+                        },
+                        onDragCancel = { total = 0f },
+                    )
+                }
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -224,13 +270,22 @@ fun MiniPlayerBar(
                     fontWeight = FontWeight.SemiBold,
                     color = Color(0xFFF5F5F5),
                 )
-                Text(
-                    track.artistLine(),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFCFCFCF),
-                )
+                if (onOpenArtist != null) {
+                    ArtistLinksText(
+                        track = track,
+                        onOpenArtist = onOpenArtist,
+                        color = Color(0xFFCFCFCF),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else {
+                    Text(
+                        track.artistLine(),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFCFCFCF),
+                    )
+                }
             }
             IconButton(onClick = onCast) {
                 Icon(

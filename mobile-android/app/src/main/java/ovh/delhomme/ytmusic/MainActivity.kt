@@ -57,6 +57,7 @@ import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.ListenBody
 import ovh.delhomme.ytmusic.data.TrackDto
 import ovh.delhomme.ytmusic.data.buildRadioQueue
+import ovh.delhomme.ytmusic.data.resolveArtistId
 import ovh.delhomme.ytmusic.player.PlaybackService
 import ovh.delhomme.ytmusic.player.PlayerController
 import ovh.delhomme.ytmusic.ui.auth.LoginScreen
@@ -64,6 +65,7 @@ import ovh.delhomme.ytmusic.ui.components.AddToPlaylistSheet
 import ovh.delhomme.ytmusic.ui.components.CastSheet
 import ovh.delhomme.ytmusic.ui.components.MiniPlayerBar
 import ovh.delhomme.ytmusic.ui.components.TrackActionsSheet
+import ovh.delhomme.ytmusic.ui.detail.ArtistDetailScreen
 import ovh.delhomme.ytmusic.ui.detail.CollectionDetailScreen
 import ovh.delhomme.ytmusic.ui.detail.DetailKind
 import ovh.delhomme.ytmusic.ui.home.HomeScreen
@@ -115,7 +117,11 @@ fun YtMusicAppContent(container: AppContainer) {
     var showNowPlaying by remember { mutableStateOf(false) }
 
     val player = remember(container) {
-        PlayerController(context.applicationContext, container::streamUrl)
+        PlayerController(
+            context.applicationContext,
+            container::streamUrl,
+            container::warmStreamUrl,
+        )
     }
     DisposableEffect(player) {
         player.connect()
@@ -189,6 +195,7 @@ private fun MainTabs(
     val current = backStack?.destination?.route
     val playerUi by player.state.collectAsState()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     fun openDetail(item: TrackDto) {
         val kind = when {
@@ -197,6 +204,22 @@ private fun MainTabs(
             else -> "playlist"
         }
         nav.navigate("detail/$kind/${Uri.encode(item.id)}")
+    }
+
+    fun openArtist(id: String?, name: String) {
+        scope.launch {
+            val resolved = resolveArtistId(container.api, id, name)
+            if (resolved.isNullOrBlank()) {
+                android.widget.Toast.makeText(
+                    context,
+                    "Artiste introuvable",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+                return@launch
+            }
+            onClosePlayer()
+            nav.navigate("detail/artist/${Uri.encode(resolved)}")
+        }
     }
 
     var menuTrack by remember { mutableStateOf<TrackDto?>(null) }
@@ -432,6 +455,7 @@ private fun MainTabs(
                                 val dur = playerUi.durationMs
                                 if (dur > 0) player.seek((ratio * dur).toLong())
                             },
+                            onOpenArtist = ::openArtist,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .background(MaterialTheme.colorScheme.surfaceVariant),
@@ -480,6 +504,7 @@ private fun MainTabs(
                     onPlayNamed = onPlayNamed,
                     onMore = { menuTrack = it; menuPlaylistId = null },
                     onOpenDetail = ::openDetail,
+                    onOpenArtist = ::openArtist,
                     onOpenRecoPrefs = { nav.navigate("reco_prefs") },
                     onLoggedOut = onLoggedOut,
                 )
@@ -490,6 +515,7 @@ private fun MainTabs(
                     onPlay = onPlayTracks,
                     onMore = { menuTrack = it; menuPlaylistId = null },
                     onOpenDetail = ::openDetail,
+                    onOpenArtist = ::openArtist,
                 )
             }
             composable(Tab.Library.route) {
@@ -498,6 +524,7 @@ private fun MainTabs(
                     onPlay = onPlayTracks,
                     onMore = { menuTrack = it; menuPlaylistId = null },
                     onOpenDetail = ::openDetail,
+                    onOpenArtist = ::openArtist,
                     onOpenRecoPrefs = { nav.navigate("reco_prefs") },
                     onLoggedOut = onLoggedOut,
                 )
@@ -524,18 +551,33 @@ private fun MainTabs(
                     "artist" -> DetailKind.Artist
                     else -> DetailKind.Playlist
                 }
-                CollectionDetailScreen(
-                    container = container,
-                    kind = kind,
-                    id = id,
-                    reloadToken = detailReloadToken,
-                    onBack = { nav.popBackStack() },
-                    onPlay = onPlayTracks,
-                    onMore = { track, playlistId ->
-                        menuTrack = track
-                        menuPlaylistId = playlistId
-                    },
-                )
+                if (kind == DetailKind.Artist) {
+                    ArtistDetailScreen(
+                        container = container,
+                        artistId = id,
+                        reloadToken = detailReloadToken,
+                        onBack = { nav.popBackStack() },
+                        onPlay = onPlayTracks,
+                        onMore = { track ->
+                            menuTrack = track
+                            menuPlaylistId = null
+                        },
+                        onOpenDetail = ::openDetail,
+                    )
+                } else {
+                    CollectionDetailScreen(
+                        container = container,
+                        kind = kind,
+                        id = id,
+                        reloadToken = detailReloadToken,
+                        onBack = { nav.popBackStack() },
+                        onPlay = onPlayTracks,
+                        onMore = { track, playlistId ->
+                            menuTrack = track
+                            menuPlaylistId = playlistId
+                        },
+                    )
+                }
             }
         }
     }
@@ -561,8 +603,7 @@ private fun MainTabs(
                 nav.navigate("detail/album/${Uri.encode(id)}")
             },
             onOpenArtist = { id ->
-                onClosePlayer()
-                nav.navigate("detail/artist/${Uri.encode(id)}")
+                openArtist(id, "")
             },
             playlistId = menuPlaylistId,
             onRemovedFromPlaylist = { detailReloadToken++ },
@@ -595,6 +636,7 @@ private fun MainTabs(
             onMore = { menuTrack = it; menuPlaylistId = null },
             onCast = { showCast = true },
             onOpenAddToPlaylist = { addToPlaylistTrack = it },
+            onOpenArtist = ::openArtist,
         )
     }
 

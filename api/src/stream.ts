@@ -127,8 +127,13 @@ export async function handleStream(req: Request, res: Response) {
   try {
     const format = await getAudioFormat(videoId);
     if (format.url) {
-      // Redirect to direct googlevideo URL when possible (fastest)
-      // Proxying is more reliable for CORS / expiry — fetch & pipe
+      // Clients natifs (Android ExoPlayer) : 302 direct googlevideo = plus rapide.
+      // Navigateur web : proxy (CORS / Workbox).
+      if (wantsDirectRedirect(req)) {
+        res.setHeader('Cache-Control', 'no-store');
+        res.redirect(302, format.url);
+        return;
+      }
       const upstream = await fetch(format.url, {
         headers: req.headers.range ? { Range: String(req.headers.range) } : {},
       });
@@ -175,6 +180,34 @@ export async function handleStream(req: Request, res: Response) {
       res.status(502).json({ error: 'Impossible de streamer audio', detail: String(err) });
     }
   }
+}
+
+/** Pré-résout l’URL audio (chauffe le cache format sans streamer). */
+export async function handleStreamUrl(req: Request, res: Response) {
+  const videoId = String(req.params.id || '');
+  if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+    res.status(400).json({ error: 'ID invalide' });
+    return;
+  }
+  try {
+    const format = await getAudioFormat(videoId);
+    res.json({
+      url: format.url,
+      expiresAt: format.expiresAt,
+      mimeType: format.mimeType ?? null,
+    });
+  } catch (err) {
+    res.status(502).json({ error: 'Impossible de résoudre le stream', detail: String(err) });
+  }
+}
+
+/** Redirect 302 pour ExoPlayer / clients qui passent ?redirect=1. */
+function wantsDirectRedirect(req: Request): boolean {
+  if (String(req.query.redirect || '') === '1') return true;
+  const client = String(req.headers['x-ytm-client'] || '').toLowerCase();
+  if (client === 'android' || client === 'mobile') return true;
+  const ua = String(req.headers['user-agent'] || '').toLowerCase();
+  return ua.includes('okhttp') || ua.includes('exoplayer') || ua.includes('media3');
 }
 
 export async function downloadTrack(videoId: string): Promise<string> {

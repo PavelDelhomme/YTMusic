@@ -2,10 +2,20 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useLibrary } from '../store/library';
 import { TrackRow } from '../components/TrackRow';
-import { Heart, Plus, Trash2 } from 'lucide-react';
+import { Heart, Play, Plus, Shuffle, Trash2 } from 'lucide-react';
 import { usePlayer } from '../store/player';
 import { MediaCard } from '../components/MediaCard';
 import { CoverImage } from '../components/CoverImage';
+import type { Track } from '../api';
+
+function shuffleTracks(tracks: Track[]) {
+  const copy = [...tracks];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
 
 export function LibraryPage() {
   const { liked, playlists, history, albums, artists, likedPlaylists, createPlaylist, deletePlaylist } =
@@ -47,16 +57,25 @@ export function LibraryPage() {
             Tes titres aimés — playlist automatique mise à jour dès que tu likes un morceau.
           </p>
           {liked.length === 0 ? (
-            <p className="text-yt-muted">Aucun titre pour l'instant. Like un morceau pour le retrouver ici.</p>
+            <p className="text-yt-muted">Aucun titre pour l&apos;instant. Like un morceau pour le retrouver ici.</p>
           ) : (
             <>
-              <button
-                type="button"
-                onClick={() => void playQueue(liked, 0)}
-                className="mb-4 rounded-full bg-yt-red px-5 py-2 text-sm font-medium"
-              >
-                Tout lire
-              </button>
+              <div className="mb-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void playQueue(liked, 0)}
+                  className="inline-flex items-center gap-2 rounded-full bg-yt-red px-5 py-2.5 text-sm font-medium"
+                >
+                  <Play className="h-4 w-4 fill-white" /> Tout lire
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void playQueue(shuffleTracks(liked), 0)}
+                  className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-5 py-2.5 text-sm font-medium text-yt-muted hover:text-white"
+                >
+                  <Shuffle className="h-4 w-4" /> Aléatoire
+                </button>
+              </div>
               {liked.map((t) => (
                 <TrackRow key={t.id} track={t} queue={liked} showAlbum />
               ))}
@@ -71,9 +90,29 @@ export function LibraryPage() {
             Tous les titres démarrés, même si tu n’as pas tout écouté.
           </p>
           {history.length === 0 ? (
-            <p className="text-yt-muted">L'historique apparaîtra dès que tu lances un titre.</p>
+            <p className="text-yt-muted">L&apos;historique apparaîtra dès que tu lances un titre.</p>
           ) : (
-            history.map((t) => <TrackRow key={t.id} track={t} queue={history} showAlbum />)
+            <>
+              <div className="mb-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void playQueue(history, 0)}
+                  className="inline-flex items-center gap-2 rounded-full bg-yt-red px-5 py-2.5 text-sm font-medium"
+                >
+                  <Play className="h-4 w-4 fill-white" /> Tout lire
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void playQueue(shuffleTracks(history), 0)}
+                  className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-5 py-2.5 text-sm font-medium text-yt-muted hover:text-white"
+                >
+                  <Shuffle className="h-4 w-4" /> Aléatoire
+                </button>
+              </div>
+              {history.map((t) => (
+                <TrackRow key={t.id} track={t} queue={history} showAlbum />
+              ))}
+            </>
           )}
         </div>
       )}
@@ -83,20 +122,23 @@ export function LibraryPage() {
           {albums.length === 0 ? (
             <p className="text-yt-muted">Ajoute des albums via Importer ou le bouton « Ajouter à la bibliothèque ».</p>
           ) : (
-            <div className="shelf-scroll">
-              {albums.map((a: any) => (
-                <MediaCard
-                  key={a.id}
-                  item={{
-                    id: a.id,
-                    title: a.title,
-                    artists: a.artists || [],
-                    thumbnails: a.thumbnails || [],
-                    type: 'album',
-                  }}
-                />
-              ))}
-            </div>
+            <>
+              <p className="mb-4 text-sm text-yt-muted">Ouvre un album pour Lecture ou Aléatoire.</p>
+              <div className="shelf-scroll">
+                {albums.map((a: any) => (
+                  <MediaCard
+                    key={a.id}
+                    item={{
+                      id: a.id,
+                      title: a.title,
+                      artists: a.artists || [],
+                      thumbnails: a.thumbnails || [],
+                      type: 'album',
+                    }}
+                  />
+                ))}
+              </div>
+            </>
           )}
         </div>
       )}
@@ -106,20 +148,23 @@ export function LibraryPage() {
           {artists.length === 0 ? (
             <p className="text-yt-muted">Ajoute des artistes à ta bibliothèque pour les retrouver ici.</p>
           ) : (
-            <div className="shelf-scroll">
-              {artists.map((a: any) => (
-                <MediaCard
-                  key={a.id}
-                  item={{
-                    id: a.id,
-                    title: a.name || a.title,
-                    artists: [],
-                    thumbnails: a.thumbnails || [],
-                    type: 'artist',
-                  }}
-                />
-              ))}
-            </div>
+            <>
+              <p className="mb-4 text-sm text-yt-muted">Ouvre un artiste pour ses titres et sa radio.</p>
+              <div className="shelf-scroll">
+                {artists.map((a: any) => (
+                  <MediaCard
+                    key={a.id}
+                    item={{
+                      id: a.id,
+                      title: a.name || a.title,
+                      artists: [],
+                      thumbnails: a.thumbnails || [],
+                      type: 'artist',
+                    }}
+                  />
+                ))}
+              </div>
+            </>
           )}
         </div>
       )}
@@ -149,8 +194,37 @@ export function LibraryPage() {
             </button>
           </form>
 
+          {(() => {
+            const allLocalTracks = playlists
+              .flatMap((p) => p.tracks || [])
+              .filter((t) => /^[a-zA-Z0-9_-]{11}$/.test(t.id));
+            const unique = [...new Map(allLocalTracks.map((t) => [t.id, t])).values()];
+            if (unique.length === 0) {
+              return playlists.length + likedPlaylists.length > 0 ? (
+                <p className="mb-4 text-sm text-yt-muted">Ouvre une playlist pour lancer la lecture.</p>
+              ) : null;
+            }
+            return (
+              <div className="mb-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void playQueue(unique, 0)}
+                  className="inline-flex items-center gap-2 rounded-full bg-yt-red px-5 py-2.5 text-sm font-medium"
+                >
+                  <Play className="h-4 w-4 fill-white" /> Tout lire
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void playQueue(shuffleTracks(unique), 0)}
+                  className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-5 py-2.5 text-sm font-medium text-yt-muted hover:text-white"
+                >
+                  <Shuffle className="h-4 w-4" /> Aléatoire
+                </button>
+              </div>
+            );
+          })()}
+
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {/* Playlist automatique : Titres aimés */}
             <button
               type="button"
               onClick={() => setTab('titres')}

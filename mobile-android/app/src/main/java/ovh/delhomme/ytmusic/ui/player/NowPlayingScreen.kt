@@ -2,6 +2,9 @@ package ovh.delhomme.ytmusic.ui.player
 
 import android.os.SystemClock
 import android.widget.Toast
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -22,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -69,9 +73,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -80,6 +90,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
@@ -93,8 +104,12 @@ import ovh.delhomme.ytmusic.data.buildRadioQueue
 import ovh.delhomme.ytmusic.player.PlayerController
 import ovh.delhomme.ytmusic.player.PlayerUiState
 import ovh.delhomme.ytmusic.player.RepeatMode
+import ovh.delhomme.ytmusic.ui.components.ArtistLinksText
 import ovh.delhomme.ytmusic.ui.components.MediaCover
+import kotlin.math.abs
 import kotlin.math.roundToInt
+
+private enum class NowPlayingDragAxis { None, Horizontal, Vertical }
 
 private val SeekRed = Color(0xFFFF0033)
 private val PlayerFg = Color(0xFFF5F5F5)
@@ -112,17 +127,141 @@ fun NowPlayingScreen(
     onMore: ((TrackDto) -> Unit)? = null,
     onCast: (() -> Unit)? = null,
     onOpenAddToPlaylist: ((TrackDto) -> Unit)? = null,
+    onOpenArtist: ((id: String?, name: String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var scrub by remember(ui.track?.id) { mutableFloatStateOf(-1f) }
-    var dragY by remember { mutableFloatStateOf(0f) }
-    var queueExpanded by remember { mutableStateOf(false) }
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    var mediaSlideX by remember { mutableFloatStateOf(0f) }
+    val queueProgress = remember { Animatable(0f) }
     var showLyrics by remember { mutableStateOf(false) }
     var showSaveQueue by remember { mutableStateOf(false) }
     var lastPrevTap by remember { mutableLongStateOf(0L) }
     val density = LocalDensity.current
-    val dismissPx = with(density) { 140.dp.toPx() }
+    val dismissPx = with(density) { 110.dp.toPx() }
+    val queueRangePx = with(density) { 380.dp.toPx() }
+    val flingDismiss = 2200f
+    val listState = rememberLazyListState()
+    val queueListState = rememberLazyListState()
+    val queueOpen = queueProgress.value > 0.55f
+    val queueInteractive = queueProgress.value > 0.02f
+
+    fun settleOrClose() {
+        scope.launch {
+            if (dragOffset >= dismissPx) {
+                onClose()
+                dragOffset = 0f
+            } else if (dragOffset > 0f) {
+                val anim = Animatable(dragOffset)
+                anim.animateTo(
+                    0f,
+                    spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
+                ) {
+                    dragOffset = value
+                }
+            }
+        }
+    }
+
+    fun settleQueue(velocityY: Float = 0f) {
+        scope.launch {
+            val target = when {
+                velocityY < -900f -> 1f
+                velocityY > 900f -> 0f
+                queueProgress.value >= 0.38f -> 1f
+                else -> 0f
+            }
+            queueProgress.animateTo(
+                target,
+                spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
+            )
+        }
+    }
+
+    fun expandQueue() {
+        scope.launch {
+            queueProgress.animateTo(
+                1f,
+                spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
+            )
+        }
+    }
+
+    fun collapseQueue() {
+        scope.launch {
+            queueProgress.animateTo(
+                0f,
+                spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
+            )
+        }
+    }
+
+    fun onQueueDrag(deltaY: Float) {
+        // deltaY < 0 = doigt vers le haut → ouvrir la file
+        scope.launch {
+            queueProgress.snapTo(
+                (queueProgress.value - deltaY / queueRangePx).coerceIn(0f, 1f),
+            )
+        }
+    }
+
+    fun skipNextFromSwipe() {
+        mediaSlideX = 0f
+        player.skipNext()
+    }
+
+    fun skipPrevFromSwipe() {
+        mediaSlideX = 0f
+        player.skipPrevOrRestart(forcePrevious = true)
+    }
+
+    val dismissScroll = remember(queueOpen, dismissPx) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (queueOpen) return Offset.Zero
+                if (available.y < 0f && dragOffset > 0f) {
+                    val next = (dragOffset + available.y).coerceAtLeast(0f)
+                    val consumed = next - dragOffset
+                    dragOffset = next
+                    return Offset(0f, consumed)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset {
+                if (queueOpen) return Offset.Zero
+                if (available.y > 0f) {
+                    dragOffset += available.y
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                if (queueOpen) return Velocity.Zero
+                if (dragOffset >= dismissPx || available.y > flingDismiss) {
+                    onClose()
+                    dragOffset = 0f
+                    return available
+                }
+                if (dragOffset > 0f) {
+                    val anim = Animatable(dragOffset)
+                    anim.animateTo(
+                        0f,
+                        spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
+                    ) {
+                        dragOffset = value
+                    }
+                }
+                return Velocity.Zero
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         while (isActive) {
@@ -131,26 +270,36 @@ fun NowPlayingScreen(
         }
     }
 
+    LaunchedEffect(ui.track?.id) {
+        dragOffset = 0f
+        mediaSlideX = 0f
+    }
+
+    LaunchedEffect(queueOpen, ui.queueIndex, ui.queue.size) {
+        if (!queueOpen || ui.queue.isEmpty()) return@LaunchedEffect
+        val target = ui.queueIndex.coerceIn(0, ui.queue.lastIndex)
+        runCatching { queueListState.animateScrollToItem(target) }
+    }
+
+    LaunchedEffect(ui.queueIndex, queueInteractive) {
+        if (queueInteractive || ui.queue.isEmpty()) return@LaunchedEffect
+        // item 0 = zone média, item 1 = header file, puis les titres
+        val target = (ui.queueIndex + 2).coerceAtLeast(0)
+        runCatching { listState.animateScrollToItem(target) }
+    }
+
+    val dragProgress = (dragOffset / (dismissPx * 2.2f)).coerceIn(0f, 1f)
+    val qp = queueProgress.value
+
     Box(
         Modifier
             .fillMaxSize()
-            .offset { IntOffset(0, dragY.roundToInt().coerceAtLeast(0)) }
+            .offset { IntOffset(0, dragOffset.roundToInt().coerceAtLeast(0)) }
+            .alpha(1f - dragProgress * 0.35f)
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
             .navigationBarsPadding()
-            .pointerInput(queueExpanded) {
-                if (queueExpanded) return@pointerInput
-                detectVerticalDragGestures(
-                    onVerticalDrag = { _, dragAmount ->
-                        dragY = (dragY + dragAmount).coerceAtLeast(0f)
-                    },
-                    onDragEnd = {
-                        if (dragY > dismissPx) onClose()
-                        dragY = 0f
-                    },
-                    onDragCancel = { dragY = 0f },
-                )
-            },
+            .nestedScroll(dismissScroll),
     ) {
         val track = ui.track
         if (track == null) {
@@ -163,89 +312,176 @@ fun NowPlayingScreen(
         val liked = track.id in likedIds
 
         Column(Modifier.fillMaxSize()) {
-            if (queueExpanded) {
-                QueueExpandedHeader(
-                    track = track,
-                    playing = ui.playing,
-                    queueTitle = ui.queueTitle,
-                    onCollapse = { queueExpanded = false },
-                    onToggle = player::toggle,
-                    onCast = onCast,
-                )
-            } else {
-                Row(
+            // Chrome / mini-header selon l’ouverture de la file
+            Box(Modifier.fillMaxWidth()) {
+                Column(
                     Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .graphicsLayer { alpha = (1f - qp * 1.2f).coerceIn(0f, 1f) }
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures(
+                                onVerticalDrag = { _, amount ->
+                                    if (amount > 0f || dragOffset > 0f) {
+                                        dragOffset = (dragOffset + amount).coerceAtLeast(0f)
+                                    }
+                                },
+                                onDragEnd = { settleOrClose() },
+                                onDragCancel = { settleOrClose() },
+                            )
+                        },
                 ) {
-                    IconButton(onClick = onClose) {
-                        Icon(
-                            Icons.Default.KeyboardArrowDown,
-                            contentDescription = "Replier",
-                            tint = PlayerFg,
-                            modifier = Modifier.size(32.dp),
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp, bottom = 2.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            Modifier
+                                .width(40.dp)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(PlayerFg.copy(alpha = 0.35f)),
                         )
                     }
-                    Spacer(Modifier.weight(1f))
-                    NowPlayingChrome.topBarActions.forEach { slot ->
-                        if (!slot.enabled) return@forEach
-                        when (slot.id) {
-                            PlayerChromeAction.Cast -> if (onCast != null) {
-                                IconButton(onClick = onCast) {
-                                    Icon(Icons.Default.Cast, slot.label, tint = PlayerFg)
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = onClose) {
+                            Icon(
+                                Icons.Default.KeyboardArrowDown,
+                                contentDescription = "Replier",
+                                tint = PlayerFg,
+                                modifier = Modifier.size(32.dp),
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
+                        NowPlayingChrome.topBarActions.forEach { slot ->
+                            if (!slot.enabled) return@forEach
+                            when (slot.id) {
+                                PlayerChromeAction.Cast -> if (onCast != null) {
+                                    IconButton(onClick = onCast) {
+                                        Icon(Icons.Default.Cast, slot.label, tint = PlayerFg)
+                                    }
                                 }
-                            }
-                            PlayerChromeAction.More -> if (onMore != null) {
-                                IconButton(onClick = { onMore(track) }) {
-                                    Icon(Icons.Default.MoreVert, slot.label, tint = PlayerFg)
+                                PlayerChromeAction.More -> if (onMore != null) {
+                                    IconButton(onClick = { onMore(track) }) {
+                                        Icon(Icons.Default.MoreVert, slot.label, tint = PlayerFg)
+                                    }
                                 }
+                                else -> Unit
                             }
-                            else -> Unit
                         }
                     }
                 }
+
+                if (queueInteractive) {
+                    QueueExpandedHeader(
+                        track = track,
+                        playing = ui.playing,
+                        queueTitle = ui.queueTitle,
+                        progressHint = qp,
+                        onCollapse = { collapseQueue() },
+                        onToggle = player::toggle,
+                        onCast = onCast,
+                        onOpenArtist = onOpenArtist,
+                        onQueueDrag = ::onQueueDrag,
+                        onQueueDragEnd = { settleQueue(it) },
+                        onSkipNext = ::skipNextFromSwipe,
+                        onSkipPrev = ::skipPrevFromSwipe,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                alpha = (qp * 1.15f).coerceIn(0f, 1f)
+                                translationY = (1f - qp) * -28f
+                            },
+                    )
+                }
             }
 
-            if (!queueExpanded) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                // Lecteur « plein » : cover + contrôles + aperçu file
                 LazyColumn(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            alpha = (1f - qp * 1.05f).coerceIn(0f, 1f)
+                            translationY = -qp * 48f
+                        },
                     horizontalAlignment = Alignment.CenterHorizontally,
+                    userScrollEnabled = qp < 0.45f,
                 ) {
                     item {
                         Column(
                             Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 20.dp),
+                                .padding(horizontal = 20.dp)
+                                .graphicsLayer { translationX = mediaSlideX * 0.35f },
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            AsyncImage(
-                                model = track.coverUrl(800),
-                                contentDescription = track.title,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
+                            Column(
+                                Modifier
                                     .fillMaxWidth()
-                                    .height(260.dp)
-                                    .clip(RoundedCornerShape(12.dp)),
-                            )
-                            Spacer(Modifier.height(18.dp))
-                            Text(
-                                track.title,
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = PlayerFg,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center,
-                            )
-                            Text(
-                                track.artistLine(),
-                                color = PlayerMuted,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                                    .nowPlayingMediaGestures(
+                                        key = track.id,
+                                        onDismissDelta = { delta ->
+                                            dragOffset = (dragOffset + delta).coerceAtLeast(0f)
+                                        },
+                                        onDismissEnd = { settleOrClose() },
+                                        onHorizontalDelta = { dx ->
+                                            mediaSlideX = (mediaSlideX + dx).coerceIn(-120f, 120f)
+                                        },
+                                        onHorizontalEnd = { totalX ->
+                                            when {
+                                                totalX < -72f -> skipNextFromSwipe()
+                                                totalX > 72f -> skipPrevFromSwipe()
+                                                else -> mediaSlideX = 0f
+                                            }
+                                        },
+                                        onHorizontalCancel = { mediaSlideX = 0f },
+                                    ),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                AsyncImage(
+                                    model = track.coverUrl(800),
+                                    contentDescription = track.title,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(260.dp)
+                                        .clip(RoundedCornerShape(12.dp)),
+                                )
+                                Spacer(Modifier.height(18.dp))
+                                Text(
+                                    track.title,
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = PlayerFg,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    textAlign = TextAlign.Center,
+                                )
+                                if (onOpenArtist != null) {
+                                    ArtistLinksText(
+                                        track = track,
+                                        onOpenArtist = onOpenArtist,
+                                        color = PlayerMuted,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        maxLines = 2,
+                                    )
+                                } else {
+                                    Text(
+                                        track.artistLine(),
+                                        color = PlayerMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
                             Spacer(Modifier.height(10.dp))
                             Row(
                                 Modifier.fillMaxWidth(),
@@ -410,8 +646,10 @@ fun NowPlayingScreen(
                         QueueSectionHeader(
                             title = ui.queueTitle,
                             count = "${ui.queueIndex + 1} / ${ui.queue.size.coerceAtLeast(1)}",
-                            onExpand = { queueExpanded = true },
+                            onExpand = { expandQueue() },
                             onSave = { showSaveQueue = true },
+                            onQueueDrag = ::onQueueDrag,
+                            onQueueDragEnd = { settleQueue(it) },
                         )
                     }
 
@@ -427,15 +665,24 @@ fun NowPlayingScreen(
                     }
                     item { Spacer(Modifier.height(40.dp)) }
                 }
-            } else {
-                QueueExpandedBody(
-                    ui = ui,
-                    onPlayAt = player::playAt,
-                    onMore = onMore,
-                    onMove = player::moveInQueue,
-                    onSave = { showSaveQueue = true },
-                    modifier = Modifier.weight(1f),
-                )
+
+                // File plein écran (suit le doigt via queueProgress)
+                if (queueInteractive) {
+                    QueueExpandedBody(
+                        ui = ui,
+                        listState = queueListState,
+                        onPlayAt = player::playAt,
+                        onMore = onMore,
+                        onMove = player::moveInQueue,
+                        onSave = { showSaveQueue = true },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                alpha = (qp * 1.1f).coerceIn(0f, 1f)
+                                translationY = (1f - qp) * 96f
+                            },
+                    )
+                }
             }
         }
         }
@@ -494,15 +741,23 @@ private fun QueueSectionHeader(
     count: String,
     onExpand: () -> Unit,
     onSave: () -> Unit,
+    onQueueDrag: (Float) -> Unit,
+    onQueueDragEnd: (velocityY: Float) -> Unit,
 ) {
+    var dragVelocity by remember { mutableFloatStateOf(0f) }
     Column(
         Modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onExpand, onLongClick = onExpand)
             .pointerInput(Unit) {
                 detectVerticalDragGestures(
-                    onVerticalDrag = { _, amount -> if (amount < -20f) onExpand() },
-                    onDragEnd = {},
+                    onVerticalDrag = { change, amount ->
+                        change.consume()
+                        dragVelocity = amount
+                        onQueueDrag(amount)
+                    },
+                    onDragEnd = { onQueueDragEnd(dragVelocity * 60f) },
+                    onDragCancel = { onQueueDragEnd(0f) },
                 )
             }
             .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -540,14 +795,68 @@ private fun QueueExpandedHeader(
     track: TrackDto,
     playing: Boolean,
     queueTitle: String,
+    progressHint: Float,
     onCollapse: () -> Unit,
     onToggle: () -> Unit,
     onCast: (() -> Unit)?,
+    onOpenArtist: ((id: String?, name: String) -> Unit)? = null,
+    onQueueDrag: (Float) -> Unit,
+    onQueueDragEnd: (velocityY: Float) -> Unit,
+    onSkipNext: () -> Unit,
+    onSkipPrev: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
+    var dragVelocity by remember { mutableFloatStateOf(0f) }
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
+            .pointerInput(track.id) {
+                var axis = NowPlayingDragAxis.None
+                var totalX = 0f
+                var totalY = 0f
+                detectDragGestures(
+                    onDragStart = {
+                        axis = NowPlayingDragAxis.None
+                        totalX = 0f
+                        totalY = 0f
+                        dragVelocity = 0f
+                    },
+                    onDragEnd = {
+                        when (axis) {
+                            NowPlayingDragAxis.Vertical -> onQueueDragEnd(dragVelocity * 60f)
+                            NowPlayingDragAxis.Horizontal -> when {
+                                totalX < -72f -> onSkipNext()
+                                totalX > 72f -> onSkipPrev()
+                            }
+                            NowPlayingDragAxis.None -> Unit
+                        }
+                    },
+                    onDragCancel = {
+                        if (axis == NowPlayingDragAxis.Vertical) onQueueDragEnd(0f)
+                    },
+                    onDrag = { change, amount ->
+                        totalX += amount.x
+                        totalY += amount.y
+                        if (axis == NowPlayingDragAxis.None && (abs(totalX) > 16f || abs(totalY) > 16f)) {
+                            axis = if (abs(totalX) > abs(totalY)) {
+                                NowPlayingDragAxis.Horizontal
+                            } else {
+                                NowPlayingDragAxis.Vertical
+                            }
+                        }
+                        when (axis) {
+                            NowPlayingDragAxis.Vertical -> {
+                                change.consume()
+                                dragVelocity = amount.y
+                                onQueueDrag(amount.y)
+                            }
+                            NowPlayingDragAxis.Horizontal -> change.consume()
+                            NowPlayingDragAxis.None -> Unit
+                        }
+                    },
+                )
+            }
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Box(
@@ -556,13 +865,7 @@ private fun QueueExpandedHeader(
                 .width(36.dp)
                 .height(4.dp)
                 .clip(RoundedCornerShape(2.dp))
-                .background(PlayerFg.copy(alpha = 0.35f))
-                .pointerInput(Unit) {
-                    detectVerticalDragGestures(
-                        onVerticalDrag = { _, amount -> if (amount > 24f) onCollapse() },
-                        onDragEnd = {},
-                    )
-                },
+                .background(PlayerFg.copy(alpha = (0.25f + 0.2f * progressHint).coerceIn(0.25f, 0.55f))),
         )
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -570,7 +873,16 @@ private fun QueueExpandedHeader(
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, color = PlayerFg, fontWeight = FontWeight.SemiBold)
-                Text(track.artistLine(), maxLines = 1, overflow = TextOverflow.Ellipsis, color = PlayerMuted, style = MaterialTheme.typography.bodySmall)
+                if (onOpenArtist != null) {
+                    ArtistLinksText(
+                        track = track,
+                        onOpenArtist = onOpenArtist,
+                        color = PlayerMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else {
+                    Text(track.artistLine(), maxLines = 1, overflow = TextOverflow.Ellipsis, color = PlayerMuted, style = MaterialTheme.typography.bodySmall)
+                }
             }
             if (onCast != null) {
                 IconButton(onClick = onCast) {
@@ -583,6 +895,9 @@ private fun QueueExpandedHeader(
                     null,
                     tint = PlayerFg,
                 )
+            }
+            IconButton(onClick = onCollapse) {
+                Icon(Icons.Default.KeyboardArrowDown, "Replier la file", tint = PlayerFg)
             }
         }
         Text(
@@ -597,6 +912,7 @@ private fun QueueExpandedHeader(
 @Composable
 private fun QueueExpandedBody(
     ui: PlayerUiState,
+    listState: LazyListState,
     onPlayAt: (Int) -> Unit,
     onMore: ((TrackDto) -> Unit)?,
     onMove: (Int, Int) -> Unit,
@@ -616,11 +932,17 @@ private fun QueueExpandedBody(
                 fontWeight = FontWeight.SemiBold,
                 color = PlayerFg,
             )
+            Text(
+                "${ui.queueIndex + 1} / ${ui.queue.size.coerceAtLeast(1)}",
+                style = MaterialTheme.typography.labelMedium,
+                color = PlayerMuted,
+                modifier = Modifier.padding(end = 8.dp),
+            )
             TextButton(onClick = onSave) {
                 Text("Enregistrer")
             }
         }
-        LazyColumn(Modifier.fillMaxSize(), state = rememberLazyListState()) {
+        LazyColumn(Modifier.fillMaxSize(), state = listState) {
             itemsIndexed(ui.queue, key = { i, t -> "q-${t.id}-$i" }) { index, item ->
                 QueueTrackRow(
                     track = item,
@@ -634,6 +956,70 @@ private fun QueueExpandedBody(
             item { Spacer(Modifier.height(48.dp)) }
         }
     }
+}
+
+/** Swipe bas = replier le lecteur ; swipe H = titre suivant / précédent. */
+private fun Modifier.nowPlayingMediaGestures(
+    key: Any?,
+    onDismissDelta: (Float) -> Unit,
+    onDismissEnd: () -> Unit,
+    onHorizontalDelta: (Float) -> Unit,
+    onHorizontalEnd: (totalX: Float) -> Unit,
+    onHorizontalCancel: () -> Unit,
+): Modifier = pointerInput(key) {
+    var axis = NowPlayingDragAxis.None
+    var totalX = 0f
+    var totalY = 0f
+    var verticalAccum = 0f
+    detectDragGestures(
+        onDragStart = {
+            axis = NowPlayingDragAxis.None
+            totalX = 0f
+            totalY = 0f
+            verticalAccum = 0f
+        },
+        onDragEnd = {
+            when (axis) {
+                NowPlayingDragAxis.Vertical -> onDismissEnd()
+                NowPlayingDragAxis.Horizontal -> onHorizontalEnd(totalX)
+                NowPlayingDragAxis.None -> Unit
+            }
+        },
+        onDragCancel = {
+            when (axis) {
+                NowPlayingDragAxis.Vertical -> onDismissEnd()
+                NowPlayingDragAxis.Horizontal -> onHorizontalCancel()
+                NowPlayingDragAxis.None -> Unit
+            }
+        },
+        onDrag = { change, amount ->
+            totalX += amount.x
+            totalY += amount.y
+            if (axis == NowPlayingDragAxis.None && (abs(totalX) > 18f || abs(totalY) > 18f)) {
+                axis = if (abs(totalX) > abs(totalY)) {
+                    NowPlayingDragAxis.Horizontal
+                } else {
+                    NowPlayingDragAxis.Vertical
+                }
+            }
+            when (axis) {
+                NowPlayingDragAxis.Vertical -> {
+                    val next = (verticalAccum + amount.y).coerceAtLeast(0f)
+                    val consumed = next - verticalAccum
+                    if (consumed != 0f || amount.y > 0f) {
+                        change.consume()
+                        verticalAccum = next
+                        onDismissDelta(consumed)
+                    }
+                }
+                NowPlayingDragAxis.Horizontal -> {
+                    change.consume()
+                    onHorizontalDelta(amount.x)
+                }
+                NowPlayingDragAxis.None -> Unit
+            }
+        },
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)

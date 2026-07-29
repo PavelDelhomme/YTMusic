@@ -13,13 +13,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -54,6 +62,7 @@ fun LibraryScreen(
     onPlay: (List<TrackDto>, Int) -> Unit,
     onMore: (TrackDto) -> Unit,
     onOpenDetail: (TrackDto) -> Unit,
+    onOpenArtist: ((String?, String) -> Unit)? = null,
     onOpenRecoPrefs: () -> Unit,
     onLoggedOut: () -> Unit,
 ) {
@@ -169,10 +178,23 @@ fun LibraryScreen(
                             }
                             if (content.playableQueue.isNotEmpty() && content.showPlayAll) {
                                 item {
-                                    TextButton(
-                                        onClick = { onPlay(content.playableQueue, 0) },
-                                        modifier = Modifier.padding(horizontal = 8.dp),
-                                    ) { Text("Tout lire") }
+                                    LibraryPlayBar(
+                                        playLabel = content.playLabel,
+                                        shuffleLabel = content.shuffleLabel,
+                                        onPlay = { onPlay(content.playableQueue, 0) },
+                                        onShuffle = {
+                                            onPlay(content.playableQueue.shuffled(), 0)
+                                        },
+                                    )
+                                }
+                            } else if (content.collectionHint != null) {
+                                item {
+                                    Text(
+                                        content.collectionHint!!,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                                    )
                                 }
                             }
                             itemsIndexed(content.rows, key = { i, r -> "${selected.name}-${r.id}-$i" }) { _, row ->
@@ -191,6 +213,7 @@ fun LibraryScreen(
                                         }
                                     },
                                     onMore = { onMore(row) },
+                                    onOpenArtist = onOpenArtist,
                                 )
                             }
                             item {
@@ -229,6 +252,38 @@ fun LibraryScreen(
 }
 
 @Composable
+private fun LibraryPlayBar(
+    playLabel: String,
+    shuffleLabel: String,
+    onPlay: () -> Unit,
+    onShuffle: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Button(
+            onClick = onPlay,
+            modifier = Modifier.weight(1f),
+        ) {
+            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(playLabel)
+        }
+        OutlinedButton(
+            onClick = onShuffle,
+            modifier = Modifier.weight(1f),
+        ) {
+            Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(shuffleLabel)
+        }
+    }
+}
+
+@Composable
 private fun EmptyHint(message: String) {
     Column(
         Modifier
@@ -251,6 +306,9 @@ private data class LibraryContent(
     val playableQueue: List<TrackDto>,
     val emptyMessage: String,
     val showPlayAll: Boolean = false,
+    val playLabel: String = "Tout lire",
+    val shuffleLabel: String = "Aléatoire",
+    val collectionHint: String? = null,
     val comingSoon: String? = null,
 )
 
@@ -277,22 +335,27 @@ private fun buildLibraryContent(data: LibraryResponse, filter: LibraryFilter): L
                 addAll(data.playlists.take(20).map { playlistAsTrack(it) })
                 addAll(data.likedPlaylists.take(10).map { likedPlaylistAsTrack(it) })
             }.distinctBy { it.id }
+            val playable = recent.filter { it.isPlayable() }
             LibraryContent(
                 headline = "Enregistré récemment",
                 rows = recent,
-                playableQueue = recent.filter { it.isPlayable() },
+                playableQueue = playable,
                 emptyMessage = "Rien d'enregistré pour l'instant. Like un titre ou ajoute un album.",
-                showPlayAll = recent.any { it.isPlayable() },
+                showPlayAll = playable.isNotEmpty(),
+                playLabel = "Tout lire",
+                shuffleLabel = "Aléatoire",
             )
         }
         LibraryFilter.Tracks -> {
-            val tracks = az(data.liked)
+            val tracks = az(data.liked.filter { it.isPlayable() })
             LibraryContent(
                 headline = "Titres · A–Z",
                 rows = tracks,
-                playableQueue = tracks.filter { it.isPlayable() },
+                playableQueue = tracks,
                 emptyMessage = "Aucun titre dans ta bibliothèque. Like un morceau pour l'y ajouter.",
                 showPlayAll = tracks.isNotEmpty(),
+                playLabel = "Tout lire",
+                shuffleLabel = "Aléatoire",
             )
         }
         LibraryFilter.Playlists -> {
@@ -300,11 +363,23 @@ private fun buildLibraryContent(data: LibraryResponse, filter: LibraryFilter): L
                 addAll(data.playlists.map { playlistAsTrack(it) })
                 addAll(data.likedPlaylists.map { likedPlaylistAsTrack(it) })
             }.distinctBy { it.id }.sortedBy { it.title.lowercase() }
+            val fromLocal = data.playlists
+                .flatMap { it.tracks.orEmpty() }
+                .filter { it.isPlayable() }
+                .distinctBy { it.id }
             LibraryContent(
                 headline = "Playlists · A–Z",
                 rows = rows,
-                playableQueue = emptyList(),
+                playableQueue = fromLocal,
                 emptyMessage = "Aucune playlist. Crée-en une ou enregistre une playlist YT Music.",
+                showPlayAll = fromLocal.isNotEmpty(),
+                playLabel = "Tout lire",
+                shuffleLabel = "Aléatoire",
+                collectionHint = if (fromLocal.isEmpty() && rows.isNotEmpty()) {
+                    "Ouvre une playlist pour lancer la lecture"
+                } else {
+                    null
+                },
             )
         }
         LibraryFilter.Albums -> {
@@ -314,6 +389,11 @@ private fun buildLibraryContent(data: LibraryResponse, filter: LibraryFilter): L
                 rows = rows,
                 playableQueue = emptyList(),
                 emptyMessage = "Aucun album. Utilise « Enregistrer dans la bibliothèque » sur un album.",
+                collectionHint = if (rows.isNotEmpty()) {
+                    "Ouvre un album pour Lecture ou Aléatoire"
+                } else {
+                    null
+                },
             )
         }
         LibraryFilter.Artists -> {
@@ -323,6 +403,11 @@ private fun buildLibraryContent(data: LibraryResponse, filter: LibraryFilter): L
                 rows = rows,
                 playableQueue = emptyList(),
                 emptyMessage = "Aucun artiste enregistré.",
+                collectionHint = if (rows.isNotEmpty()) {
+                    "Ouvre un artiste pour ses titres et sa radio"
+                } else {
+                    null
+                },
             )
         }
         LibraryFilter.Downloads -> {
@@ -332,12 +417,15 @@ private fun buildLibraryContent(data: LibraryResponse, filter: LibraryFilter): L
                     byId[id] ?: TrackDto(id = id, title = id, type = "song")
                 },
             )
+            val playable = rows.filter { it.isPlayable() }
             LibraryContent(
                 headline = "Téléchargés · A–Z",
                 rows = rows,
-                playableQueue = rows.filter { it.isPlayable() },
+                playableQueue = playable,
                 emptyMessage = "Aucun téléchargement prêt. Lance un DL depuis le menu ⋮ d'un titre.",
-                showPlayAll = rows.any { it.isPlayable() },
+                showPlayAll = playable.isNotEmpty(),
+                playLabel = "Tout lire",
+                shuffleLabel = "Aléatoire",
             )
         }
         LibraryFilter.Profiles -> LibraryContent(

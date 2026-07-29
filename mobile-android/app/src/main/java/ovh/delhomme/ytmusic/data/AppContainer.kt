@@ -65,7 +65,12 @@ class AppContainer(context: Context) {
         .create(YtMusicApi::class.java)
 
     fun streamUrl(trackId: String): String =
-        BuildConfig.API_BASE_URL.trimEnd('/') + "/api/stream/$trackId"
+        // redirect=1 → 302 googlevideo (sans proxy Node) pour un démarrage plus rapide
+        BuildConfig.API_BASE_URL.trimEnd('/') + "/api/stream/$trackId?redirect=1"
+
+    /** Pré-chauffe le resolve youtubei côté API (piste courante + suivantes). */
+    fun warmStreamUrl(trackId: String): String =
+        BuildConfig.API_BASE_URL.trimEnd('/') + "/api/stream/$trackId/url"
 
     suspend fun ensureFreshToken(): Boolean {
         val refresh = tokenStore.getRefresh() ?: return tokenStore.getAccess() != null

@@ -59,6 +59,7 @@ fun HomeScreen(
     onPlayNamed: (List<TrackDto>, Int, String) -> Unit = { tracks, idx, _ -> onPlay(tracks, idx) },
     onMore: (TrackDto) -> Unit,
     onOpenDetail: (TrackDto) -> Unit,
+    onOpenArtist: ((String?, String) -> Unit)? = null,
     onOpenRecoPrefs: () -> Unit = {},
     onLoggedOut: () -> Unit = {},
     vm: HomeViewModel = viewModel(factory = HomeViewModel.factory(container)),
@@ -234,6 +235,7 @@ fun HomeScreen(
                                 track = track,
                                 onClick = { playItem(track, items) },
                                 onMore = { onMore(track) },
+                                onOpenArtist = onOpenArtist,
                             )
                         }
                         Spacer(Modifier.height(8.dp))

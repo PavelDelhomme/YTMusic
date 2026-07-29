@@ -119,18 +119,59 @@ export function ItemActionsSheet() {
   const isCurrent = inQueue && absQueueIndex === queueIndex;
   const duration = formatTrackDuration(item);
   const albumId = item.album?.id;
-  const artistsWithId = item.artists?.filter((a) => a.id) || [];
+  const artistsAll = (item.artists || []).filter(
+    (a) => a?.name && !/^(inconnu|unknown|n\/a)$/i.test(a.name.trim()),
+  );
   const collectionInLibrary =
     (item.type === 'album' && hasAlbum(item.id)) ||
     (item.type === 'artist' && hasArtist(item.id)) ||
     (item.type === 'playlist' && isPlaylistLiked(item.id));
   const albumSaved = albumId ? hasAlbum(albumId) : false;
+  const canOpenAlbum = Boolean(albumId || item.album?.name || item.type === 'album');
 
   const after = (fn: () => void | Promise<void>) => {
     void (async () => {
       await fn();
       close();
     })();
+  };
+
+  const goArtist = async (a: { name: string; id?: string }) => {
+    if (a.id) {
+      navigate(`/artist/${a.id}`);
+      return;
+    }
+    try {
+      const r = await api.search(a.name, 'artist');
+      const hit =
+        (r.artists || []).find(
+          (x) => x.title.toLowerCase() === a.name.toLowerCase() || x.id.startsWith('UC'),
+        ) || r.artists?.[0];
+      if (hit?.id) navigate(`/artist/${hit.id}`);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const goAlbum = async () => {
+    let id = albumId || (item.type === 'album' ? item.id : undefined);
+    if (!id && item.album?.name) {
+      try {
+        const r = await api.search(item.album.name, 'album');
+        id = r.albums?.[0]?.id;
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!id && playable) {
+      try {
+        const meta = await api.track(item.id);
+        id = meta.track.album?.id;
+      } catch {
+        /* ignore */
+      }
+    }
+    if (id) navigate(`/album/${id}`);
   };
 
   return (
@@ -220,6 +261,25 @@ export function ItemActionsSheet() {
         )}
 
         <div className="py-1 pb-6">
+          {artistsAll.map((a) => (
+            <Row
+              key={`${a.name}-${a.id || 'x'}`}
+              icon={<User className="h-4 w-4" />}
+              label={`Accéder à ${a.name}`}
+              onClick={() => after(() => goArtist(a))}
+            />
+          ))}
+          {canOpenAlbum && (
+            <Row
+              icon={<Disc3 className="h-4 w-4" />}
+              label="Accéder à l'album"
+              sub={item.album?.name}
+              onClick={() => after(() => goAlbum())}
+            />
+          )}
+          {(artistsAll.length > 0 || canOpenAlbum) && (
+            <div className="my-1 border-t border-white/10" />
+          )}
           {playable && (
             <>
               <Row
@@ -228,7 +288,7 @@ export function ItemActionsSheet() {
                 sub="Mix · similaires + découverte"
                 onClick={() => after(() => void startMix(item))}
               />
-              {item.artists?.some((a) => a.id) && (
+              {artistsAll.length > 0 && (
                 <Row
                   icon={<AudioLines className="h-4 w-4" />}
                   label="Radio proche de l'artiste"
@@ -247,12 +307,21 @@ export function ItemActionsSheet() {
                   onClick={() => after(() => void startRadio({ kind: 'album', id: albumId, seed: item }))}
                 />
               )}
-              {artistsWithId[0]?.id && (
+              {artistsAll[0] && (
                 <Row
                   icon={<Mic2 className="h-4 w-4" />}
                   label="Radio de l'artiste"
+                  sub={artistsAll[0].name}
                   onClick={() =>
-                    after(() => void startRadio({ kind: 'artist', id: artistsWithId[0].id!, seed: item }))
+                    after(async () => {
+                      let id = artistsAll[0].id;
+                      if (!id) {
+                        const r = await api.search(artistsAll[0].name, 'artist');
+                        id =
+                          r.artists?.find((x) => x.id.startsWith('UC'))?.id || r.artists?.[0]?.id;
+                      }
+                      if (id) void startRadio({ kind: 'artist', id, seed: item });
+                    })
                   }
                 />
               )}
@@ -306,31 +375,6 @@ export function ItemActionsSheet() {
               onClick={() => after(() => opts.onRemoveFromPlaylist?.())}
             />
           )}
-
-          {albumId && (
-            <Row
-              icon={<Disc3 className="h-4 w-4" />}
-              label="Accéder à l'album"
-              sub={item.album?.name}
-              onClick={() =>
-                after(() => {
-                  navigate(`/album/${albumId}`);
-                })
-              }
-            />
-          )}
-          {artistsWithId.map((a) => (
-            <Row
-              key={a.id}
-              icon={<User className="h-4 w-4" />}
-              label={`Accéder à ${a.name}`}
-              onClick={() =>
-                after(() => {
-                  navigate(`/artist/${a.id}`);
-                })
-              }
-            />
-          ))}
 
           {(item.type === 'album' || item.type === 'playlist' || item.type === 'artist') && (
             <Row
