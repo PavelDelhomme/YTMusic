@@ -6,7 +6,7 @@ import { ShelfRow } from '../components/MediaCard';
 import { CoverImage } from '../components/CoverImage';
 import { usePlayer } from '../store/player';
 import { useLibrary } from '../store/library';
-import { Play, Download, Library, Heart, Radio } from 'lucide-react';
+import { Play, Download, Library, Heart, Radio, Check } from 'lucide-react';
 import { ArtistLinks } from '../components/ArtistLinks';
 import { BackButton } from '../components/BackButton';
 
@@ -195,8 +195,13 @@ export function AlbumPage() {
         }}
         radioBusy={radioBusy}
         onAddLibrary={async () => {
-          const r = await api.import({ kind: 'album', id: data.album.id });
-          applyLibrary(r.library);
+          if (hasAlbum(data.album.id)) {
+            const r = await api.removeAlbum(data.album.id);
+            applyLibrary(r.library);
+          } else {
+            const r = await api.import({ kind: 'album', id: data.album.id });
+            applyLibrary(r.library);
+          }
         }}
         onOffline={() => void api.offlineStart('album', data.album.id)}
       />
@@ -325,7 +330,7 @@ function CollectionHeader({
             {onAddLibrary && (
               <button
                 type="button"
-                disabled={busy || inLibrary}
+                disabled={busy}
                 onClick={() => {
                   void (async () => {
                     setBusy(true);
@@ -338,7 +343,7 @@ function CollectionHeader({
                 }}
                 className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-4 py-2.5 text-sm text-yt-muted hover:text-white disabled:opacity-60"
               >
-                <Library className="h-4 w-4" />
+                {inLibrary ? <Check className="h-4 w-4" /> : <Library className="h-4 w-4" />}
                 {inLibrary ? 'Dans la bibliothèque' : 'Ajouter à la bibliothèque'}
               </button>
             )}

@@ -1,14 +1,20 @@
 import {
+  AudioLines,
+  Check,
   Disc3,
   Download,
   Heart,
   Library,
   ListEnd,
+  ListMinus,
   ListMusic,
   ListPlus,
+  Mic2,
   Pin,
-  Radio,
+  PinOff,
   Share2,
+  Smartphone,
+  Sparkles,
   Trash2,
   User,
   X,
@@ -16,7 +22,7 @@ import {
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, type Track } from '../api';
-import { downloadAndCache } from '../lib/offlineCache';
+import { downloadAndCache, listCachedIds } from '../lib/offlineCache';
 import { formatTrackDuration } from '../lib/time';
 import { useItemActions } from '../store/itemActions';
 import { useLibrary } from '../store/library';
@@ -64,10 +70,11 @@ export function ItemActionsSheet() {
   const startMix = usePlayer((s) => s.startMix);
   const queue = usePlayer((s) => s.queue);
   const queueIndex = usePlayer((s) => s.queueIndex);
-  const { isLiked, toggleLike, playlists, addToPlaylist, hasAlbum, applyLibrary } = useLibrary();
+  const { isLiked, toggleLike, playlists, addToPlaylist, hasAlbum, applyLibrary, downloaded } = useLibrary();
   const [busy, setBusy] = useState(false);
   const [showPlaylists, setShowPlaylists] = useState(false);
   const [pinId, setPinId] = useState<string | null>(null);
+  const [onDevice, setOnDevice] = useState(false);
 
   useEffect(() => {
     if (!item) return;
@@ -81,7 +88,10 @@ export function ItemActionsSheet() {
         setPinId(hit?.id || null);
       })
       .catch(() => setPinId(null));
-  }, [item?.id]);
+    void listCachedIds()
+      .then((ids) => setOnDevice(ids.includes(item.id) || downloaded.includes(item.id)))
+      .catch(() => setOnDevice(downloaded.includes(item.id)));
+  }, [item?.id, downloaded]);
 
   useEffect(() => {
     if (!item) return;
@@ -108,6 +118,11 @@ export function ItemActionsSheet() {
   const duration = formatTrackDuration(item);
   const albumId = item.album?.id;
   const artistsWithId = item.artists?.filter((a) => a.id) || [];
+  const collectionInLibrary =
+    (item.type === 'album' && hasAlbum(item.id)) ||
+    (item.type === 'artist' && useLibrary.getState().hasArtist(item.id)) ||
+    (item.type === 'playlist' && useLibrary.getState().isPlaylistLiked(item.id));
+  const albumSaved = albumId ? hasAlbum(albumId) : false;
 
   const after = (fn: () => void | Promise<void>) => {
     void (async () => {
@@ -206,14 +221,14 @@ export function ItemActionsSheet() {
           {playable && (
             <>
               <Row
-                icon={<Radio className="h-4 w-4" />}
-                label="Démarrer le mix"
+                icon={<Sparkles className="h-4 w-4" />}
+                label="Mix"
                 sub="Similaires + découverte"
                 onClick={() => after(() => void startMix(item))}
               />
               {item.artists?.some((a) => a.id) && (
                 <Row
-                  icon={<Radio className="h-4 w-4" />}
+                  icon={<AudioLines className="h-4 w-4" />}
                   label="Radio proche de l'artiste"
                   sub="Plus du même univers"
                   onClick={() =>
@@ -225,14 +240,14 @@ export function ItemActionsSheet() {
               )}
               {albumId && (
                 <Row
-                  icon={<Radio className="h-4 w-4" />}
+                  icon={<Disc3 className="h-4 w-4" />}
                   label="Radio de l'album"
                   onClick={() => after(() => void startRadio({ kind: 'album', id: albumId, seed: item }))}
                 />
               )}
               {artistsWithId[0]?.id && (
                 <Row
-                  icon={<Radio className="h-4 w-4" />}
+                  icon={<Mic2 className="h-4 w-4" />}
                   label="Radio de l'artiste"
                   onClick={() =>
                     after(() => void startRadio({ kind: 'artist', id: artistsWithId[0].id!, seed: item }))
@@ -241,8 +256,8 @@ export function ItemActionsSheet() {
               )}
               {inQueue && !isCurrent ? (
                 <Row
-                  icon={<Trash2 className="h-4 w-4" />}
-                  label="Retirer de la file d'attente"
+                  icon={<ListMinus className="h-4 w-4" />}
+                  label="Supprimer de la file d'attente"
                   onClick={() => after(() => removeFromQueue(absQueueIndex))}
                 />
               ) : (
@@ -254,19 +269,27 @@ export function ItemActionsSheet() {
                 />
               )}
               <Row
-                icon={<Download className="h-4 w-4" />}
-                label="Télécharger"
+                icon={onDevice ? <Smartphone className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+                label={onDevice ? "Sur l'appareil" : 'Télécharger'}
                 onClick={() =>
                   after(async () => {
+                    if (onDevice) return;
                     setBusy(true);
                     try {
                       await downloadAndCache(item);
                       await api.download(item.id).catch(() => undefined);
+                      setOnDevice(true);
                     } finally {
                       setBusy(false);
                     }
                   })
                 }
+              />
+              <Row
+                icon={liked ? <Check className="h-4 w-4" /> : <Library className="h-4 w-4" />}
+                label={liked ? 'Dans la bibliothèque' : 'Enregistrer dans la bibliothèque'}
+                disabled={busy}
+                onClick={() => after(() => void toggleLike(item))}
               />
             </>
           )}
@@ -306,17 +329,22 @@ export function ItemActionsSheet() {
 
           {(item.type === 'album' || item.type === 'playlist' || item.type === 'artist') && (
             <Row
-              icon={<Library className="h-4 w-4" />}
-              label="Enregistrer dans la bibliothèque"
+              icon={collectionInLibrary ? <Check className="h-4 w-4" /> : <Library className="h-4 w-4" />}
+              label={collectionInLibrary ? 'Dans la bibliothèque' : 'Enregistrer dans la bibliothèque'}
               disabled={busy}
               onClick={() =>
                 after(async () => {
                   setBusy(true);
                   try {
-                    const kind =
-                      item.type === 'album' ? 'album' : item.type === 'artist' ? 'artist' : 'playlist';
-                    const r = await api.import({ kind, id: item.id });
-                    applyLibrary(r.library);
+                    if (item.type === 'album' && hasAlbum(item.id)) {
+                      const r = await api.removeAlbum(item.id);
+                      applyLibrary(r.library);
+                    } else {
+                      const kind =
+                        item.type === 'album' ? 'album' : item.type === 'artist' ? 'artist' : 'playlist';
+                      const r = await api.import({ kind, id: item.id });
+                      applyLibrary(r.library);
+                    }
                   } finally {
                     setBusy(false);
                   }
@@ -325,17 +353,24 @@ export function ItemActionsSheet() {
             />
           )}
 
-          {playable && albumId && !hasAlbum(albumId) && (
+          {playable && albumId && (
             <Row
-              icon={<Library className="h-4 w-4" />}
-              label="Enregistrer l'album dans la bibliothèque"
+              icon={albumSaved ? <Check className="h-4 w-4" /> : <Library className="h-4 w-4" />}
+              label={
+                albumSaved ? 'Album dans la bibliothèque' : "Enregistrer l'album dans la bibliothèque"
+              }
               disabled={busy}
               onClick={() =>
                 after(async () => {
                   setBusy(true);
                   try {
-                    const r = await api.import({ kind: 'album', id: albumId });
-                    applyLibrary(r.library);
+                    if (albumSaved) {
+                      const r = await api.removeAlbum(albumId);
+                      applyLibrary(r.library);
+                    } else {
+                      const r = await api.import({ kind: 'album', id: albumId });
+                      applyLibrary(r.library);
+                    }
                   } finally {
                     setBusy(false);
                   }
@@ -345,8 +380,8 @@ export function ItemActionsSheet() {
           )}
 
           <Row
-            icon={<Pin className="h-4 w-4" />}
-            label={pinId ? "Retirer de l'accès rapide" : "Épingler dans l'accès rapide"}
+            icon={pinId ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+            label={pinId ? "Retirer de l'accès rapide" : "Épingler à l'accès rapide"}
             onClick={() =>
               after(async () => {
                 if (pinId) {
@@ -366,7 +401,7 @@ export function ItemActionsSheet() {
           />
 
           <Row
-            icon={<Radio className="h-4 w-4 opacity-40" />}
+            icon={<Sparkles className="h-4 w-4 opacity-40" />}
             label="Mise en veille"
             sub="Bientôt — 5 / 15 / 30 min, 1 h, fin de chanson"
             disabled

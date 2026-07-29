@@ -22,7 +22,23 @@ elif [[ -z "${JAVA_HOME:-}" || ! -x "${JAVA_HOME}/bin/javac" ]]; then
 fi
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
 
-API_BASE_URL="${API_BASE_URL:-${VITE_API_ORIGIN:-http://127.0.0.1:8787}}"
+API_BASE_URL="${API_BASE_URL:-${VITE_API_ORIGIN:-}}"
+
+detect_lan_ip() {
+  ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}'
+}
+
+# Sur un téléphone physique, 127.0.0.1 = le téléphone → utiliser l’IP LAN de la machine
+if [[ -z "$API_BASE_URL" || "$API_BASE_URL" == *"127.0.0.1"* || "$API_BASE_URL" == *"localhost"* ]]; then
+  LAN="$(detect_lan_ip || true)"
+  if [[ -n "${LAN:-}" ]]; then
+    API_BASE_URL="http://${LAN}:8787"
+    echo "==> API LAN auto : $API_BASE_URL (évite Failed to connect to /127.0.0.1:8787)"
+  else
+    API_BASE_URL="http://127.0.0.1:8787"
+    echo "==> API fallback 127.0.0.1 + adb reverse"
+  fi
+fi
 
 echo "==> MODE=$MODE"
 echo "==> DEVICE=$DEVICE"

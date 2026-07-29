@@ -42,6 +42,8 @@ class PlayerController(
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
     private var pending: Pair<List<TrackDto>, Int>? = null
+    private var pendingSeekMs: Long = 0L
+    private var pendingAutoplay: Boolean = true
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -74,8 +76,15 @@ class PlayerController(
                 applyRepeatShuffle(c)
                 syncFrom(c)
                 pending?.let { (tracks, idx) ->
+                    val seek = pendingSeekMs
+                    val auto = pendingAutoplay
                     pending = null
-                    playNow(c, tracks, idx)
+                    pendingSeekMs = 0L
+                    pendingAutoplay = true
+                    playNow(c, tracks, idx, autoplay = auto)
+                    if (seek > 0) c.seekTo(seek)
+                    if (!auto) c.pause()
+                    syncFrom(c)
                 }
             }
         }, MoreExecutors.directExecutor())
@@ -112,31 +121,98 @@ class PlayerController(
     }
 
     fun toggle() {
-        val p = player() ?: return
+        connect()
+        val p = player() ?: run {
+            // Contrôleur pas encore prêt : bascule via ExoPlayer direct
+            val exo = PlaybackService.Holder.player ?: return
+            if (exo.isPlaying) exo.pause() else exo.play()
+            syncFrom(exo)
+            return
+        }
         if (p.isPlaying) p.pause() else p.play()
     }
 
+    fun pause() {
+        connect()
+        player()?.pause() ?: PlaybackService.Holder.player?.pause()
+    }
+
+    fun playResume() {
+        connect()
+        player()?.play() ?: PlaybackService.Holder.player?.play()
+    }
+
     fun skipNext() {
-        player()?.seekToNextMediaItem()
-    }
-
-    fun skipPrev() {
-        player()?.seekToPreviousMediaItem()
-    }
-
-    /** Pression simple : début du titre. Double pression : titre précédent. */
-    fun skipPrevOrRestart(forcePrevious: Boolean) {
-        val p = player() ?: return
-        if (forcePrevious) {
-            p.seekToPreviousMediaItem()
-        } else {
-            p.seekTo(0L)
+        connect()
+        val p = player() ?: PlaybackService.Holder.player ?: return
+        if (p.hasNextMediaItem()) {
+            p.seekToNextMediaItem()
+        } else if (repeatMode == RepeatMode.All && p.mediaItemCount > 0) {
+            p.seekTo(0, 0L)
+            p.play()
         }
         syncFrom(p)
     }
 
+    /**
+     * Précédent YTM :
+     * - si position > 3 s → retour début du titre
+     * - sinon → titre précédent dans la file (pas une sélection UI non démarrée)
+     */
+    fun skipPrev() {
+        connect()
+        val p = player() ?: PlaybackService.Holder.player ?: return
+        if (p.currentPosition > 3000L) {
+            p.seekTo(0L)
+            syncFrom(p)
+        } else if (p.hasPreviousMediaItem()) {
+            p.seekToPreviousMediaItem()
+            syncFrom(p)
+        } else if (repeatMode == RepeatMode.All && p.mediaItemCount > 0) {
+            p.seekTo(p.mediaItemCount - 1, 0L)
+            p.play()
+            syncFrom(p)
+        }
+    }
+
+    fun skipPrevOrRestart(forcePrevious: Boolean) {
+        connect()
+        val p = player() ?: PlaybackService.Holder.player ?: return
+        if (forcePrevious) {
+            if (p.hasPreviousMediaItem()) p.seekToPreviousMediaItem()
+            syncFrom(p)
+        } else {
+            skipPrev()
+        }
+    }
+
     fun seek(ms: Long) {
-        player()?.seekTo(ms)
+        player()?.seekTo(ms.coerceAtLeast(0L))
+    }
+
+    /** Restaure une file sync (autres appareils) + timecode, sans forcer le play. */
+    fun restoreQueue(
+        tracks: List<TrackDto>,
+        startIndex: Int,
+        positionMs: Long,
+        autoplay: Boolean,
+        title: String? = "File d'attente",
+    ) {
+        if (tracks.isEmpty()) return
+        if (title != null) queueTitle = title
+        ensureService()
+        connect()
+        val c = controller ?: PlaybackService.Holder.player
+        if (c != null) {
+            playNow(c, tracks, startIndex, autoplay = autoplay)
+            if (positionMs > 0) c.seekTo(positionMs)
+            if (!autoplay) c.pause()
+            syncFrom(c)
+        } else {
+            pending = tracks to startIndex
+            pendingSeekMs = positionMs
+            pendingAutoplay = autoplay
+        }
     }
 
     fun playAt(index: Int) {
@@ -278,7 +354,7 @@ class PlayerController(
             )
             .build()
 
-    private fun playNow(player: Player, tracks: List<TrackDto>, startIndex: Int) {
+    private fun playNow(player: Player, tracks: List<TrackDto>, startIndex: Int, autoplay: Boolean = true) {
         val playable = tracks.filter { it.isPlayable() }
         if (playable.isEmpty()) return
         val idx = startIndex.coerceIn(0, playable.lastIndex)
@@ -287,7 +363,7 @@ class PlayerController(
         player.setMediaItems(playable.map { mediaItem(it) }, idx, 0L)
         applyRepeatShuffle(player)
         player.prepare()
-        player.play()
+        if (autoplay) player.play() else player.pause()
         syncFrom(player)
     }
 

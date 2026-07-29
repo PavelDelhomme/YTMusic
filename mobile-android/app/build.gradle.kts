@@ -37,9 +37,28 @@ android {
         versionCode = 3
         versionName = "2.1.0-native"
 
-        val apiBase = (project.findProperty("API_BASE_URL") as String?)
+        val rawApi = (project.findProperty("API_BASE_URL") as String?)
+            ?: rootEnv["ANDROID_API_BASE_URL"]
             ?: rootEnv["API_BASE_URL"]
             ?: "http://127.0.0.1:8787"
+        val apiBase = if (
+            rawApi.contains("127.0.0.1") || rawApi.contains("localhost")
+        ) {
+            // Device physique : préférer l’IP LAN (sinon Failed to connect to /127.0.0.1)
+            val lan = runCatching {
+                ProcessBuilder("bash", "-lc",
+                    "ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if(\$i==\"src\") {print \$(i+1); exit}}'",
+                ).redirectErrorStream(true).start()
+                    .inputStream.bufferedReader().readText().trim()
+            }.getOrNull().orEmpty()
+            if (lan.matches(Regex("""\d+\.\d+\.\d+\.\d+"""))) {
+                "http://$lan:8787"
+            } else {
+                rawApi
+            }
+        } else {
+            rawApi
+        }
         val devEmail = rootEnv["SEED_EMAIL"] ?: rootEnv["VITE_DEV_EMAIL"] ?: ""
         val devPassword = rootEnv["SEED_PASSWORD"] ?: rootEnv["VITE_DEV_PASSWORD"] ?: ""
         val androidOrigin = rootEnv["WEBAUTHN_ANDROID_ORIGINS"]

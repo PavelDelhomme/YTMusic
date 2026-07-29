@@ -44,9 +44,25 @@ data class LikeResponse(val liked: Boolean, val library: LibraryResponse? = null
 data class CreatePlaylistBody(val name: String, val description: String? = null)
 
 @JsonClass(generateAdapter = false)
+data class PlaybackStateDto(
+    val current: TrackDto? = null,
+    val queue: List<TrackDto> = emptyList(),
+    val queueIndex: Int = 0,
+    val isPlaying: Boolean = false,
+    /** Position en secondes (aligné web / WS). */
+    val progress: Double = 0.0,
+    val duration: Double = 0.0,
+    val volume: Double = 0.9,
+    val shuffle: Boolean = false,
+    val repeat: String? = "off",
+    val updatedAt: Long? = null,
+)
+
+@JsonClass(generateAdapter = false)
 data class SessionSnapshot(
     val devices: List<DeviceDto> = emptyList(),
     val activePlayerId: String? = null,
+    val state: PlaybackStateDto? = null,
 )
 
 @JsonClass(generateAdapter = false)
@@ -263,6 +279,9 @@ interface YtMusicApi {
     @POST("api/library/albums")
     suspend fun saveAlbum(@Body album: TrackDto): Map<String, Any>
 
+    @DELETE("api/library/albums/{id}")
+    suspend fun removeAlbum(@Path("id") id: String): Map<String, Any>
+
     @POST("api/library/artists")
     suspend fun saveArtist(@Body artist: TrackDto): Map<String, Any>
 
@@ -295,6 +314,9 @@ interface YtMusicApi {
 
     @GET("api/session")
     suspend fun session(): SessionSnapshot
+
+    @PUT("api/session/state")
+    suspend fun publishSessionState(@Body body: Map<String, @JvmSuppressWildcards Any?>): SessionSnapshot
 
     @POST("api/download/{id}")
     suspend fun download(@Path("id") id: String): Map<String, Any>

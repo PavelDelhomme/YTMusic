@@ -16,10 +16,15 @@ Sources : `mobile-android/` · Package : `ovh.delhomme.ytmusic`
 ## Installer
 
 ```bash
-make android              # API locale + APK
+make android              # API locale (IP LAN auto) + APK
 make android-prod         # API https://ytmusic.delhomme.ovh
+API_BASE_URL=http://192.168.x.x:8787 make android   # forcer l’IP
 make seed-users           # comptes SEED_* du .env
 ```
+
+> **Important** : sur un téléphone physique, `http://127.0.0.1:8787` pointe vers le téléphone
+> (erreur « Failed to connect to /127.0.0.1:8787 »). Le script d’install utilise l’**IP LAN**
+> de la machine + `adb reverse` en secours. Définis `ANDROID_API_BASE_URL` dans `.env` si besoin.
 
 ## Auth
 

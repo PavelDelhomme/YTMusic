@@ -82,9 +82,13 @@ Voir `docs/UI-MALLEABILITY-PERF.md` — tracer conso web / mobile / serveur.
 | Zone | Attendu | Statut |
 |------|---------|--------|
 | Accueil | Logo + « Music » à gauche · avatar compte à droite → sheet compte | ✅ |
-| Biblio | Titre « Bibliothèque » · historique + avatar à droite | ✅ |
+| Biblio | Titre « Bibliothèque » · avatar compte à droite (reco, passkey, logout, historique) | ✅ |
 | Sheet compte | Historique, téléchargements, reco, passkey, déconnexion | ✅ |
-| Biblio contenu | Enregistré récemment, aimés, playlists, albums… | ✅ |
+| Biblio filtres | Chips horizontaux (Téléchargés, Playlists, Titres, Albums…) masquables | ✅ |
+| Biblio défaut | Filtre **Ajouts** = Enregistré récemment | ✅ |
+| Biblio Titres | Liste A–Z + ⋮ (contenu enregistré en biblio) | ✅ |
+| Menu actions | États « Dans la biblio » / « Sur l'appareil », Mix, icônes distinctes | ✅ |
+| Nav album/artiste | Replie le Now Playing (mini-bar), lecture continue | ✅ |
 | Téléchargements | Écran / gestion offline | ⏳ |
 
 ---

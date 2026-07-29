@@ -17,9 +17,12 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -42,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.navigation.compose.NavHost
@@ -198,6 +202,9 @@ private fun MainTabs(
     var forceOnboarding by remember { mutableStateOf(false) }
     var onboardingChecked by remember { mutableStateOf(false) }
 
+    var sessionHydrated by remember { mutableStateOf(false) }
+    var pendingRemoteLabel by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(Unit) {
         likedIds = runCatching {
             container.api.library().liked.map { it.id }.toSet()
@@ -208,6 +215,75 @@ private fun MainTabs(
                 val p = container.api.prefs().prefs
                 !p.onboardingDone || (p.genres.isEmpty() && p.moods.isEmpty())
             }.getOrDefault(false)
+        }
+        if (!sessionHydrated) {
+            sessionHydrated = true
+            runCatching {
+                container.ensureFreshToken()
+                val snap = container.api.session()
+                val st = snap.state
+                val queue = st?.queue.orEmpty().filter { it.isPlayable() }
+                if (queue.isNotEmpty() || st?.current != null) {
+                    val tracks = if (queue.isNotEmpty()) {
+                        queue
+                    } else {
+                        listOfNotNull(st?.current?.takeIf { it.isPlayable() })
+                    }
+                    if (tracks.isNotEmpty()) {
+                        val idx = (st?.queueIndex ?: 0).coerceIn(0, tracks.lastIndex)
+                        val posMs = ((st?.progress ?: 0.0) * 1000.0).toLong().coerceAtLeast(0L)
+                        val autoplay = st?.isPlaying == true
+                        player.restoreQueue(
+                            tracks = tracks,
+                            startIndex = idx,
+                            positionMs = posMs,
+                            autoplay = autoplay,
+                            title = "File synchronisée",
+                        )
+                        pendingRemoteLabel = null
+                    } else {
+                        pendingRemoteLabel = st?.current?.title ?: "Titre en attente"
+                    }
+                }
+            }.onFailure {
+                pendingRemoteLabel = "Titre en attente"
+            }
+        }
+    }
+
+    // Publier l’état de lecture pour sync multi-appareils (web / desktop / autre mobile)
+    suspend fun publishPlayback() {
+        val ui = player.state.value
+        val t = ui.track ?: return
+        runCatching {
+            container.api.publishSessionState(
+                mapOf(
+                    "current" to t,
+                    "queue" to ui.queue,
+                    "queueIndex" to ui.queueIndex,
+                    "isPlaying" to ui.playing,
+                    "progress" to (ui.positionMs / 1000.0),
+                    "duration" to (ui.durationMs / 1000.0).coerceAtLeast(0.0),
+                    "shuffle" to ui.shuffle,
+                    "repeat" to when (ui.repeat) {
+                        ovh.delhomme.ytmusic.player.RepeatMode.Off -> "off"
+                        ovh.delhomme.ytmusic.player.RepeatMode.All -> "all"
+                        ovh.delhomme.ytmusic.player.RepeatMode.One -> "one"
+                    },
+                ),
+            )
+        }
+    }
+    LaunchedEffect(playerUi.track?.id, playerUi.playing, playerUi.queueIndex) {
+        if (playerUi.track == null) return@LaunchedEffect
+        kotlinx.coroutines.delay(400)
+        publishPlayback()
+    }
+    LaunchedEffect(playerUi.playing, playerUi.track?.id) {
+        if (!playerUi.playing || playerUi.track == null) return@LaunchedEffect
+        while (true) {
+            kotlinx.coroutines.delay(5_000)
+            publishPlayback()
         }
     }
 
@@ -250,9 +326,10 @@ private fun MainTabs(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets.safeDrawing,
         bottomBar = {
             if (!expanded) {
-                Column {
+                Column(Modifier.navigationBarsPadding()) {
                     playerUi.track?.let { track ->
                         MiniPlayerBar(
                             track = track,
@@ -272,6 +349,15 @@ private fun MainTabs(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .background(MaterialTheme.colorScheme.surfaceVariant),
+                        )
+                    } ?: pendingRemoteLabel?.let { label ->
+                        Text(
+                            "En attente · $label",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .padding(16.dp),
                         )
                     }
                     NavigationBar(
@@ -384,9 +470,11 @@ private fun MainTabs(
                 menuPlaylistId = null
             },
             onOpenAlbum = { id ->
+                onClosePlayer()
                 nav.navigate("detail/album/${Uri.encode(id)}")
             },
             onOpenArtist = { id ->
+                onClosePlayer()
                 nav.navigate("detail/artist/${Uri.encode(id)}")
             },
             playlistId = menuPlaylistId,
