@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -387,7 +388,7 @@ class PlayerController(
     private fun player(): Player? = controller ?: PlaybackService.Holder.player
 
     private fun ensureService() {
-        context.startService(Intent(context, PlaybackService::class.java))
+        ContextCompat.startForegroundService(context, Intent(context, PlaybackService::class.java))
     }
 
     private fun syncFrom(player: Player) {
