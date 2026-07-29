@@ -81,8 +81,7 @@ class PlayerController(
                     pending = null
                     pendingSeekMs = 0L
                     pendingAutoplay = true
-                    playNow(c, tracks, idx, autoplay = auto)
-                    if (seek > 0) c.seekTo(seek)
+                    playNow(c, tracks, idx, autoplay = auto, startPositionMs = seek)
                     if (!auto) c.pause()
                     syncFrom(c)
                 }
@@ -204,8 +203,7 @@ class PlayerController(
         connect()
         val c = controller ?: PlaybackService.Holder.player
         if (c != null) {
-            playNow(c, tracks, startIndex, autoplay = autoplay)
-            if (positionMs > 0) c.seekTo(positionMs)
+            playNow(c, tracks, startIndex, autoplay = autoplay, startPositionMs = positionMs)
             if (!autoplay) c.pause()
             syncFrom(c)
         } else {
@@ -354,13 +352,23 @@ class PlayerController(
             )
             .build()
 
-    private fun playNow(player: Player, tracks: List<TrackDto>, startIndex: Int, autoplay: Boolean = true) {
+    private fun playNow(
+        player: Player,
+        tracks: List<TrackDto>,
+        startIndex: Int,
+        autoplay: Boolean = true,
+        startPositionMs: Long = 0L,
+    ) {
         val playable = tracks.filter { it.isPlayable() }
         if (playable.isEmpty()) return
         val idx = startIndex.coerceIn(0, playable.lastIndex)
         PlaybackService.Holder.queue = playable
         PlaybackService.Holder.index = idx
-        player.setMediaItems(playable.map { mediaItem(it) }, idx, 0L)
+        player.setMediaItems(
+            playable.map { mediaItem(it) },
+            idx,
+            startPositionMs.coerceAtLeast(0L),
+        )
         applyRepeatShuffle(player)
         player.prepare()
         if (autoplay) player.play() else player.pause()

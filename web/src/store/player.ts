@@ -266,9 +266,12 @@ function installPersistLifecycle() {
 
 installPersistLifecycle();
 
+let lastHttpPublishAt = 0;
+let lastHttpSignature = '';
+
 function publish() {
   const s = usePlayer.getState();
-  useSession.getState().publishState({
+  const payload = {
     current: s.current,
     queue: s.queue,
     queueIndex: s.queueIndex,
@@ -279,7 +282,24 @@ function publish() {
     shuffle: s.shuffle,
     repeat: s.repeat,
     updatedAt: Date.now(),
-  });
+  };
+  // WS (temps réel entre appareils connectés)
+  useSession.getState().publishState(payload);
+
+  // HTTP → SQLite : pour que le mobile récupère titre + timecode au cold start
+  const sig = `${s.current?.id || ''}|${s.queueIndex}|${s.isPlaying}|${Math.floor(s.progress)}`;
+  const now = Date.now();
+  // Important = changement de piste / play-pause ; sinon throttle ~4s pour le progress
+  const trackOrPlayChanged =
+    lastHttpSignature.split('|').slice(0, 3).join('|') !== sig.split('|').slice(0, 3).join('|');
+  if (trackOrPlayChanged || now - lastHttpPublishAt > 4000) {
+    lastHttpPublishAt = now;
+    lastHttpSignature = sig;
+    void import('../api')
+      .then(({ api }) => api.publishSessionState(payload))
+      .catch(() => undefined);
+  }
+
   persistPlayer();
   void import('../lib/backgroundAudio')
     .then(({ setNativePlaybackNotification }) =>
