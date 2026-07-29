@@ -91,7 +91,8 @@ export const useSession = create<SessionState>((set, get) => ({
   sendCommand: (command) => sessionSocket.command(command),
 
   publishState: (state) => {
-    if (get().isActivePlayer) sessionSocket.publishState(state);
+    // Toujours pousser via WS si connecté ; l’HTTP dans player.publish() assure la persistance
+    sessionSocket.publishState(state);
   },
 
   renameDevice: (name) => {

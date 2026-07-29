@@ -360,6 +360,13 @@ export const api = {
   addPin: (payload: Record<string, unknown>) =>
     req<{ pins: any[] }>('/api/pins', { method: 'POST', body: JSON.stringify(payload) }),
   removePin: (id: string) => req<{ pins: any[] }>(`/api/pins/${id}`, { method: 'DELETE' }),
+  publishSessionState: (state: Record<string, unknown>) =>
+    req<{ devices: any[]; activePlayerId: string | null; state: any }>('/api/session/state', {
+      method: 'PUT',
+      body: JSON.stringify(state),
+    }),
+  sessionSnapshot: () =>
+    req<{ devices: any[]; activePlayerId: string | null; state: any }>('/api/session'),
   listen: (payload: {
     trackId: string;
     event: 'start' | 'progress' | 'complete' | 'skip';

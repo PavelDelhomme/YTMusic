@@ -209,6 +209,8 @@ private fun MainTabs(
 
     var sessionHydrated by remember { mutableStateOf(false) }
     var pendingRemoteLabel by remember { mutableStateOf<String?>(null) }
+    /** Empêche d’écraser l’état web juste après la restauration multi-appareils. */
+    var suppressSessionPublishUntil by remember { mutableStateOf(0L) }
 
     LaunchedEffect(Unit) {
         likedIds = runCatching {
@@ -228,27 +230,32 @@ private fun MainTabs(
                 val snap = container.api.session()
                 val st = snap.state
                 val queue = st?.queue.orEmpty().filter { it.isPlayable() }
-                if (queue.isNotEmpty() || st?.current != null) {
-                    val tracks = if (queue.isNotEmpty()) {
-                        queue
-                    } else {
-                        listOfNotNull(st?.current?.takeIf { it.isPlayable() })
-                    }
-                    if (tracks.isNotEmpty()) {
-                        val idx = (st?.queueIndex ?: 0).coerceIn(0, tracks.lastIndex)
-                        val posMs = ((st?.progress ?: 0.0) * 1000.0).toLong().coerceAtLeast(0L)
-                        val autoplay = st?.isPlaying == true
-                        player.restoreQueue(
-                            tracks = tracks,
-                            startIndex = idx,
-                            positionMs = posMs,
-                            autoplay = autoplay,
-                            title = "File synchronisée",
-                        )
-                        pendingRemoteLabel = null
-                    } else {
-                        pendingRemoteLabel = st?.current?.title ?: "Titre en attente"
-                    }
+                val current = st?.current?.takeIf { it.isPlayable() }
+                val tracks = when {
+                    queue.isNotEmpty() -> queue
+                    current != null -> listOf(current)
+                    else -> emptyList()
+                }
+                if (tracks.isNotEmpty()) {
+                    val idx = when {
+                        current != null -> tracks.indexOfFirst { it.id == current.id }
+                            .takeIf { it >= 0 } ?: (st?.queueIndex ?: 0)
+                        else -> st?.queueIndex ?: 0
+                    }.coerceIn(0, tracks.lastIndex)
+                    val posMs = ((st?.progress ?: 0.0) * 1000.0).toLong().coerceAtLeast(0L)
+                    // Ne reprend la lecture auto que si l’autre appareil jouait vraiment
+                    val autoplay = st?.isPlaying == true
+                    suppressSessionPublishUntil = System.currentTimeMillis() + 12_000L
+                    player.restoreQueue(
+                        tracks = tracks,
+                        startIndex = idx,
+                        positionMs = posMs,
+                        autoplay = autoplay,
+                        title = "File synchronisée",
+                    )
+                    pendingRemoteLabel = null
+                } else if (st?.current != null) {
+                    pendingRemoteLabel = st.current.title ?: "Titre en attente"
                 }
             }.onFailure {
                 pendingRemoteLabel = "Titre en attente"
@@ -258,6 +265,7 @@ private fun MainTabs(
 
     // Publier l’état de lecture pour sync multi-appareils (web / desktop / autre mobile)
     suspend fun publishPlayback() {
+        if (System.currentTimeMillis() < suppressSessionPublishUntil) return
         val ui = player.state.value
         val t = ui.track ?: return
         runCatching {
@@ -404,7 +412,10 @@ private fun MainTabs(
                             } else {
                                 0f
                             },
-                            onToggle = player::toggle,
+                            onToggle = {
+                                suppressSessionPublishUntil = 0L
+                                player.toggle()
+                            },
                             onCast = { showCast = true },
                             onOpen = onOpenPlayer,
                             onSeek = { ratio ->
