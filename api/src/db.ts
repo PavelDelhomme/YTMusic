@@ -208,6 +208,15 @@ function ensureAdminColumn() {
 }
 ensureAdminColumn();
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS playback_state (
+    user_id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+`);
+
 export function isAdminUser(u: UserRow) {
   const adminEmails = (process.env.ADMIN_EMAILS || '')
     .split(',')

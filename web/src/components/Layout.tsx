@@ -84,6 +84,12 @@ export function Layout() {
   }, [initAuth, refresh, initSession]);
 
   useEffect(() => {
+    if (/^\/(album|artist|playlist|local)\//.test(location.pathname)) {
+      setNowPlayingOpen(false);
+    }
+  }, [location.pathname]);
+
+  useEffect(() => {
     if (!authLoaded) return;
     const guest = !user || user.isGuest || user.email.includes('@local.ytmusic');
     if (guest) {

@@ -137,7 +137,7 @@ import {
   syncYtmLibrary,
 } from './ytm-sync.js';
 import { findUserByEmail, createUser, publicUser, updateUserProfile, findUserById, isAdminUser } from './db.js';
-import { detachSocket, getHubPublic, handleSessionMessage } from './sessions.js';
+import { detachSocket, getHubPublic, handleSessionMessage, publishPlaybackState } from './sessions.js';
 import type { Track } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1302,6 +1302,14 @@ app.post('/api/offline/start', accountRequired, async (req, res) => {
 
 app.get('/api/session', accountRequired, (req, res) => {
   res.json(getHubPublic(req.userId!));
+});
+
+app.put('/api/session/state', accountRequired, (req, res) => {
+  try {
+    res.json(publishPlaybackState(req.userId!, req.body || {}));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
 });
 
 const clientDist = join(ROOT, 'web', 'dist');

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
+import { db } from './db.js';
 import type { Track } from './types.js';
 
 export type DeviceType = 'web' | 'mobile' | 'desktop' | 'tv';
@@ -53,13 +54,57 @@ function emptyState(): PlaybackState {
   };
 }
 
+function loadPersistedState(userId: string): PlaybackState | null {
+  try {
+    const row = db.prepare('SELECT payload FROM playback_state WHERE user_id = ?').get(userId) as
+      | { payload: string }
+      | undefined;
+    if (!row?.payload) return null;
+    const parsed = JSON.parse(row.payload) as PlaybackState;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      ...emptyState(),
+      ...parsed,
+      queue: Array.isArray(parsed.queue) ? parsed.queue : [],
+      updatedAt: parsed.updatedAt || Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistState(userId: string, state: PlaybackState) {
+  try {
+    db.prepare(
+      `INSERT INTO playback_state (user_id, payload, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`,
+    ).run(userId, JSON.stringify(state), Date.now());
+  } catch {
+    /* ignore */
+  }
+}
+
 function getHub(userId: string): UserHub {
   let hub = hubs.get(userId);
   if (!hub) {
-    hub = { devices: new Map(), activePlayerId: null, state: emptyState() };
+    hub = {
+      devices: new Map(),
+      activePlayerId: null,
+      state: loadPersistedState(userId) || emptyState(),
+    };
     hubs.set(userId, hub);
   }
   return hub;
+}
+
+function setHubState(userId: string, hub: UserHub, patch: Partial<PlaybackState>) {
+  hub.state = {
+    ...hub.state,
+    ...patch,
+    updatedAt: Date.now(),
+  };
+  persistState(userId, hub.state);
 }
 
 function publicDevices(hub: UserHub) {
@@ -154,12 +199,10 @@ export function handleSessionMessage(
       const target = hub.devices.get(targetId);
       if (target?.canPlay) {
         hub.activePlayerId = targetId;
-        // Tell new player to take over with full state
         send(target.ws, {
           type: 'become_player',
           state: hub.state,
         });
-        // Tell previous players to stop local audio if they were playing remotely-owned
         broadcast(hub, { type: 'active_changed', activePlayerId: targetId, state: hub.state });
         pushSnapshot(hub);
       }
@@ -167,17 +210,11 @@ export function handleSessionMessage(
     }
 
     case 'state_update': {
-      // Only active player (or anyone if none) may publish authoritative state
       if (hub.activePlayerId && deviceId && deviceId !== hub.activePlayerId) {
-        // Controllers can still propose state when transferring — ignore stray
         break;
       }
       const s = msg.state || {};
-      hub.state = {
-        ...hub.state,
-        ...s,
-        updatedAt: Date.now(),
-      };
+      setHubState(userId, hub, s);
       broadcast(
         hub,
         { type: 'state', state: hub.state, activePlayerId: hub.activePlayerId },
@@ -189,7 +226,6 @@ export function handleSessionMessage(
     case 'command': {
       const active = hub.activePlayerId ? hub.devices.get(hub.activePlayerId) : null;
       if (!active) {
-        // No player yet — if sender can play, make it active and apply locally via echo
         if (device?.canPlay) {
           hub.activePlayerId = device.id;
           send(device.ws, { type: 'command', command: msg.command, from: deviceId });
@@ -202,7 +238,6 @@ export function handleSessionMessage(
         command: msg.command,
         from: deviceId,
       });
-      // Optimistic mirror for controllers
       broadcast(
         hub,
         { type: 'command_echo', command: msg.command, from: deviceId },
@@ -212,12 +247,11 @@ export function handleSessionMessage(
     }
 
     case 'transfer_and_play': {
-      // Move playback to target and optionally replace queue
       const targetId = String(msg.targetId || '');
       const target = hub.devices.get(targetId);
       if (!target?.canPlay) break;
       if (msg.state) {
-        hub.state = { ...hub.state, ...msg.state, updatedAt: Date.now() };
+        setHubState(userId, hub, msg.state);
       }
       hub.activePlayerId = targetId;
       send(target.ws, { type: 'become_player', state: hub.state, autoplay: true });
@@ -232,7 +266,14 @@ export function handleSessionMessage(
 
     case 'get_snapshot':
       if (device) pushSnapshot(hub, device);
-      else send(ws, { type: 'snapshot', devices: publicDevices(hub), activePlayerId: hub.activePlayerId, state: hub.state });
+      else {
+        send(ws, {
+          type: 'snapshot',
+          devices: publicDevices(hub),
+          activePlayerId: hub.activePlayerId,
+          state: hub.state,
+        });
+      }
       break;
 
     default:
@@ -252,6 +293,7 @@ export function detachSocket(ws: WebSocket) {
             send(next.ws, { type: 'become_player', state: hub.state });
           }
         }
+        persistState(userId, hub.state);
         pushSnapshot(hub);
         if (hub.devices.size === 0) hubs.delete(userId);
         return;
@@ -267,4 +309,12 @@ export function getHubPublic(userId: string) {
     activePlayerId: hub.activePlayerId,
     state: hub.state,
   };
+}
+
+/** HTTP : publier l’état de lecture (mobile sans WS). */
+export function publishPlaybackState(userId: string, patch: Partial<PlaybackState>) {
+  const hub = getHub(userId);
+  setHubState(userId, hub, patch);
+  broadcast(hub, { type: 'state', state: hub.state, activePlayerId: hub.activePlayerId });
+  return getHubPublic(userId);
 }

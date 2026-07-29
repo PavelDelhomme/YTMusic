@@ -1,24 +1,25 @@
 import type { PointerEvent as ReactPointerEvent, SyntheticEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Cast,
-  ChevronDown,
-  ChevronUp,
   Heart,
-  ListMusic,
-  Mic2,
+  MoreVertical,
   Pause,
   Play,
-  Radio,
   Repeat,
   Repeat1,
   Shuffle,
   SkipBack,
   SkipForward,
+  ThumbsDown,
   Volume2,
+  VolumeX,
 } from 'lucide-react';
+import { api } from '../api';
 import { usePlayer } from '../store/player';
 import { useLibrary } from '../store/library';
 import { useSession } from '../store/session';
+import { useItemActions } from '../store/itemActions';
 import { ArtistLinks } from './ArtistLinks';
 import { CoverImage } from './CoverImage';
 import { formatClock } from '../lib/time';
@@ -40,7 +41,6 @@ export function PlayerBar({
   onExpand?: (tab?: NowPlayingTab) => void;
   expanded?: boolean;
   onCollapse?: () => void;
-  /** Masque le bandeau vide sur mobile (nav collée en bas). */
   compactEmpty?: boolean;
 }) {
   const {
@@ -60,15 +60,28 @@ export function PlayerBar({
     toggleShuffle,
     cycleRepeat,
     audioEl,
-    queue,
     queueIndex,
-    startRadio,
   } = usePlayer();
   const { isLiked, toggleLike } = useLibrary();
+  const openActions = useItemActions((s) => s.open);
   const isActivePlayer = useSession((s) => s.isActivePlayer);
   const devices = useSession((s) => s.devices);
   const activePlayerId = useSession((s) => s.activePlayerId);
   const activeName = devices.find((d) => d.id === activePlayerId)?.name;
+
+  const [volOpen, setVolOpen] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const prevVol = useRef(volume);
+  const volRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!volOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!volRef.current?.contains(e.target as Node)) setVolOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [volOpen]);
 
   if (!current) {
     if (compactEmpty) {
@@ -87,7 +100,6 @@ export function PlayerBar({
   const effectiveDuration =
     duration > 0 ? duration : Number.isFinite(audioEl?.duration) ? Number(audioEl?.duration) : 0;
   const pct = effectiveDuration > 0 ? Math.min(100, Math.max(0, (progress / effectiveDuration) * 100)) : 0;
-  const positionLabel = queue.length > 0 ? `${queueIndex + 1} / ${queue.length}` : null;
 
   const seekFromClientX = (el: HTMLElement, clientX: number) => {
     const dur = effectiveDuration > 0 ? effectiveDuration : Number(audioEl?.duration) || 0;
@@ -110,6 +122,17 @@ export function PlayerBar({
     seekFromClientX(e.currentTarget, e.clientX);
   };
 
+  const toggleMute = () => {
+    if (muted || volume === 0) {
+      setVolume(prevVol.current || 0.9);
+      setMuted(false);
+    } else {
+      prevVol.current = volume;
+      setVolume(0);
+      setMuted(true);
+    }
+  };
+
   return (
     <footer
       className="fixed bottom-0 left-0 right-0 z-50 cursor-pointer border-t border-white/10 bg-black"
@@ -119,7 +142,6 @@ export function PlayerBar({
       }}
       role="presentation"
     >
-      {/* Seek plein largeur — intégré en haut de la barre (style YTM) */}
       <div
         className="group relative h-4 w-full cursor-pointer touch-none"
         onClick={stop}
@@ -155,9 +177,11 @@ export function PlayerBar({
         </div>
       )}
 
-      <div className="mx-auto grid max-w-[1600px] grid-cols-1 items-center gap-2 px-3 py-2 md:grid-cols-[1.1fr_1.3fr_1.1fr] md:gap-4 md:px-5 md:py-2.5">
-        <div className="flex items-center gap-1 sm:gap-2" onClick={stop}>
-          <button type="button" onClick={() => void prev()} className="rounded-full p-2 text-white hover:bg-white/10">
+      {/* Layout : transport+temps | centre (cover+titre+actions) | volume+repeat+shuffle */}
+      <div className="mx-auto flex max-w-[1600px] items-center gap-3 px-3 py-2 md:gap-4 md:px-5 md:py-2.5">
+        {/* Gauche */}
+        <div className="flex shrink-0 items-center gap-0.5 sm:gap-1" onClick={stop}>
+          <button type="button" onClick={() => void prev()} className="rounded-full p-2 text-white hover:bg-white/10" title="Précédent">
             <SkipBack className="h-5 w-5 fill-white" />
           </button>
           <button
@@ -165,27 +189,28 @@ export function PlayerBar({
             onClick={toggle}
             disabled={isLoading}
             className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-black transition hover:scale-105 disabled:opacity-60"
+            title={isPlaying ? 'Pause' : 'Lecture'}
           >
             {isPlaying ? <Pause className="h-5 w-5 fill-black" /> : <Play className="h-5 w-5 fill-black" />}
           </button>
-          <button type="button" onClick={() => void next()} className="rounded-full p-2 text-white hover:bg-white/10">
+          <button type="button" onClick={() => void next()} className="rounded-full p-2 text-white hover:bg-white/10" title="Suivant">
             <SkipForward className="h-5 w-5 fill-white" />
           </button>
-          <span className="ml-1 hidden whitespace-nowrap text-[11px] tabular-nums text-yt-muted sm:inline">
+          <span className="ml-2 hidden whitespace-nowrap text-[11px] tabular-nums text-yt-muted sm:inline">
             {formatClock(progress)} / {formatClock(effectiveDuration)}
           </span>
         </div>
 
-        <div className="flex min-w-0 items-center gap-3">
+        {/* Centre */}
+        <div className="flex min-w-0 flex-1 items-center justify-center gap-3">
           <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md md:h-14 md:w-14">
             <CoverImage item={current} size={120} rounded="md" />
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium">{current.title}</div>
+          <div className="min-w-0 max-w-[min(420px,40vw)]">
+            <div className="truncate text-sm font-semibold text-white">{current.title}</div>
             <div className="truncate text-xs text-yt-muted" onClick={stop} onKeyDown={stop}>
               <ArtistLinks track={current} />
-              {current.album?.name ? <span className="text-yt-muted"> · {current.album.name}</span> : null}
-              {positionLabel ? <span className="text-yt-muted"> · {positionLabel}</span> : null}
+              {current.album?.name ? <span> — {current.album.name}</span> : null}
             </div>
           </div>
           <button
@@ -195,91 +220,107 @@ export function PlayerBar({
               void toggleLike(current);
             }}
             className="shrink-0 rounded-full p-2 text-yt-muted hover:text-white"
+            title="J'aime"
           >
             <Heart className={`h-4 w-4 ${isLiked(current.id) ? 'fill-yt-red text-yt-red' : ''}`} />
           </button>
           <button
             type="button"
-            title="Radio à partir de ce titre"
             onClick={(e) => {
               stop(e);
-              void startRadio({ kind: 'track', id: current.id, seed: current });
+              void api.recoFeedback({ trackId: current.id, verdict: 'dislike', context: 'player_bar' }).catch(() => undefined);
             }}
-            disabled={isLoading}
-            className="shrink-0 rounded-full p-2 text-yt-muted hover:text-white disabled:opacity-50"
+            className="shrink-0 rounded-full p-2 text-yt-muted hover:text-white"
+            title="Je n'aime pas"
           >
-            <Radio className="h-4 w-4" />
+            <ThumbsDown className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              stop(e);
+              openActions(current, { queueIndex });
+            }}
+            className="shrink-0 rounded-full p-2 text-yt-muted hover:text-white"
+            title="Plus d'options"
+          >
+            <MoreVertical className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="flex items-center justify-end gap-0.5 sm:gap-1" onClick={stop}>
-          <div className="mr-1 hidden items-center gap-2 lg:flex">
-            <Volume2 className="h-4 w-4 text-yt-muted" />
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={volume}
-              onChange={(e) => setVolume(Number(e.target.value))}
-              className="progress-range w-20"
-            />
-          </div>
+        {/* Droite */}
+        <div className="relative flex shrink-0 items-center justify-end gap-0.5 sm:gap-1" onClick={stop} ref={volRef}>
+          <button
+            type="button"
+            title="Volume (clic = mute)"
+            onClick={toggleMute}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              stop(e);
+              setVolOpen((v) => !v);
+            }}
+            onDoubleClick={(e) => {
+              stop(e);
+              setVolOpen((v) => !v);
+            }}
+            className="rounded-full p-2 text-yt-muted hover:text-white"
+          >
+            {muted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+          </button>
+          {volOpen && (
+            <div className="absolute bottom-12 right-0 z-50 w-44 rounded-xl border border-white/10 bg-yt-elevated p-3 shadow-xl">
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={volume}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setVolume(v);
+                  setMuted(v === 0);
+                }}
+                className="progress-range w-full"
+              />
+            </div>
+          )}
           <button
             type="button"
             onClick={cycleRepeat}
-            title={repeat === 'off' ? 'Pas de boucle' : repeat === 'all' ? 'Boucler la file' : 'Boucler le titre'}
-            className={`rounded-full p-2 ${repeat !== 'off' ? 'text-yt-red' : 'text-yt-muted hover:text-white'}`}
+            title={
+              repeat === 'off'
+                ? 'Boucle désactivée'
+                : repeat === 'all'
+                  ? 'Boucler toute la file'
+                  : 'Boucler le titre'
+            }
+            className={`rounded-full p-2 ${repeat !== 'off' ? 'text-yt-red' : 'text-yt-muted/50 hover:text-yt-muted'}`}
           >
             {repeat === 'one' ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
           </button>
           <button
             type="button"
             onClick={toggleShuffle}
-            className={`rounded-full p-2 ${shuffle ? 'text-yt-red' : 'text-yt-muted hover:text-white'}`}
+            title="Aléatoire"
+            className={`rounded-full p-2 ${shuffle ? 'text-yt-red' : 'text-yt-muted/50 hover:text-yt-muted'}`}
           >
             <Shuffle className="h-4 w-4" />
           </button>
-          <button
-            type="button"
-            onClick={onOpenDevices}
-            className={`rounded-full p-2 ${!isActivePlayer ? 'text-yt-red' : 'text-yt-muted hover:text-white'}`}
-            title="Cast"
-          >
-            <Cast className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => expand('lyrics')}
-            className="hidden rounded-full px-2 py-1.5 text-[10px] font-bold tracking-wide text-yt-muted hover:bg-white/10 hover:text-white sm:inline"
-            title="Paroles"
-          >
-            PAROLES
-          </button>
-          <button
-            type="button"
-            onClick={() => expand('lyrics')}
-            className="rounded-full p-2 text-yt-muted hover:text-white sm:hidden"
-            title="Paroles"
-          >
-            <Mic2 className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => expand('queue')}
-            className="rounded-full p-2 text-yt-muted hover:text-white"
-            title="File d'attente"
-          >
-            <ListMusic className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => (expanded ? onCollapse?.() : expand('queue'))}
-            className="rounded-full p-2 text-yt-muted hover:text-white"
-            title={expanded ? 'Réduire' : 'Agrandir'}
-          >
-            {expanded ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
-          </button>
+          {onOpenDevices && (
+            <button
+              type="button"
+              onClick={onOpenDevices}
+              className={`hidden rounded-full p-2 sm:inline ${!isActivePlayer ? 'text-yt-red' : 'text-yt-muted hover:text-white'}`}
+              title="Cast"
+            >
+              <Cast className="h-4 w-4" />
+            </button>
+          )}
+          {onCollapse && expanded && (
+            <button type="button" onClick={onCollapse} className="rounded-full p-2 text-yt-muted hover:text-white" title="Réduire">
+              ✕
+            </button>
+          )}
         </div>
       </div>
     </footer>

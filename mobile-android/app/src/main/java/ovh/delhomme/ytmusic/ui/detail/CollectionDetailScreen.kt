@@ -217,6 +217,81 @@ fun CollectionDetailScreen(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Spacer(Modifier.height(12.dp))
+                                if (tracks.isNotEmpty() || kind == DetailKind.Album || kind == DetailKind.Artist) {
+                                    var inLib by remember(kind, id) { mutableStateOf(false) }
+                                    LaunchedEffect(kind, id) {
+                                        inLib = runCatching {
+                                            val lib = container.api.library()
+                                            when (kind) {
+                                                DetailKind.Album -> lib.albums.any { it.id == id }
+                                                DetailKind.Artist -> lib.artists.any { it.id == id }
+                                                else -> false
+                                            }
+                                        }.getOrDefault(false)
+                                    }
+                                    if (kind == DetailKind.Album || kind == DetailKind.Artist) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                scope.launch {
+                                                    runCatching {
+                                                        when (kind) {
+                                                            DetailKind.Album -> {
+                                                                if (inLib) {
+                                                                    container.api.removeAlbum(id)
+                                                                    inLib = false
+                                                                } else {
+                                                                    container.api.saveAlbum(
+                                                                        TrackDto(
+                                                                            id = id,
+                                                                            title = title,
+                                                                            type = "album",
+                                                                            thumbnails = cover?.thumbnails,
+                                                                        ),
+                                                                    )
+                                                                    inLib = true
+                                                                }
+                                                            }
+                                                            DetailKind.Artist -> {
+                                                                container.api.saveArtist(
+                                                                    TrackDto(
+                                                                        id = id,
+                                                                        title = title,
+                                                                        type = "artist",
+                                                                        thumbnails = cover?.thumbnails,
+                                                                    ),
+                                                                )
+                                                                inLib = true
+                                                            }
+                                                            else -> Unit
+                                                        }
+                                                        Toast.makeText(
+                                                            context,
+                                                            if (inLib) "Dans la bibliothèque" else "Retiré",
+                                                            Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                    }.onFailure {
+                                                        Toast.makeText(
+                                                            context,
+                                                            it.message ?: "Échec",
+                                                            Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            Text(
+                                                when {
+                                                    kind == DetailKind.Album && inLib -> "Dans la bibliothèque"
+                                                    kind == DetailKind.Album -> "Enregistrer l'album"
+                                                    inLib -> "Dans la bibliothèque"
+                                                    else -> "Enregistrer l'artiste"
+                                                },
+                                            )
+                                        }
+                                        Spacer(Modifier.height(8.dp))
+                                    }
+                                }
                                 if (tracks.isNotEmpty()) {
                                     Button(
                                         onClick = { onPlay(tracks, 0) },
