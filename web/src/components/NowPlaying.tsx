@@ -221,12 +221,19 @@ export function NowPlaying({
                     Lecture à partir de :{' '}
                     <span className="font-medium text-white">File d&apos;attente</span>
                   </p>
-                  <span className="text-[11px] text-yt-muted">
-                    {Math.min(upcomingAll.length, QUEUE_MAX)}/{queue.length}
+                  <span className="text-[11px] tabular-nums text-yt-muted">
+                    {queue.length > 0 ? `${queueIndex + 1} / ${queue.length}` : '0 / 0'}
                   </span>
                 </div>
                 <div className="mb-1 rounded-md bg-[#ff0033]/18 ring-1 ring-[#ff0033]/55">
-                  <TrackRow track={current} queue={queue} index={queueIndex} queueIndex={queueIndex} draggable />
+                  <TrackRow
+                    track={current}
+                    queue={queue}
+                    index={queueIndex}
+                    queueIndex={queueIndex}
+                    draggable
+                    alwaysActions
+                  />
                 </div>
                 {upcoming.map((t, i) => {
                   const abs = queueIndex + 1 + i;
@@ -238,6 +245,7 @@ export function NowPlaying({
                       queue={queue}
                       queueIndex={abs}
                       draggable
+                      alwaysActions
                       onPlay={() => void playAt(abs)}
                     />
                   );
@@ -250,12 +258,12 @@ export function NowPlaying({
                       setQueueVisible((n) => Math.min(QUEUE_MAX, n + QUEUE_PAGE, upcomingAll.length))
                     }
                   >
-                    Charger plus ({upcoming.length}/{Math.min(upcomingAll.length, QUEUE_MAX)})
+                    Charger plus ({upcoming.length} / {Math.min(upcomingAll.length, QUEUE_MAX)} à suivre)
                   </button>
                 )}
                 {upcomingAll.length === 0 && (
                   <p className="px-2 py-6 text-center text-sm text-yt-muted">
-                    Aucun titre à suivre — lance un album ou une playlist.
+                    Aucun titre à suivre — lance une radio ou un album.
                   </p>
                 )}
 
@@ -268,11 +276,11 @@ export function NowPlaying({
                         className="text-xs text-yt-muted hover:text-white"
                         onClick={() => appendRelated(relatedForQueue)}
                       >
-                        Tout ajouter
+                        Tout ajouter à la file
                       </button>
                     </div>
                     {relatedForQueue.map((t) => (
-                      <TrackRow key={`qrel-${t.id}`} track={t} queue={related} />
+                      <TrackRow key={`qrel-${t.id}`} track={t} queue={related} alwaysActions />
                     ))}
                   </section>
                 )}

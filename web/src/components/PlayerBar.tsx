@@ -8,6 +8,7 @@ import {
   Mic2,
   Pause,
   Play,
+  Radio,
   Repeat,
   Repeat1,
   Shuffle,
@@ -61,6 +62,7 @@ export function PlayerBar({
     audioEl,
     queue,
     queueIndex,
+    startRadio,
   } = usePlayer();
   const { isLiked, toggleLike } = useLibrary();
   const isActivePlayer = useSession((s) => s.isActivePlayer);
@@ -70,7 +72,6 @@ export function PlayerBar({
 
   if (!current) {
     if (compactEmpty) {
-      // Pas de lecteur fantôme sur mobile : la nav prend le bas d’écran
       return (
         <footer className="pointer-events-none fixed bottom-0 left-0 right-0 z-40 hidden h-0 lg:block" aria-hidden />
       );
@@ -82,11 +83,11 @@ export function PlayerBar({
     );
   }
 
-  const upcomingCount = Math.max(0, queue.length - queueIndex - 1);
   const expand = (tab?: NowPlayingTab) => onExpand?.(tab);
   const effectiveDuration =
     duration > 0 ? duration : Number.isFinite(audioEl?.duration) ? Number(audioEl?.duration) : 0;
-  const pct = effectiveDuration > 0 ? Math.min(100, (progress / effectiveDuration) * 100) : 0;
+  const pct = effectiveDuration > 0 ? Math.min(100, Math.max(0, (progress / effectiveDuration) * 100)) : 0;
+  const positionLabel = queue.length > 0 ? `${queueIndex + 1} / ${queue.length}` : null;
 
   const seekFromClientX = (el: HTMLElement, clientX: number) => {
     const dur = effectiveDuration > 0 ? effectiveDuration : Number(audioEl?.duration) || 0;
@@ -118,13 +119,43 @@ export function PlayerBar({
       }}
       role="presentation"
     >
+      {/* Seek plein largeur — intégré en haut de la barre (style YTM) */}
+      <div
+        className="group relative h-4 w-full cursor-pointer touch-none"
+        onClick={stop}
+        onPointerDown={onSeekPointer}
+        onPointerMove={onSeekMove}
+        role="slider"
+        aria-valuemin={0}
+        aria-valuemax={effectiveDuration || 0}
+        aria-valuenow={progress}
+        aria-label="Position du morceau"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          stop(e);
+          const dur = effectiveDuration;
+          if (!(dur > 0)) return;
+          if (e.key === 'ArrowRight') seek(Math.min(dur, progress + 5));
+          if (e.key === 'ArrowLeft') seek(Math.max(0, progress - 5));
+        }}
+      >
+        <div className="absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 bg-[#3a3a3a] transition group-hover:h-1.5">
+          <div className="relative h-full bg-[#ff0033]" style={{ width: `${pct}%` }}>
+            <span
+              className="absolute right-0 top-1/2 h-3.5 w-3.5 -translate-y-1/2 translate-x-1/2 rounded-full bg-[#ff0033] shadow-[0_0_0_2px_#000] ring-2 ring-[#ff0033]/40 transition group-hover:scale-110"
+              aria-hidden
+            />
+          </div>
+        </div>
+      </div>
+
       {!isActivePlayer && activeName && (
         <div className="border-b border-yt-border/60 px-3 py-1 text-center text-[11px] text-yt-muted" onClick={stop}>
           Lecture sur <span className="text-white">{activeName}</span> — contrôle distant actif
         </div>
       )}
+
       <div className="mx-auto grid max-w-[1600px] grid-cols-1 items-center gap-2 px-3 py-2 md:grid-cols-[1.1fr_1.3fr_1.1fr] md:gap-4 md:px-5 md:py-2.5">
-        {/* Prev / play / next / temps */}
         <div className="flex items-center gap-1 sm:gap-2" onClick={stop}>
           <button type="button" onClick={() => void prev()} className="rounded-full p-2 text-white hover:bg-white/10">
             <SkipBack className="h-5 w-5 fill-white" />
@@ -140,12 +171,11 @@ export function PlayerBar({
           <button type="button" onClick={() => void next()} className="rounded-full p-2 text-white hover:bg-white/10">
             <SkipForward className="h-5 w-5 fill-white" />
           </button>
-          <span className="ml-1 hidden whitespace-nowrap text-[11px] text-yt-muted sm:inline">
+          <span className="ml-1 hidden whitespace-nowrap text-[11px] tabular-nums text-yt-muted sm:inline">
             {formatClock(progress)} / {formatClock(effectiveDuration)}
           </span>
         </div>
 
-        {/* Cover + titre → expand ; artiste + like → stop */}
         <div className="flex min-w-0 items-center gap-3">
           <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md md:h-14 md:w-14">
             <CoverImage item={current} size={120} rounded="md" />
@@ -155,9 +185,7 @@ export function PlayerBar({
             <div className="truncate text-xs text-yt-muted" onClick={stop} onKeyDown={stop}>
               <ArtistLinks track={current} />
               {current.album?.name ? <span className="text-yt-muted"> · {current.album.name}</span> : null}
-              {upcomingCount > 0 ? (
-                <span className="text-yt-muted"> · {upcomingCount} à suivre</span>
-              ) : null}
+              {positionLabel ? <span className="text-yt-muted"> · {positionLabel}</span> : null}
             </div>
           </div>
           <button
@@ -170,9 +198,20 @@ export function PlayerBar({
           >
             <Heart className={`h-4 w-4 ${isLiked(current.id) ? 'fill-yt-red text-yt-red' : ''}`} />
           </button>
+          <button
+            type="button"
+            title="Radio à partir de ce titre"
+            onClick={(e) => {
+              stop(e);
+              void startRadio({ kind: 'track', id: current.id, seed: current });
+            }}
+            disabled={isLoading}
+            className="shrink-0 rounded-full p-2 text-yt-muted hover:text-white disabled:opacity-50"
+          >
+            <Radio className="h-4 w-4" />
+          </button>
         </div>
 
-        {/* Volume, boucle, aléatoire, cast, paroles, file, flèche */}
         <div className="flex items-center justify-end gap-0.5 sm:gap-1" onClick={stop}>
           <div className="mr-1 hidden items-center gap-2 lg:flex">
             <Volume2 className="h-4 w-4 text-yt-muted" />
@@ -242,35 +281,6 @@ export function PlayerBar({
             {expanded ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
           </button>
         </div>
-      </div>
-
-      {/* Seek : barre custom (évite le bug range max=0 → seek à 0) */}
-      <div
-        className="group relative h-3 w-full cursor-pointer px-0"
-        onClick={stop}
-        onPointerDown={onSeekPointer}
-        onPointerMove={onSeekMove}
-        role="slider"
-        aria-valuemin={0}
-        aria-valuemax={effectiveDuration || 0}
-        aria-valuenow={progress}
-        aria-label="Position du morceau"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          stop(e);
-          const dur = effectiveDuration;
-          if (!(dur > 0)) return;
-          if (e.key === 'ArrowRight') seek(Math.min(dur, progress + 5));
-          if (e.key === 'ArrowLeft') seek(Math.max(0, progress - 5));
-        }}
-      >
-        <div className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 bg-[#3a3a3a]">
-          <div className="h-full bg-[#ff0033]" style={{ width: `${pct}%` }} />
-        </div>
-        <div
-          className="absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-white opacity-0 shadow transition group-hover:opacity-100"
-          style={{ left: `calc(${pct}% - 6px)` }}
-        />
       </div>
     </footer>
   );

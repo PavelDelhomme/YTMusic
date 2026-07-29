@@ -171,7 +171,7 @@ export function thumb(track: Track | { thumbnails?: Track['thumbnails']; id?: st
 }
 
 export function artistNames(track: Track) {
-  return track.artists?.map((a) => a.name).join(', ') || 'Artiste inconnu';
+  return track.artists?.map((a) => a.name).filter(Boolean).join(', ') || 'Artiste';
 }
 
 async function req<T>(url: string, init?: RequestInit, retried = false): Promise<T> {
@@ -340,6 +340,11 @@ export const api = {
   suggestions: (q: string) =>
     req<{ suggestions: string[] }>(`/api/search/suggestions?q=${encodeURIComponent(q)}`),
   searchHistory: () => req<{ history: any[] }>('/api/search/history'),
+  recordSearchClick: (q: string, track: { id: string; type?: string }) =>
+    req<{ ok: boolean }>('/api/search/history', {
+      method: 'POST',
+      body: JSON.stringify({ query: q, clickedId: track.id, clickedKind: track.type || 'song' }),
+    }).catch(() => ({ ok: false })),
   prefs: () => req<{ prefs: any; follows: any[] }>('/api/prefs'),
   savePrefs: (patch: Record<string, unknown>) =>
     req<{ prefs: any }>('/api/prefs', { method: 'PUT', body: JSON.stringify(patch) }),

@@ -1,10 +1,212 @@
 package ovh.delhomme.ytmusic.data
 
+import com.squareup.moshi.JsonClass
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
+
+@JsonClass(generateAdapter = false)
+data class PlaylistDto(
+    val id: String,
+    val name: String? = null,
+    val title: String? = null,
+    val description: String? = null,
+    val tracks: List<TrackDto>? = emptyList(),
+    val coverUrl: String? = null,
+    val thumbnails: List<Thumb>? = emptyList(),
+    val updatedAt: Long? = null,
+    val createdAt: Long? = null,
+) {
+    fun displayName(): String = name?.ifBlank { null } ?: title ?: "Playlist"
+    fun cover(): String? =
+        coverUrl ?: thumbnails?.firstOrNull()?.url ?: tracks?.firstOrNull()?.coverUrl()
+}
+
+@JsonClass(generateAdapter = false)
+data class LibraryResponse(
+    val liked: List<TrackDto> = emptyList(),
+    val likedPlaylists: List<TrackDto> = emptyList(),
+    val albums: List<TrackDto> = emptyList(),
+    val artists: List<TrackDto> = emptyList(),
+    val playlists: List<PlaylistDto> = emptyList(),
+    val history: List<TrackDto> = emptyList(),
+    val downloaded: List<String> = emptyList(),
+)
+
+@JsonClass(generateAdapter = false)
+data class LikeResponse(val liked: Boolean, val library: LibraryResponse? = null)
+
+@JsonClass(generateAdapter = false)
+data class CreatePlaylistBody(val name: String, val description: String? = null)
+
+@JsonClass(generateAdapter = false)
+data class SessionSnapshot(
+    val devices: List<DeviceDto> = emptyList(),
+    val activePlayerId: String? = null,
+)
+
+@JsonClass(generateAdapter = false)
+data class DeviceDto(
+    val id: String,
+    val name: String,
+    val type: String? = null,
+    val canPlay: Boolean? = true,
+    val isActive: Boolean? = false,
+)
+
+@JsonClass(generateAdapter = false)
+data class AlbumMetaDto(
+    val id: String,
+    val title: String,
+    val year: String? = null,
+    val artists: List<ArtistRef>? = emptyList(),
+    val thumbnails: List<Thumb>? = emptyList(),
+) {
+    fun asTrack(): TrackDto = TrackDto(
+        id = id,
+        title = title,
+        artists = artists,
+        thumbnails = thumbnails,
+        type = "album",
+    )
+}
+
+@JsonClass(generateAdapter = false)
+data class ArtistMetaDto(
+    val id: String,
+    val name: String,
+    val subscribers: String? = null,
+    val thumbnails: List<Thumb>? = emptyList(),
+) {
+    fun asTrack(): TrackDto = TrackDto(
+        id = id,
+        title = name,
+        artists = listOf(ArtistRef(name, id)),
+        thumbnails = thumbnails,
+        type = "artist",
+    )
+}
+
+@JsonClass(generateAdapter = false)
+data class PlaylistDetailResponse(
+    val playlist: PlaylistDto? = null,
+    val tracks: List<TrackDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = false)
+data class AlbumDetailResponse(
+    val album: AlbumMetaDto? = null,
+    val tracks: List<TrackDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = false)
+data class ArtistDetailResponse(
+    val artist: ArtistMetaDto? = null,
+    val songs: List<TrackDto>? = emptyList(),
+    val tracks: List<TrackDto>? = emptyList(),
+    val albums: List<TrackDto>? = emptyList(),
+)
+
+@JsonClass(generateAdapter = false)
+data class SimilarResponse(
+    val tracks: List<TrackDto> = emptyList(),
+    val related: List<TrackDto> = emptyList(),
+    val radio: List<TrackDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = false)
+data class RelatedResponse(
+    val related: List<TrackDto> = emptyList(),
+    val radio: List<TrackDto> = emptyList(),
+    val tracks: List<TrackDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = false)
+data class TracksResponse(
+    val tracks: List<TrackDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = false)
+data class TimedLyricLine(
+    val startMs: Long = 0L,
+    val text: String = "",
+)
+
+@JsonClass(generateAdapter = false)
+data class LyricsResponse(
+    val lyrics: String? = null,
+    val timed: List<TimedLyricLine>? = null,
+)
+
+@JsonClass(generateAdapter = false)
+data class RecoFeedbackBody(
+    val trackId: String,
+    val verdict: String,
+    val context: String? = null,
+)
+
+@JsonClass(generateAdapter = false)
+data class UserPrefsDto(
+    val genres: List<String> = emptyList(),
+    val moods: List<String> = emptyList(),
+    val moments: List<String> = emptyList(),
+    val onboardingDone: Boolean = false,
+    val discoveryBias: Double = 0.1,
+)
+
+@JsonClass(generateAdapter = false)
+data class ArtistFollowDto(
+    val artist_id: String? = null,
+    val artist_name: String? = null,
+    val id: String? = null,
+    val name: String? = null,
+) {
+    fun artistId(): String = artist_id ?: id ?: ""
+    fun artistName(): String = artist_name ?: name ?: "Artiste"
+}
+
+@JsonClass(generateAdapter = false)
+data class PrefsResponse(
+    val prefs: UserPrefsDto,
+    val follows: List<ArtistFollowDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = false)
+data class SavePrefsBody(
+    val genres: List<String>? = null,
+    val moods: List<String>? = null,
+    val moments: List<String>? = null,
+    val discoveryBias: Double? = null,
+    val onboardingDone: Boolean? = null,
+)
+
+@JsonClass(generateAdapter = false)
+data class OnboardingBody(
+    val genres: List<String> = emptyList(),
+    val moods: List<String> = emptyList(),
+    val moments: List<String> = emptyList(),
+    val discoveryBias: Double = 0.15,
+    val artists: List<FollowArtistBody> = emptyList(),
+)
+
+@JsonClass(generateAdapter = false)
+data class FollowArtistBody(
+    val id: String,
+    val name: String? = null,
+)
+
+@JsonClass(generateAdapter = false)
+data class ListenBody(
+    val trackId: String,
+    val event: String,
+    val progressPct: Double? = null,
+    val durationMs: Long? = null,
+    val track: TrackDto? = null,
+)
 
 interface YtMusicApi {
     @GET("api/health")
@@ -28,6 +230,9 @@ interface YtMusicApi {
     @GET("api/home")
     suspend fun home(): HomeResponse
 
+    @GET("api/explore")
+    suspend fun explore(): HomeResponse
+
     @GET("api/search")
     suspend fun search(
         @Query("q") q: String,
@@ -36,4 +241,85 @@ interface YtMusicApi {
 
     @GET("api/track/{id}")
     suspend fun track(@Path("id") id: String): TrackInfoResponse
+
+    @GET("api/track/{id}/related")
+    suspend fun related(@Path("id") id: String): RelatedResponse
+
+    @GET("api/track/{id}/upnext")
+    suspend fun upNext(@Path("id") id: String): TracksResponse
+
+    @GET("api/track/{id}/lyrics")
+    suspend fun lyrics(@Path("id") id: String): LyricsResponse
+
+    @GET("api/reco/similar/{trackId}")
+    suspend fun similar(@Path("trackId") trackId: String): SimilarResponse
+
+    @GET("api/library")
+    suspend fun library(): LibraryResponse
+
+    @POST("api/library/like")
+    suspend fun like(@Body track: TrackDto): LikeResponse
+
+    @POST("api/library/albums")
+    suspend fun saveAlbum(@Body album: TrackDto): Map<String, Any>
+
+    @POST("api/library/artists")
+    suspend fun saveArtist(@Body artist: TrackDto): Map<String, Any>
+
+    @POST("api/library/playlists")
+    suspend fun createPlaylist(@Body body: CreatePlaylistBody): PlaylistDto
+
+    @POST("api/library/playlists/{id}/tracks")
+    suspend fun addToPlaylist(@Path("id") id: String, @Body track: TrackDto): Map<String, Any>
+
+    @DELETE("api/library/playlists/{id}/tracks/{trackId}")
+    suspend fun removeFromPlaylist(
+        @Path("id") id: String,
+        @Path("trackId") trackId: String,
+    ): Map<String, Any>
+
+    @GET("api/playlist/{id}")
+    suspend fun playlist(@Path("id") id: String): PlaylistDetailResponse
+
+    @GET("api/album/{id}")
+    suspend fun album(@Path("id") id: String): AlbumDetailResponse
+
+    @GET("api/album/{id}/radio")
+    suspend fun albumRadio(@Path("id") id: String): TracksResponse
+
+    @GET("api/artist/{id}")
+    suspend fun artist(@Path("id") id: String): ArtistDetailResponse
+
+    @GET("api/artist/{id}/radio")
+    suspend fun artistRadio(@Path("id") id: String): TracksResponse
+
+    @GET("api/session")
+    suspend fun session(): SessionSnapshot
+
+    @POST("api/download/{id}")
+    suspend fun download(@Path("id") id: String): Map<String, Any>
+
+    @POST("api/reco/feedback")
+    suspend fun recoFeedback(@Body body: RecoFeedbackBody): Map<String, Any>
+
+    @GET("api/prefs")
+    suspend fun prefs(): PrefsResponse
+
+    @PUT("api/prefs")
+    suspend fun savePrefs(@Body body: SavePrefsBody): PrefsResponse
+
+    @POST("api/prefs/onboarding")
+    suspend fun onboarding(@Body body: OnboardingBody): PrefsResponse
+
+    @POST("api/artists/{id}/follow")
+    suspend fun followArtist(@Path("id") id: String, @Body body: FollowArtistBody): Map<String, Any>
+
+    @DELETE("api/artists/{id}/follow")
+    suspend fun unfollowArtist(@Path("id") id: String): Map<String, Any>
+
+    @POST("api/listen")
+    suspend fun listen(@Body body: ListenBody): Map<String, Any>
+
+    @GET("api/reco/radios")
+    suspend fun radios(): Map<String, Any>
 }

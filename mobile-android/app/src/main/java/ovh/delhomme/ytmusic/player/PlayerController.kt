@@ -3,6 +3,8 @@ package ovh.delhomme.ytmusic.player
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -15,12 +17,21 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import ovh.delhomme.ytmusic.data.TrackDto
 
+enum class RepeatMode { Off, All, One }
+
 data class PlayerUiState(
     val track: TrackDto? = null,
     val playing: Boolean = false,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val queueSize: Int = 0,
+    val queueIndex: Int = 0,
+    val queue: List<TrackDto> = emptyList(),
+    val sleepLabel: String? = null,
+    val shuffle: Boolean = false,
+    val repeat: RepeatMode = RepeatMode.Off,
+    /** Libellé source : « File d'attente », nom de playlist, mix… */
+    val queueTitle: String = "File d'attente",
 )
 
 /** Pont UI ↔ Media3 PlaybackService (lecture arrière-plan). */
@@ -34,6 +45,14 @@ class PlayerController(
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
+
+    private val sleepHandler = Handler(Looper.getMainLooper())
+    private var sleepRunnable: Runnable? = null
+    private var pauseAtEndOfTrack = false
+    private var sleepLabel: String? = null
+    private var queueTitle: String = "File d'attente"
+    private var shuffleEnabled: Boolean = false
+    private var repeatMode: RepeatMode = RepeatMode.Off
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
@@ -52,6 +71,7 @@ class PlayerController(
                 val c = future.get()
                 controller = c
                 c.addListener(listener)
+                applyRepeatShuffle(c)
                 syncFrom(c)
                 pending?.let { (tracks, idx) ->
                     pending = null
@@ -62,13 +82,15 @@ class PlayerController(
     }
 
     fun release() {
+        clearSleepTimer()
         controller?.removeListener(listener)
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controller = null
         controllerFuture = null
     }
 
-    fun play(tracks: List<TrackDto>, startIndex: Int = 0) {
+    fun play(tracks: List<TrackDto>, startIndex: Int = 0, title: String? = null) {
+        if (title != null) queueTitle = title
         ensureService()
         connect()
         val c = controller
@@ -78,9 +100,15 @@ class PlayerController(
             pending = tracks to startIndex
             PlaybackService.Holder.player?.let { exo ->
                 exo.playTracks(streamUrl, tracks, startIndex)
+                applyRepeatShuffle(exo)
                 syncFrom(exo)
             }
         }
+    }
+
+    fun setQueueTitle(title: String) {
+        queueTitle = title.ifBlank { "File d'attente" }
+        _state.value = _state.value.copy(queueTitle = queueTitle)
     }
 
     fun toggle() {
@@ -96,13 +124,159 @@ class PlayerController(
         player()?.seekToPreviousMediaItem()
     }
 
+    /** Pression simple : début du titre. Double pression : titre précédent. */
+    fun skipPrevOrRestart(forcePrevious: Boolean) {
+        val p = player() ?: return
+        if (forcePrevious) {
+            p.seekToPreviousMediaItem()
+        } else {
+            p.seekTo(0L)
+        }
+        syncFrom(p)
+    }
+
     fun seek(ms: Long) {
         player()?.seekTo(ms)
     }
 
-    fun tick() {
-        player()?.let { syncFrom(it) }
+    fun playAt(index: Int) {
+        val p = player() ?: return
+        if (index !in PlaybackService.Holder.queue.indices) return
+        p.seekTo(index, 0L)
+        p.play()
+        syncFrom(p)
     }
+
+    fun removeFromQueue(index: Int) {
+        val p = player() ?: return
+        val queue = PlaybackService.Holder.queue.toMutableList()
+        val cur = p.currentMediaItemIndex.coerceAtLeast(0)
+        if (index !in queue.indices || index == cur) return
+        queue.removeAt(index)
+        PlaybackService.Holder.queue = queue
+        p.removeMediaItem(index)
+        syncFrom(p)
+    }
+
+    fun moveInQueue(from: Int, to: Int) {
+        val p = player() ?: return
+        val queue = PlaybackService.Holder.queue.toMutableList()
+        if (from !in queue.indices || to !in queue.indices || from == to) return
+        val item = queue.removeAt(from)
+        queue.add(to, item)
+        PlaybackService.Holder.queue = queue
+        p.moveMediaItem(from, to)
+        syncFrom(p)
+    }
+
+    fun toggleShuffle() {
+        shuffleEnabled = !shuffleEnabled
+        player()?.let {
+            it.shuffleModeEnabled = shuffleEnabled
+            syncFrom(it)
+        } ?: run {
+            _state.value = _state.value.copy(shuffle = shuffleEnabled)
+        }
+    }
+
+    fun cycleRepeat() {
+        repeatMode = when (repeatMode) {
+            RepeatMode.Off -> RepeatMode.All
+            RepeatMode.All -> RepeatMode.One
+            RepeatMode.One -> RepeatMode.Off
+        }
+        player()?.let {
+            applyRepeatShuffle(it)
+            syncFrom(it)
+        } ?: run {
+            _state.value = _state.value.copy(repeat = repeatMode)
+        }
+    }
+
+    fun tick() {
+        val p = player() ?: return
+        if (pauseAtEndOfTrack) {
+            val dur = p.duration
+            val pos = p.currentPosition
+            if (dur > 0 && pos >= dur - 900) {
+                p.pause()
+                clearSleepTimer()
+            }
+        }
+        syncFrom(p)
+    }
+
+    fun clearSleepTimer() {
+        sleepRunnable?.let { sleepHandler.removeCallbacks(it) }
+        sleepRunnable = null
+        pauseAtEndOfTrack = false
+        sleepLabel = null
+        player()?.let { syncFrom(it) } ?: run {
+            _state.value = _state.value.copy(sleepLabel = null)
+        }
+    }
+
+    fun setSleepTimer(delayMs: Long?, label: String) {
+        clearSleepTimer()
+        sleepLabel = label
+        if (delayMs == null) {
+            pauseAtEndOfTrack = true
+            player()?.let { syncFrom(it) } ?: run {
+                _state.value = _state.value.copy(sleepLabel = label)
+            }
+            return
+        }
+        val r = Runnable {
+            player()?.pause()
+            clearSleepTimer()
+        }
+        sleepRunnable = r
+        sleepHandler.postDelayed(r, delayMs)
+        player()?.let { syncFrom(it) } ?: run {
+            _state.value = _state.value.copy(sleepLabel = label)
+        }
+    }
+
+    fun playNext(track: TrackDto) {
+        if (!track.isPlayable()) return
+        val c = player() ?: run {
+            play(listOf(track), 0)
+            return
+        }
+        val queue = PlaybackService.Holder.queue.toMutableList()
+        val idx = c.currentMediaItemIndex.coerceAtLeast(0)
+        val insertAt = (idx + 1).coerceAtMost(queue.size)
+        queue.add(insertAt, track)
+        PlaybackService.Holder.queue = queue
+        c.addMediaItem(insertAt, mediaItem(track))
+        syncFrom(c)
+    }
+
+    fun addToQueue(track: TrackDto) {
+        if (!track.isPlayable()) return
+        val c = player() ?: run {
+            play(listOf(track), 0)
+            return
+        }
+        val queue = PlaybackService.Holder.queue.toMutableList()
+        queue.add(track)
+        PlaybackService.Holder.queue = queue
+        c.addMediaItem(mediaItem(track))
+        syncFrom(c)
+    }
+
+    private fun mediaItem(t: TrackDto): MediaItem =
+        MediaItem.Builder()
+            .setMediaId(t.id)
+            .setUri(streamUrl(t.id))
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(t.title)
+                    .setArtist(t.artistLine())
+                    .setArtworkUri(t.coverUrl()?.let { android.net.Uri.parse(it) })
+                    .build(),
+            )
+            .build()
 
     private fun playNow(player: Player, tracks: List<TrackDto>, startIndex: Int) {
         val playable = tracks.filter { it.isPlayable() }
@@ -110,23 +284,20 @@ class PlayerController(
         val idx = startIndex.coerceIn(0, playable.lastIndex)
         PlaybackService.Holder.queue = playable
         PlaybackService.Holder.index = idx
-        val items = playable.map { t ->
-            MediaItem.Builder()
-                .setMediaId(t.id)
-                .setUri(streamUrl(t.id))
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(t.title)
-                        .setArtist(t.artistLine())
-                        .setArtworkUri(t.coverUrl()?.let { android.net.Uri.parse(it) })
-                        .build(),
-                )
-                .build()
-        }
-        player.setMediaItems(items, idx, 0L)
+        player.setMediaItems(playable.map { mediaItem(it) }, idx, 0L)
+        applyRepeatShuffle(player)
         player.prepare()
         player.play()
         syncFrom(player)
+    }
+
+    private fun applyRepeatShuffle(player: Player) {
+        player.shuffleModeEnabled = shuffleEnabled
+        player.repeatMode = when (repeatMode) {
+            RepeatMode.Off -> Player.REPEAT_MODE_OFF
+            RepeatMode.All -> Player.REPEAT_MODE_ALL
+            RepeatMode.One -> Player.REPEAT_MODE_ONE
+        }
     }
 
     private fun player(): Player? = controller ?: PlaybackService.Holder.player
@@ -140,12 +311,24 @@ class PlayerController(
         val idx = player.currentMediaItemIndex.coerceAtLeast(0)
         val track = queue.getOrNull(idx)
             ?: queue.getOrNull(PlaybackService.Holder.index)
+        shuffleEnabled = player.shuffleModeEnabled
+        repeatMode = when (player.repeatMode) {
+            Player.REPEAT_MODE_ONE -> RepeatMode.One
+            Player.REPEAT_MODE_ALL -> RepeatMode.All
+            else -> RepeatMode.Off
+        }
         _state.value = PlayerUiState(
             track = track,
             playing = player.isPlaying,
             positionMs = player.currentPosition.coerceAtLeast(0),
             durationMs = player.duration.coerceAtLeast(0),
             queueSize = queue.size,
+            queueIndex = idx.coerceIn(0, (queue.size - 1).coerceAtLeast(0)),
+            queue = queue,
+            sleepLabel = sleepLabel,
+            shuffle = shuffleEnabled,
+            repeat = repeatMode,
+            queueTitle = queueTitle,
         )
         if (idx in queue.indices) PlaybackService.Holder.index = idx
     }

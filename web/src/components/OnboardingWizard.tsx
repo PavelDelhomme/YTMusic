@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api, type Track } from '../api';
 import { CoverImage } from './CoverImage';
 
@@ -69,24 +69,61 @@ function Chip({
   );
 }
 
-export function OnboardingWizard({ onDone }: { onDone: () => void }) {
+export function OnboardingWizard({
+  onDone,
+  onCancel,
+  mode = 'onboarding',
+}: {
+  onDone: () => void;
+  onCancel?: () => void;
+  mode?: 'onboarding' | 'edit';
+}) {
   const [step, setStep] = useState(0);
   const [genres, setGenres] = useState<string[]>([]);
   const [moods, setMoods] = useState<string[]>([]);
   const [moments, setMoments] = useState<string[]>([]);
+  const [bias, setBias] = useState(0.15);
   const [artistQ, setArtistQ] = useState('');
   const [artistHits, setArtistHits] = useState<Track[]>([]);
   const [artists, setArtists] = useState<FollowedArtist[]>([]);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(mode === 'edit');
   const [err, setErr] = useState('');
+
+  useEffect(() => {
+    if (mode !== 'edit') return;
+    let cancelled = false;
+    void api
+      .prefs()
+      .then((r) => {
+        if (cancelled) return;
+        setGenres(r.prefs?.genres || []);
+        setMoods(r.prefs?.moods || []);
+        setMoments(r.prefs?.moments || []);
+        setBias(Number(r.prefs?.discoveryBias ?? 0.15));
+        setArtists(
+          (r.follows || []).map((f: any) => ({
+            id: String(f.artist_id || f.id),
+            name: String(f.artist_name || f.name || 'Artiste'),
+          })),
+        );
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
 
   const canNext = useMemo(() => {
     if (step === 0) return genres.length >= 3;
     if (step === 1) return moods.length >= 2;
     if (step === 2) return moments.length >= 1;
-    if (step === 3) return artists.length >= 1;
+    if (step === 3) return mode === 'edit' || artists.length >= 1;
     return true;
-  }, [step, genres, moods, moments, artists]);
+  }, [step, genres, moods, moments, artists, mode]);
 
   const toggle = (list: string[], set: (v: string[]) => void, v: string) => {
     set(list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
@@ -110,13 +147,27 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }) {
     setBusy(true);
     setErr('');
     try {
-      await api.onboarding({
-        genres,
-        moods,
-        moments,
-        artists: artists.map(({ id, name }) => ({ id, name })),
-        discoveryBias: 0.15,
-      });
+      if (mode === 'edit') {
+        await api.savePrefs({
+          genres,
+          moods,
+          moments,
+          discoveryBias: bias,
+          onboardingDone: true,
+        });
+        // sync follows: follow currently selected (idempotent), unfollow removed handled by UI clicks
+        for (const a of artists) {
+          await api.followArtist(a.id, a.name);
+        }
+      } else {
+        await api.onboarding({
+          genres,
+          moods,
+          moments,
+          artists: artists.map(({ id, name }) => ({ id, name })),
+          discoveryBias: bias,
+        });
+      }
       onDone();
     } catch (e) {
       setErr(String((e as Error).message || e));
@@ -129,21 +180,39 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }) {
     <div className="fixed inset-0 z-[80] flex items-stretch justify-center bg-black/85 p-0 backdrop-blur-sm sm:items-center sm:p-4">
       <div className="flex h-[100dvh] w-full max-w-lg flex-col overflow-hidden border-yt-border bg-yt-surface shadow-2xl sm:h-auto sm:max-h-[min(92dvh,720px)] sm:rounded-2xl sm:border">
         <div className="shrink-0 px-5 pb-2 pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-6 sm:pt-6">
-          <p className="text-xs uppercase tracking-widest text-yt-muted">
-            Préférences · étape {step + 1}/4
-          </p>
-          <h2 className="mt-1 font-display text-2xl font-semibold">
-            {step === 0 && 'Tes genres'}
-            {step === 1 && 'Tes ambiances'}
-            {step === 2 && 'Quand tu écoutes'}
-            {step === 3 && 'Artistes à suivre'}
-          </h2>
-          <p className="mt-1 text-sm text-yt-muted">
-            Valable sur web et application mobile — accueil, Explorer, radio et similaires.
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-widest text-yt-muted">
+                {mode === 'edit' ? 'Affiner' : 'Préférences'} · étape {step + 1}/4
+              </p>
+              <h2 className="mt-1 font-display text-2xl font-semibold">
+                {step === 0 && 'Tes genres'}
+                {step === 1 && 'Tes ambiances'}
+                {step === 2 && 'Quand tu écoutes'}
+                {step === 3 && 'Artistes à suivre'}
+              </h2>
+              <p className="mt-1 text-sm text-yt-muted">
+                {mode === 'edit'
+                  ? 'Modifie tes goûts pour recalibrer l’accueil, Explorer et la radio.'
+                  : 'Valable sur web et application mobile — accueil, Explorer, radio et similaires.'}
+              </p>
+            </div>
+            {mode === 'edit' && onCancel && (
+              <button
+                type="button"
+                onClick={onCancel}
+                className="rounded-full px-3 py-1.5 text-sm text-yt-muted hover:text-white"
+              >
+                Fermer
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 sm:px-6">
+          {loading ? (
+            <p className="py-12 text-center text-sm text-yt-muted">Chargement des préférences…</p>
+          ) : (
           <div className="flex flex-wrap gap-2 pb-4 pt-3">
             {step === 0 &&
               GENRES.map((g) => (
@@ -153,15 +222,33 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }) {
               MOODS.map((m) => (
                 <Chip key={m} label={m} active={moods.includes(m)} onClick={() => toggle(moods, setMoods, m)} />
               ))}
-            {step === 2 &&
-              MOMENTS.map((m) => (
-                <Chip
-                  key={m.id}
-                  label={m.label}
-                  active={moments.includes(m.id)}
-                  onClick={() => toggle(moments, setMoments, m.id)}
-                />
-              ))}
+            {step === 2 && (
+              <>
+                {MOMENTS.map((m) => (
+                  <Chip
+                    key={m.id}
+                    label={m.label}
+                    active={moments.includes(m.id)}
+                    onClick={() => toggle(moments, setMoments, m.id)}
+                  />
+                ))}
+                <div className="mt-4 w-full space-y-2">
+                  <p className="text-sm font-medium">Familiarité ↔ Découverte</p>
+                  <input
+                    type="range"
+                    min={0}
+                    max={0.45}
+                    step={0.01}
+                    value={bias}
+                    onChange={(e) => setBias(Number(e.target.value))}
+                    className="w-full accent-yt-red"
+                  />
+                  <p className="text-xs text-yt-muted">
+                    Biais découverte : {Math.round(bias * 100)} % — plus haut = plus de nouveautés
+                  </p>
+                </div>
+              </>
+            )}
             {step === 3 && (
               <div className="w-full space-y-3">
                 <input
@@ -178,7 +265,12 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }) {
                       <button
                         key={a.id}
                         type="button"
-                        onClick={() => setArtists((prev) => prev.filter((x) => x.id !== a.id))}
+                        onClick={() => {
+                          setArtists((prev) => prev.filter((x) => x.id !== a.id));
+                          if (mode === 'edit') {
+                            void api.unfollowArtist(a.id).catch(() => undefined);
+                          }
+                        }}
                         className="inline-flex max-w-full items-center gap-2 rounded-full bg-yt-red/90 py-1 pl-1 pr-3 text-sm text-white"
                         title="Retirer"
                       >
@@ -208,12 +300,18 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }) {
                         onClick={() => {
                           if (selected) {
                             setArtists((prev) => prev.filter((x) => x.id !== a.id));
+                            if (mode === 'edit') {
+                              void api.unfollowArtist(a.id).catch(() => undefined);
+                            }
                             return;
                           }
                           setArtists((prev) => [
                             ...prev,
                             { id: a.id, name, thumbnails: a.thumbnails },
                           ]);
+                          if (mode === 'edit') {
+                            void api.followArtist(a.id, name).catch(() => undefined);
+                          }
                         }}
                       >
                         <span className="h-12 w-12 shrink-0 overflow-hidden rounded-full bg-yt-elevated">
@@ -236,6 +334,7 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }) {
               </div>
             )}
           </div>
+          )}
           {err && <p className="pb-2 text-sm text-red-400">{err}</p>}
         </div>
 
@@ -243,7 +342,7 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }) {
           <div className="flex items-center justify-between gap-3">
             <button
               type="button"
-              disabled={step === 0 || busy}
+              disabled={step === 0 || busy || loading}
               onClick={() => setStep((s) => Math.max(0, s - 1))}
               className="rounded-full px-4 py-2.5 text-sm text-yt-muted hover:text-white disabled:opacity-40"
             >
@@ -252,7 +351,7 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }) {
             {step < 3 ? (
               <button
                 type="button"
-                disabled={!canNext}
+                disabled={!canNext || loading}
                 onClick={() => setStep((s) => s + 1)}
                 className="rounded-full bg-yt-red px-5 py-2.5 text-sm font-medium disabled:opacity-40"
               >
@@ -261,11 +360,15 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }) {
             ) : (
               <button
                 type="button"
-                disabled={!canNext || busy}
+                disabled={!canNext || busy || loading}
                 onClick={() => void finish()}
                 className="rounded-full bg-yt-red px-5 py-2.5 text-sm font-medium disabled:opacity-40"
               >
-                {busy ? 'Enregistrement…' : 'Lancer mes recommandations'}
+                {busy
+                  ? 'Enregistrement…'
+                  : mode === 'edit'
+                    ? 'Enregistrer'
+                    : 'Lancer mes recommandations'}
               </button>
             )}
           </div>

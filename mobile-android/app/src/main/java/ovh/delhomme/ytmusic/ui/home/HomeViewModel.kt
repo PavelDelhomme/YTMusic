@@ -15,6 +15,7 @@ data class HomeUiState(
     val loading: Boolean = true,
     val error: String? = null,
     val shelves: List<ShelfDto> = emptyList(),
+    val needsOnboarding: Boolean = false,
 )
 
 class HomeViewModel(private val container: AppContainer) : ViewModel() {
@@ -32,11 +33,16 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
                 _state.value = HomeUiState(
                     loading = false,
                     shelves = home.shelves.filter { it.items.isNotEmpty() },
+                    needsOnboarding = home.needsOnboarding == true,
                 )
             } catch (e: Exception) {
                 _state.value = HomeUiState(loading = false, error = e.message ?: "Erreur accueil")
             }
         }
+    }
+
+    fun clearOnboardingFlag() {
+        _state.value = _state.value.copy(needsOnboarding = false)
     }
 
     fun playableFrom(track: TrackDto, shelf: ShelfDto): Pair<List<TrackDto>, Int> {

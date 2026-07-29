@@ -122,13 +122,27 @@ function isJunkArtistName(name: string) {
   return (
     !name ||
     name === '•' ||
-    /^(song|album|playlist|video|ep|single|artist)$/i.test(name) ||
+    /^(song|album|playlist|video|ep|single|artist|inconnu|unknown|n\/a|various artists|va)$/i.test(
+      name,
+    ) ||
     /^\d+:\d+$/.test(name) ||
     /^\d{4}$/.test(name) ||
     /plays?/i.test(name) ||
     /views?/i.test(name) ||
     /monthly audience/i.test(name)
   );
+}
+
+/** Extrait une année propre depuis un sous-titre type « Album • 2026 ». */
+export function extractYear(raw: unknown): string | undefined {
+  const text =
+    typeof raw === 'string'
+      ? raw
+      : asText(raw) || (raw && typeof raw === 'object' && 'text' in (raw as object)
+          ? String((raw as { text?: string }).text || '')
+          : '');
+  const m = String(text).match(/\b((?:19|20)\d{2})\b/);
+  return m?.[1];
 }
 
 function pageTypeOf(run: any): string {
@@ -154,7 +168,7 @@ function artistsFromRuns(runs: any[] | undefined): { name: string; id?: string }
     const isArtist =
       Boolean(browseId?.startsWith('UC')) ||
       pageType.includes('ARTIST') ||
-      (!pageType && browseId && !browseId.startsWith('MPREb_') && !browseId.startsWith('VL'));
+      (!pageType && browseId && !browseId.startsWith('MPREb_') && !browseId.startsWith('VL') && !browseId.startsWith('OLAK5'));
     if (browseId && isArtist) {
       out.push({ name, id: browseId });
     } else if (!browseId && name && !/^[•&|,]+$/.test(name)) {
@@ -175,11 +189,63 @@ function splitAuthorString(author: string, channelId?: string): { name: string; 
   }));
 }
 
+/** Artists depuis un header album / playlist Innertube (author, subtitle runs, byline…). */
+export function artistsFromHeader(header: any): { name: string; id?: string }[] {
+  if (!header) return [];
+
+  const collected: { name: string; id?: string }[] = [];
+  const push = (list: { name: string; id?: string }[]) => {
+    for (const a of list) {
+      if (isJunkArtistName(a.name)) continue;
+      if (!collected.some((x) => x.name === a.name && x.id === a.id)) collected.push(a);
+    }
+  };
+
+  push(artistsFrom(header));
+
+  if (header.author) {
+    if (typeof header.author === 'string') {
+      push(splitAuthorString(header.author, header.channel_id || header.author_id));
+    } else if (header.author.name) {
+      push(
+        splitAuthorString(
+          String(header.author.name),
+          header.author.channel_id || header.author.id,
+        ),
+      );
+    } else {
+      push(artistsFromRuns(header.author?.runs));
+    }
+  }
+
+  push(artistsFromRuns(header.subtitle?.runs));
+  push(artistsFromRuns(header.second_subtitle?.runs));
+  push(artistsFromRuns(header.strapline_text?.runs));
+  push(artistsFromRuns(header.byline?.runs));
+  push(artistsFromRuns(header.description?.runs));
+
+  // Sous-titre texte « Album • Artist • 2026 »
+  const subText = asText(header.subtitle) || asText(header.strapline_text);
+  if (subText.includes('•')) {
+    const parts = subText.split('•').map((p) => p.trim());
+    for (const part of parts) {
+      if (isJunkArtistName(part)) continue;
+      if (/^(album|ep|single|playlist)$/i.test(part)) continue;
+      if (extractYear(part) === part) continue;
+      push(splitAuthorString(part));
+    }
+  }
+
+  // Préférer ceux avec id
+  const withIds = collected.filter((a) => a.id);
+  return withIds.length ? withIds : collected;
+}
+
 export function artistsFrom(item: any): { name: string; id?: string }[] {
   if (Array.isArray(item?.artists) && item.artists.length) {
     return item.artists
       .map((a: any) => ({
-        name: String(a.name || 'Inconnu'),
+        name: String(a.name || '').trim(),
         id: a.channel_id || a.id,
       }))
       .filter((a: { name: string }) => !isJunkArtistName(a.name));
@@ -189,11 +255,15 @@ export function artistsFrom(item: any): { name: string; id?: string }[] {
     return splitAuthorString(String(item.author.name), item.author.channel_id);
   }
 
+  if (typeof item?.author === 'string' && item.author.trim()) {
+    return splitAuthorString(item.author, item.channel_id);
+  }
+
   if (Array.isArray(item?.authors) && item.authors.length) {
     return item.authors
       .map((a: any) => ({
-        name: String(a.name || 'Inconnu'),
-        id: a.channel_id,
+        name: String(a.name || '').trim(),
+        id: a.channel_id || a.id,
       }))
       .filter((a: { name: string }) => !isJunkArtistName(a.name));
   }
@@ -205,7 +275,9 @@ export function artistsFrom(item: any): { name: string; id?: string }[] {
     if (withIds.length) return withIds;
   }
   for (let i = 1; i < flex.length; i++) {
-    const fromRuns = artistsFromRuns(flex[i]?.title?.runs).filter((a) => a.id || !isJunkArtistName(a.name));
+    const fromRuns = artistsFromRuns(flex[i]?.title?.runs).filter(
+      (a) => a.id || !isJunkArtistName(a.name),
+    );
     const cleaned = fromRuns.filter((a) => a.id || (a.name.length < 80 && !a.name.includes(' - ')));
     if (cleaned.some((a) => a.id)) return cleaned.filter((a) => a.id);
     if (cleaned.length && cleaned.every((a) => a.name.length < 60)) return cleaned;
@@ -216,11 +288,17 @@ export function artistsFrom(item: any): { name: string; id?: string }[] {
     if (!text.includes('•')) continue;
     const parts = text.split('•').map((p: string) => p.trim());
     const start = /^(song|album|playlist|video|ep|single)$/i.test(parts[0] || '') ? 1 : 0;
-    const chunk = parts[start];
-    if (!chunk || isJunkArtistName(chunk)) continue;
-    if (/^\d/.test(chunk) || /views?/i.test(chunk)) continue;
-    return splitAuthorString(chunk);
+    for (let j = start; j < parts.length; j++) {
+      const chunk = parts[j];
+      if (!chunk || isJunkArtistName(chunk)) continue;
+      if (/^\d/.test(chunk) || /views?/i.test(chunk) || extractYear(chunk) === chunk) continue;
+      return splitAuthorString(chunk);
+    }
   }
+
+  // subtitle runs on two-row / album cards
+  const fromSub = artistsFromRuns(item?.subtitle?.runs);
+  if (fromSub.length) return fromSub;
 
   return [];
 }
