@@ -71,6 +71,24 @@ Style YouTube Music :
 
 Voir `docs/UI-MALLEABILITY-PERF.md` — tracer conso web / mobile / serveur.
 
+## Accueil — Favoris à redécouvrir
+
+Style YouTube Music (« Forgotten favorites ») :
+
+- Rayon Accueil **Favoris à redécouvrir** (~8 items) — ✅ API `getForgottenFavorites` → `homeReco`
+- Sources : titres **J’aime** matures non réécoutés récemment + anciens gros hits (`play_count`) + albums biblio anciens
+- Exclusion si écoute dans les **14** derniers jours ; rotation stable **par jour**
+- Affiché dès ≥ 2 candidats (web + mobile via `/api/home`)
+- Distinct de la radio **Radio J’aime** (`liked-radio`) = mix seedé sur tops écoutés
+
+## Intégration moteur reco (clients)
+
+- Backend `hybridRank` + endpoints `/api/reco/*` — ✅ déjà prêts
+- Web : home/explore/radios/listen/prefs/pins — ✅ ; feedback `good|bad` — ✅ ; Suivre artiste — ✅ ; « En rapport » — ✅
+- Mobile : listen start/progress/complete/skip — ✅ ; radios chips Accueil — ✅ ; pins sync `/api/pins` — ✅ ; feedback like/dislike — ✅ ; Mix « En rapport » — ✅
+
+---
+
 ## Accès rapide
 
 - **Pas** d’onglet « Rapide » dans la nav bas mobile  

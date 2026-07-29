@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type Track } from '../api';
 import { CoverImage } from './CoverImage';
 
@@ -47,6 +47,51 @@ type FollowedArtist = {
   thumbnails?: Track['thumbnails'];
 };
 
+function foldName(s: string): string {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[''`´]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Déduplique id + nom ; préfère channel UC, plus de thumbs, titre exact. */
+function dedupeArtistHits(items: Track[], query: string): Track[] {
+  const q = foldName(query);
+  const quality = (a: Track) => {
+    let s = 0;
+    const id = a.id || '';
+    if (id.startsWith('UC')) s += 80;
+    else if (id.startsWith('MP')) s += 40;
+    if (a.type === 'artist') s += 30;
+    s += Math.min(20, (a.thumbnails?.length || 0) * 4);
+    const title = foldName(a.title || '');
+    if (title === q) s += 120;
+    else if (title.startsWith(q) || title.includes(q)) s += 60;
+    return s;
+  };
+  const slots: { track: Track; name: string }[] = [];
+  for (const raw of items) {
+    if (!raw?.id) continue;
+    const name = foldName(raw.title || '');
+    const idx = slots.findIndex(
+      (x) => x.track.id === raw.id || (name.length >= 2 && x.name === name),
+    );
+    if (idx < 0) {
+      slots.push({ track: raw, name });
+      continue;
+    }
+    if (quality(raw) > quality(slots[idx].track)) {
+      slots[idx] = { track: raw, name: name || slots[idx].name };
+    }
+  }
+  return slots.map((s) => s.track);
+}
+
 function Chip({
   active,
   label,
@@ -85,10 +130,12 @@ export function OnboardingWizard({
   const [bias, setBias] = useState(0.15);
   const [artistQ, setArtistQ] = useState('');
   const [artistHits, setArtistHits] = useState<Track[]>([]);
+  const [artistSearching, setArtistSearching] = useState(false);
   const [artists, setArtists] = useState<FollowedArtist[]>([]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(mode === 'edit');
   const [err, setErr] = useState('');
+  const artistSearchSeq = useRef(0);
 
   useEffect(() => {
     if (mode !== 'edit') return;
@@ -129,19 +176,42 @@ export function OnboardingWizard({
     set(list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
   };
 
-  const searchArtists = async (q: string) => {
-    setArtistQ(q);
-    if (q.trim().length < 2) {
+  // Recherche artistes : debounce + ignore réponses obsolètes (espaces / multi-mots)
+  useEffect(() => {
+    if (step !== 3) return;
+    const normalized = artistQ.replace(/\s+/g, ' ').trim();
+    if (normalized.length < 2) {
       setArtistHits([]);
+      setArtistSearching(false);
       return;
     }
-    try {
-      const r = await api.search(q, 'artist');
-      setArtistHits(r.artists.slice(0, 10));
-    } catch {
-      setArtistHits([]);
-    }
-  };
+    const seq = ++artistSearchSeq.current;
+    setArtistSearching(true);
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const r = await api.search(normalized, 'artist', { noHistory: true });
+          if (seq !== artistSearchSeq.current) return;
+          let hits = [...(r.artists || [])];
+          if (r.topResult?.type === 'artist') hits.unshift(r.topResult);
+          // Fallback : recherche large si filtre artiste trop pauvre
+          if (hits.length < 2) {
+            const all = await api.search(normalized, 'all', { noHistory: true });
+            if (seq !== artistSearchSeq.current) return;
+            hits.push(...(all.artists || []));
+            if (all.topResult?.type === 'artist') hits.unshift(all.topResult);
+          }
+          setArtistHits(dedupeArtistHits(hits, normalized).slice(0, 10));
+        } catch {
+          if (seq !== artistSearchSeq.current) return;
+          setArtistHits([]);
+        } finally {
+          if (seq === artistSearchSeq.current) setArtistSearching(false);
+        }
+      })();
+    }, 280);
+    return () => window.clearTimeout(timer);
+  }, [artistQ, step]);
 
   const finish = async () => {
     setBusy(true);
@@ -253,10 +323,11 @@ export function OnboardingWizard({
               <div className="w-full space-y-3">
                 <input
                   value={artistQ}
-                  onChange={(e) => void searchArtists(e.target.value)}
-                  placeholder="Chercher un artiste…"
+                  onChange={(e) => setArtistQ(e.target.value)}
+                  placeholder="Chercher un artiste (ex. Demi Portion)…"
                   className="w-full rounded-xl border border-yt-border bg-yt-elevated px-3 py-2.5 text-sm outline-none focus:border-white/30"
                   autoComplete="off"
+                  spellCheck={false}
                   enterKeyHint="search"
                 />
                 {artists.length > 0 && (
@@ -287,6 +358,9 @@ export function OnboardingWizard({
                   </div>
                 )}
                 <div className="space-y-1">
+                  {artistSearching && (
+                    <p className="px-2 py-2 text-center text-xs text-yt-muted">Recherche…</p>
+                  )}
                   {artistHits.map((a) => {
                     const name = a.title || 'Artiste';
                     const selected = artists.some((x) => x.id === a.id);
@@ -327,9 +401,13 @@ export function OnboardingWizard({
                       </button>
                     );
                   })}
-                  {artistQ.trim().length >= 2 && artistHits.length === 0 && (
-                    <p className="px-2 py-4 text-center text-sm text-yt-muted">Aucun artiste trouvé.</p>
-                  )}
+                  {!artistSearching &&
+                    artistQ.replace(/\s+/g, ' ').trim().length >= 2 &&
+                    artistHits.length === 0 && (
+                      <p className="px-2 py-4 text-center text-sm text-yt-muted">
+                        Aucun artiste trouvé pour « {artistQ.replace(/\s+/g, ' ').trim()} ».
+                      </p>
+                    )}
                 </div>
               </div>
             )}

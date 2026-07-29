@@ -191,6 +191,130 @@ export function getHistory(userId: string, limit = 500): Track[] {
   ).map((r) => JSON.parse(r.payload) as Track);
 }
 
+/**
+ * « Favoris à redécouvrir » (YouTube Music · Forgotten favorites) :
+ * titres / albums déjà aimés ou souvent écoutés, mais pas joués récemment.
+ * ~8 items, rotation stable par jour.
+ */
+export function getForgottenFavorites(userId: string, limit = 8): Track[] {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  /** Fenêtre « récent » : exclus si écouté dans les 14 derniers jours. */
+  const recentCutoff = now - 14 * DAY;
+  /** Un like trop frais n’est pas « oublié ». */
+  const likeMatureCutoff = now - 7 * DAY;
+
+  try {
+    db.exec('ALTER TABLE history ADD COLUMN play_count INTEGER DEFAULT 1');
+  } catch {
+    /* ok */
+  }
+
+  type Cand = {
+    track: Track;
+    score: number;
+    key: string;
+  };
+  const byId = new Map<string, Cand>();
+
+  const push = (track: Track, score: number) => {
+    if (!track?.id) return;
+    const prev = byId.get(track.id);
+    if (!prev || score > prev.score) {
+      byId.set(track.id, { track, score, key: track.id });
+    }
+  };
+
+  // 1) Titres aimés non réécoutés récemment
+  const likedRows = db
+    .prepare(
+      `SELECT t.payload AS payload, l.created_at AS liked_at,
+              COALESCE(h.play_count, 0) AS play_count,
+              COALESCE(h.played_at, 0) AS played_at
+       FROM liked_tracks l
+       JOIN tracks_cache t ON t.id = l.track_id
+       LEFT JOIN history h ON h.user_id = l.user_id AND h.track_id = l.track_id
+       WHERE l.user_id = ?`,
+    )
+    .all(userId) as {
+    payload: string;
+    liked_at: number;
+    play_count: number;
+    played_at: number;
+  }[];
+
+  for (const row of likedRows) {
+    if (row.liked_at > likeMatureCutoff && row.play_count < 2) continue;
+    if (row.played_at > recentCutoff) continue;
+    const track = JSON.parse(row.payload) as Track;
+    const daysSincePlay = row.played_at > 0 ? (now - row.played_at) / DAY : (now - row.liked_at) / DAY;
+    const daysSinceLike = (now - row.liked_at) / DAY;
+    const score =
+      40 +
+      Math.min(30, row.play_count * 4) +
+      Math.min(25, daysSincePlay / 2) +
+      Math.min(15, daysSinceLike / 7);
+    push(track, score);
+  }
+
+  // 2) Anciens gros hits (même sans like) — oubliés
+  const histRows = db
+    .prepare(
+      `SELECT t.payload AS payload, COALESCE(h.play_count, 1) AS play_count, h.played_at AS played_at
+       FROM history h
+       JOIN tracks_cache t ON t.id = h.track_id
+       WHERE h.user_id = ?
+         AND COALESCE(h.play_count, 1) >= 3
+         AND h.played_at < ?`,
+    )
+    .all(userId, recentCutoff) as { payload: string; play_count: number; played_at: number }[];
+
+  for (const row of histRows) {
+    const track = JSON.parse(row.payload) as Track;
+    const daysSincePlay = (now - row.played_at) / DAY;
+    const score = 20 + Math.min(40, row.play_count * 3) + Math.min(20, daysSincePlay / 3);
+    push(track, score);
+  }
+
+  // 3) Albums enregistrés depuis un moment (YTM mélange titres + albums)
+  const albumRows = db
+    .prepare(
+      `SELECT payload, created_at FROM library_albums WHERE user_id = ? AND created_at < ?`,
+    )
+    .all(userId, likeMatureCutoff) as { payload: string; created_at: number }[];
+
+  for (const row of albumRows) {
+    const raw = JSON.parse(row.payload) as Record<string, unknown>;
+    const id = String(raw.id || '');
+    if (!id) continue;
+    const daysSinceSave = (now - row.created_at) / DAY;
+    const track: Track = {
+      id,
+      title: String(raw.title || raw.name || 'Album'),
+      artists: Array.isArray(raw.artists) ? (raw.artists as Track['artists']) : [],
+      thumbnails: Array.isArray(raw.thumbnails) ? (raw.thumbnails as Track['thumbnails']) : [],
+      type: 'album',
+    };
+    push(track, 25 + Math.min(20, daysSinceSave / 5));
+  }
+
+  const ranked = [...byId.values()].sort((a, b) => b.score - a.score);
+  if (ranked.length === 0) return [];
+
+  // Rotation quotidienne stable (pas un mélange aléatoire à chaque refresh)
+  const d = new Date();
+  const seed = d.getFullYear() * 10_000 + (d.getMonth() + 1) * 100 + d.getDate() + userId.length;
+  const pool = ranked.slice(0, Math.max(limit * 3, limit));
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = (seed * (i + 3)) % (i + 1);
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  // Re-trier légèrement par score après shuffle partiel pour garder la pertinence
+  pool.sort((a, b) => b.score - a.score + (((seed + a.key.charCodeAt(0)) % 7) - 3));
+
+  return pool.slice(0, limit).map((c) => c.track);
+}
+
 export function listPlaylists(userId: string): LibraryPlaylist[] {
   const rows = db
     .prepare('SELECT * FROM playlists WHERE user_id = ? ORDER BY updated_at DESC')

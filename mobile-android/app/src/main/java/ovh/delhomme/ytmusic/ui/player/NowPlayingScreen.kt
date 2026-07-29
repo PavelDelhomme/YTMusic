@@ -267,6 +267,13 @@ fun NowPlayingScreen(
                                                         if (r.liked) likedIds + track.id
                                                         else likedIds - track.id,
                                                     )
+                                                    container.api.recoFeedback(
+                                                        ovh.delhomme.ytmusic.data.RecoFeedbackBody(
+                                                            track.id,
+                                                            if (r.liked) "good" else "bad",
+                                                            "now_playing_like",
+                                                        ),
+                                                    )
                                                 }
                                             }
                                         }

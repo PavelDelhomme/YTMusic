@@ -56,6 +56,7 @@ import ovh.delhomme.ytmusic.ui.components.TrackRow
 fun HomeScreen(
     container: AppContainer,
     onPlay: (List<TrackDto>, Int) -> Unit,
+    onPlayNamed: (List<TrackDto>, Int, String) -> Unit = { tracks, idx, _ -> onPlay(tracks, idx) },
     onMore: (TrackDto) -> Unit,
     onOpenDetail: (TrackDto) -> Unit,
     onOpenRecoPrefs: () -> Unit = {},
@@ -132,6 +133,38 @@ fun HomeScreen(
                         onOpenDetail = onOpenDetail,
                         onMore = onMore,
                     )
+                }
+
+                if (state.radios.isNotEmpty()) {
+                    item {
+                        Text(
+                            "Mixés pour toi",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        )
+                        Row(
+                            Modifier
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            state.radios.forEach { radio ->
+                                val loading = state.radioLoadingId == radio.id
+                                TextButton(
+                                    onClick = {
+                                        vm.playRadio(radio.id) { tracks, title ->
+                                            onPlayNamed(tracks, 0, title)
+                                        }
+                                    },
+                                    enabled = !loading,
+                                ) {
+                                    Text(if (loading) "…" else radio.title)
+                                }
+                            }
+                        }
+                    }
                 }
 
                 items(state.shelves, key = { it.title }) { shelf ->

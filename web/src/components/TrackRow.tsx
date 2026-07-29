@@ -180,11 +180,11 @@ export function TrackRow({
             e.stopPropagation();
             void toggleLike(track);
           }}
-          className={`rounded-full p-2 text-yt-muted transition hover:text-white ${
+          className={`flex h-10 w-10 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white ${
             liked || showActions ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           }`}
         >
-          <Heart className={`h-4 w-4 ${liked ? 'fill-yt-red text-yt-red' : ''}`} />
+          <Heart className={`h-5 w-5 ${liked ? 'fill-yt-red text-yt-red' : ''}`} />
         </button>
         {isPlayable(track) && (
           <button
@@ -194,22 +194,22 @@ export function TrackRow({
               e.stopPropagation();
               void startRadio({ kind: 'track', id: track.id, seed: track });
             }}
-            className={`rounded-full p-2 text-yt-muted transition hover:text-white ${
+            className={`flex h-10 w-10 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white ${
               showActions ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
             }`}
           >
-            <Radio className="h-4 w-4" />
+            <Radio className="h-5 w-5" />
           </button>
         )}
         <button
           type="button"
           aria-label="Plus d'options"
           onClick={openMenu}
-          className={`rounded-full p-2 text-yt-muted transition hover:text-white ${
+          className={`flex h-10 w-10 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white ${
             showActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'
           }`}
         >
-          <MoreHorizontal className="h-4 w-4" />
+          <MoreHorizontal className="h-5 w-5" />
         </button>
       </div>
     </div>

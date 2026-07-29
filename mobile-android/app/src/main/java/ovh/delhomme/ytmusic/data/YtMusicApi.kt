@@ -344,4 +344,22 @@ interface YtMusicApi {
 
     @GET("api/reco/radios")
     suspend fun radios(): Map<String, Any>
+
+    @GET("api/reco/radio/{category}")
+    suspend fun recoRadio(@Path("category") category: String): RadioMixResponse
+
+    @GET("api/pins")
+    suspend fun pins(): PinsResponse
+
+    @POST("api/pins")
+    suspend fun addPin(@Body body: Map<String, @JvmSuppressWildcards Any?>): PinsResponse
+
+    @DELETE("api/pins/{id}")
+    suspend fun removePin(@Path("id") id: String): PinsResponse
+
+    @GET("api/search/history")
+    suspend fun searchHistory(): Map<String, Any>
+
+    @POST("api/search/history")
+    suspend fun recordSearchHistory(@Body body: Map<String, @JvmSuppressWildcards Any?>): Map<String, Any>
 }

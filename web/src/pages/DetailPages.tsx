@@ -6,7 +6,7 @@ import { ShelfRow } from '../components/MediaCard';
 import { CoverImage } from '../components/CoverImage';
 import { usePlayer } from '../store/player';
 import { useLibrary } from '../store/library';
-import { Play, Download, Library, Heart, Radio, Check } from 'lucide-react';
+import { Play, Download, Library, Heart, Radio, Check, UserPlus, UserMinus } from 'lucide-react';
 import { ArtistLinks } from '../components/ArtistLinks';
 import { BackButton } from '../components/BackButton';
 
@@ -19,12 +19,26 @@ export function ArtistPage() {
   const { hasArtist, applyLibrary } = useLibrary();
   const [busy, setBusy] = useState(false);
   const [radioBusy, setRadioBusy] = useState(false);
+  const [following, setFollowing] = useState(false);
+  const [followBusy, setFollowBusy] = useState(false);
 
   useEffect(() => {
     if (!id) return;
     setData(null);
+    setFollowing(false);
     api.artist(id).then(setData).catch(console.error);
     api.artistRadio(id).then((r) => setRadio(r.tracks)).catch(() => setRadio([]));
+    api
+      .prefs()
+      .then((r) => {
+        const follows = r.follows || [];
+        setFollowing(
+          follows.some(
+            (f: { artist_id?: string; id?: string }) => f.artist_id === id || f.id === id,
+          ),
+        );
+      })
+      .catch(() => undefined);
   }, [id]);
 
   if (!data) {
@@ -74,6 +88,35 @@ export function ArtistPage() {
             >
               <Radio className="h-4 w-4" />
               {radioBusy ? 'Radio…' : 'Radio'}
+            </button>
+            <button
+              type="button"
+              disabled={followBusy}
+              onClick={() => {
+                void (async () => {
+                  setFollowBusy(true);
+                  try {
+                    if (following) {
+                      await api.unfollowArtist(data.artist.id);
+                      setFollowing(false);
+                    } else {
+                      await api.followArtist(data.artist.id, data.artist.name);
+                      setFollowing(true);
+                    }
+                  } finally {
+                    setFollowBusy(false);
+                  }
+                })();
+              }}
+              className={`inline-flex items-center gap-2 rounded-full px-4 py-2.5 text-sm ${
+                following
+                  ? 'bg-white/10 text-white'
+                  : 'bg-yt-elevated text-yt-muted hover:text-white'
+              } disabled:opacity-60`}
+              title="Suivre pour alimenter les rayons Accueil"
+            >
+              {following ? <UserMinus className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
+              {following ? 'Abonné' : 'Suivre'}
             </button>
             <button
               type="button"

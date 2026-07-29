@@ -178,25 +178,25 @@ export function PlayerBar({
       )}
 
       {/* Layout : transport+temps | centre (cover+titre+actions) | volume+repeat+shuffle */}
-      <div className="mx-auto flex max-w-[1600px] items-center gap-3 px-3 py-2 md:gap-4 md:px-5 md:py-2.5">
+      <div className="mx-auto flex max-w-[1600px] items-center gap-3 px-3 py-2.5 md:gap-4 md:px-5 md:py-3">
         {/* Gauche */}
-        <div className="flex shrink-0 items-center gap-0.5 sm:gap-1" onClick={stop}>
-          <button type="button" onClick={() => void prev()} className="rounded-full p-2 text-white hover:bg-white/10" title="Précédent">
-            <SkipBack className="h-5 w-5 fill-white" />
+        <div className="flex shrink-0 items-center gap-1 sm:gap-1.5" onClick={stop}>
+          <button type="button" onClick={() => void prev()} className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10" title="Précédent">
+            <SkipBack className="h-6 w-6 fill-white" />
           </button>
           <button
             type="button"
             onClick={toggle}
             disabled={isLoading}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-black transition hover:scale-105 disabled:opacity-60"
+            className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition hover:scale-105 disabled:opacity-60"
             title={isPlaying ? 'Pause' : 'Lecture'}
           >
-            {isPlaying ? <Pause className="h-5 w-5 fill-black" /> : <Play className="h-5 w-5 fill-black" />}
+            {isPlaying ? <Pause className="h-6 w-6 fill-black" /> : <Play className="h-6 w-6 fill-black" />}
           </button>
-          <button type="button" onClick={() => void next()} className="rounded-full p-2 text-white hover:bg-white/10" title="Suivant">
-            <SkipForward className="h-5 w-5 fill-white" />
+          <button type="button" onClick={() => void next()} className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10" title="Suivant">
+            <SkipForward className="h-6 w-6 fill-white" />
           </button>
-          <span className="ml-2 hidden whitespace-nowrap text-[11px] tabular-nums text-yt-muted sm:inline">
+          <span className="ml-2 hidden whitespace-nowrap text-xs tabular-nums text-yt-muted sm:inline">
             {formatClock(progress)} / {formatClock(effectiveDuration)}
           </span>
         </div>
@@ -217,23 +217,33 @@ export function PlayerBar({
             type="button"
             onClick={(e) => {
               stop(e);
+              const willLike = !isLiked(current.id);
               void toggleLike(current);
+              void api
+                .recoFeedback({
+                  trackId: current.id,
+                  verdict: willLike ? 'good' : 'bad',
+                  context: 'player_bar_like',
+                })
+                .catch(() => undefined);
             }}
-            className="shrink-0 rounded-full p-2 text-yt-muted hover:text-white"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white"
             title="J'aime"
           >
-            <Heart className={`h-4 w-4 ${isLiked(current.id) ? 'fill-yt-red text-yt-red' : ''}`} />
+            <Heart className={`h-5 w-5 ${isLiked(current.id) ? 'fill-yt-red text-yt-red' : ''}`} />
           </button>
           <button
             type="button"
             onClick={(e) => {
               stop(e);
-              void api.recoFeedback({ trackId: current.id, verdict: 'dislike', context: 'player_bar' }).catch(() => undefined);
+              void api
+                .recoFeedback({ trackId: current.id, verdict: 'bad', context: 'player_bar' })
+                .catch(() => undefined);
             }}
-            className="shrink-0 rounded-full p-2 text-yt-muted hover:text-white"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white"
             title="Je n'aime pas"
           >
-            <ThumbsDown className="h-4 w-4" />
+            <ThumbsDown className="h-5 w-5" />
           </button>
           <button
             type="button"
@@ -241,15 +251,15 @@ export function PlayerBar({
               stop(e);
               openActions(current, { queueIndex });
             }}
-            className="shrink-0 rounded-full p-2 text-yt-muted hover:text-white"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white"
             title="Plus d'options"
           >
-            <MoreVertical className="h-4 w-4" />
+            <MoreVertical className="h-5 w-5" />
           </button>
         </div>
 
         {/* Droite */}
-        <div className="relative flex shrink-0 items-center justify-end gap-0.5 sm:gap-1" onClick={stop} ref={volRef}>
+        <div className="relative flex shrink-0 items-center justify-end gap-1 sm:gap-1.5" onClick={stop} ref={volRef}>
           <button
             type="button"
             title="Volume (clic = mute)"
@@ -263,12 +273,12 @@ export function PlayerBar({
               stop(e);
               setVolOpen((v) => !v);
             }}
-            className="rounded-full p-2 text-yt-muted hover:text-white"
+            className="flex h-11 w-11 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white"
           >
-            {muted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+            {muted || volume === 0 ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
           </button>
           {volOpen && (
-            <div className="absolute bottom-12 right-0 z-50 w-44 rounded-xl border border-white/10 bg-yt-elevated p-3 shadow-xl">
+            <div className="absolute bottom-14 right-0 z-50 w-48 rounded-xl border border-white/10 bg-yt-elevated p-4 shadow-xl">
               <input
                 type="range"
                 min={0}
@@ -294,30 +304,30 @@ export function PlayerBar({
                   ? 'Boucler toute la file'
                   : 'Boucler le titre'
             }
-            className={`rounded-full p-2 ${repeat !== 'off' ? 'text-yt-red' : 'text-yt-muted/50 hover:text-yt-muted'}`}
+            className={`flex h-11 w-11 items-center justify-center rounded-full ${repeat !== 'off' ? 'text-yt-red' : 'text-yt-muted/50 hover:bg-white/10 hover:text-yt-muted'}`}
           >
-            {repeat === 'one' ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
+            {repeat === 'one' ? <Repeat1 className="h-5 w-5" /> : <Repeat className="h-5 w-5" />}
           </button>
           <button
             type="button"
             onClick={toggleShuffle}
             title="Aléatoire"
-            className={`rounded-full p-2 ${shuffle ? 'text-yt-red' : 'text-yt-muted/50 hover:text-yt-muted'}`}
+            className={`flex h-11 w-11 items-center justify-center rounded-full ${shuffle ? 'text-yt-red' : 'text-yt-muted/50 hover:bg-white/10 hover:text-yt-muted'}`}
           >
-            <Shuffle className="h-4 w-4" />
+            <Shuffle className="h-5 w-5" />
           </button>
           {onOpenDevices && (
             <button
               type="button"
               onClick={onOpenDevices}
-              className={`hidden rounded-full p-2 sm:inline ${!isActivePlayer ? 'text-yt-red' : 'text-yt-muted hover:text-white'}`}
+              className={`hidden h-11 w-11 items-center justify-center rounded-full sm:flex ${!isActivePlayer ? 'text-yt-red' : 'text-yt-muted hover:bg-white/10 hover:text-white'}`}
               title="Cast"
             >
-              <Cast className="h-4 w-4" />
+              <Cast className="h-5 w-5" />
             </button>
           )}
           {onCollapse && expanded && (
-            <button type="button" onClick={onCollapse} className="rounded-full p-2 text-yt-muted hover:text-white" title="Réduire">
+            <button type="button" onClick={onCollapse} className="flex h-11 w-11 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white" title="Réduire">
               ✕
             </button>
           )}

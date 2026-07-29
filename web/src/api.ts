@@ -328,15 +328,18 @@ export const api = {
       needsOnboarding?: boolean;
       radios?: { id: string; title: string }[];
     }>('/api/explore'),
-  search: (q: string, filter = 'all') =>
-    req<{
+  search: (q: string, filter = 'all', opts?: { noHistory?: boolean }) => {
+    const params = new URLSearchParams({ q, filter });
+    if (opts?.noHistory) params.set('noHistory', '1');
+    return req<{
       topResult: Track | null;
       songs: Track[];
       videos: Track[];
       albums: Track[];
       artists: Track[];
       playlists: Track[];
-    }>(`/api/search?q=${encodeURIComponent(q)}&filter=${filter}`),
+    }>(`/api/search?${params.toString()}`);
+  },
   suggestions: (q: string) =>
     req<{ suggestions: string[] }>(`/api/search/suggestions?q=${encodeURIComponent(q)}`),
   searchHistory: () => req<{ history: any[] }>('/api/search/history'),

@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.map
 
 private val Context.quickAccessStore by preferencesDataStore("ytmusic_quick_access")
 
-/** Pins locaux (accès rapide) — style Google Music. */
+/** Pins locaux + sync serveur (`/api/pins`) pour le rayon Accueil « Épinglé ». */
 class QuickAccessStore(private val context: Context) {
     private val key = stringPreferencesKey("pins_json")
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
@@ -29,7 +29,25 @@ class QuickAccessStore(private val context: Context) {
 
     suspend fun isPinned(id: String): Boolean = pins.first().any { it.id == id }
 
-    suspend fun toggle(track: TrackDto): Boolean {
+    suspend fun replaceAll(tracks: List<TrackDto>) {
+        context.quickAccessStore.edit { prefs ->
+            prefs[key] = adapter.toJson(tracks.take(48))
+        }
+    }
+
+    /** Charge les pins serveur et remplace le cache local. */
+    suspend fun syncFromApi(api: YtMusicApi) {
+        val remote = runCatching { api.pins().pins }.getOrDefault(emptyList())
+        val tracks = remote.mapNotNull { pin ->
+            pin.payload?.copy(id = pin.payload.id.ifBlank { pin.targetId.orEmpty() })
+                ?.takeIf { it.id.isNotBlank() }
+        }
+        if (tracks.isNotEmpty() || remote.isEmpty()) {
+            replaceAll(tracks)
+        }
+    }
+
+    suspend fun toggle(track: TrackDto, api: YtMusicApi? = null): Boolean {
         var nowPinned = false
         context.quickAccessStore.edit { prefs ->
             val current = prefs[key].orEmpty().let { raw ->
@@ -45,6 +63,22 @@ class QuickAccessStore(private val context: Context) {
                 nowPinned = true
             }
             prefs[key] = adapter.toJson(current.take(48))
+        }
+        if (api != null) {
+            runCatching {
+                if (nowPinned) {
+                    api.addPin(
+                        mapOf(
+                            "kind" to (track.type ?: "song"),
+                            "targetId" to track.id,
+                            "payload" to track,
+                            "id" to track.id,
+                        ),
+                    )
+                } else {
+                    api.removePin(track.id)
+                }
+            }
         }
         return nowPinned
     }

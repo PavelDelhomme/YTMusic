@@ -104,6 +104,32 @@ data class HomeResponse(
     val seeds: List<String>? = emptyList(),
     val hasMore: Boolean? = false,
     val needsOnboarding: Boolean? = false,
+    val radios: List<RadioCategoryDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = false)
+data class RadioCategoryDto(
+    val id: String,
+    val title: String,
+)
+
+@JsonClass(generateAdapter = false)
+data class RadioMixResponse(
+    val tracks: List<TrackDto> = emptyList(),
+    val seed: TrackDto? = null,
+)
+
+@JsonClass(generateAdapter = false)
+data class PinDto(
+    val id: String? = null,
+    val kind: String? = null,
+    val targetId: String? = null,
+    val payload: TrackDto? = null,
+)
+
+@JsonClass(generateAdapter = false)
+data class PinsResponse(
+    val pins: List<PinDto> = emptyList(),
 )
 
 @JsonClass(generateAdapter = false)

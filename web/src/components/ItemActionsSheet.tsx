@@ -70,7 +70,8 @@ export function ItemActionsSheet() {
   const startMix = usePlayer((s) => s.startMix);
   const queue = usePlayer((s) => s.queue);
   const queueIndex = usePlayer((s) => s.queueIndex);
-  const { isLiked, toggleLike, playlists, addToPlaylist, hasAlbum, applyLibrary, downloaded } = useLibrary();
+  const { isLiked, toggleLike, playlists, addToPlaylist, hasAlbum, hasArtist, isPlaylistLiked, applyLibrary, downloaded, refresh } =
+    useLibrary();
   const [busy, setBusy] = useState(false);
   const [showPlaylists, setShowPlaylists] = useState(false);
   const [pinId, setPinId] = useState<string | null>(null);
@@ -79,6 +80,7 @@ export function ItemActionsSheet() {
   useEffect(() => {
     if (!item) return;
     setShowPlaylists(false);
+    void refresh().catch(() => undefined);
     void api
       .pins()
       .then((r) => {
@@ -91,7 +93,7 @@ export function ItemActionsSheet() {
     void listCachedIds()
       .then((ids) => setOnDevice(ids.includes(item.id) || downloaded.includes(item.id)))
       .catch(() => setOnDevice(downloaded.includes(item.id)));
-  }, [item?.id, downloaded]);
+  }, [item?.id, downloaded, refresh]);
 
   useEffect(() => {
     if (!item) return;
@@ -120,8 +122,8 @@ export function ItemActionsSheet() {
   const artistsWithId = item.artists?.filter((a) => a.id) || [];
   const collectionInLibrary =
     (item.type === 'album' && hasAlbum(item.id)) ||
-    (item.type === 'artist' && useLibrary.getState().hasArtist(item.id)) ||
-    (item.type === 'playlist' && useLibrary.getState().isPlaylistLiked(item.id));
+    (item.type === 'artist' && hasArtist(item.id)) ||
+    (item.type === 'playlist' && isPlaylistLiked(item.id));
   const albumSaved = albumId ? hasAlbum(albumId) : false;
 
   const after = (fn: () => void | Promise<void>) => {
@@ -151,19 +153,19 @@ export function ItemActionsSheet() {
             <button
               type="button"
               title={liked ? 'Retirer des aimés' : "J'aime"}
-              className="shrink-0 rounded-full p-2 text-yt-muted hover:text-white"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white"
               onClick={() => void toggleLike(item)}
             >
-              <Heart className={`h-5 w-5 ${liked ? 'fill-yt-red text-yt-red' : ''}`} />
+              <Heart className={`h-6 w-6 ${liked ? 'fill-yt-red text-yt-red' : ''}`} />
             </button>
           )}
           <button
             type="button"
             aria-label="Fermer"
-            className="shrink-0 rounded-full p-2 text-yt-muted hover:text-white"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white"
             onClick={close}
           >
-            <X className="h-5 w-5" />
+            <X className="h-6 w-6" />
           </button>
         </div>
 
@@ -222,8 +224,8 @@ export function ItemActionsSheet() {
             <>
               <Row
                 icon={<Sparkles className="h-4 w-4" />}
-                label="Mix"
-                sub="Similaires + découverte"
+                label="En rapport"
+                sub="Mix · similaires + découverte"
                 onClick={() => after(() => void startMix(item))}
               />
               {item.artists?.some((a) => a.id) && (
@@ -286,10 +288,13 @@ export function ItemActionsSheet() {
                 }
               />
               <Row
-                icon={liked ? <Check className="h-4 w-4" /> : <Library className="h-4 w-4" />}
+                icon={liked ? <Check className="h-5 w-5 text-yt-red" /> : <Library className="h-5 w-5" />}
                 label={liked ? 'Dans la bibliothèque' : 'Enregistrer dans la bibliothèque'}
+                sub={liked ? 'Appuyer pour retirer' : 'Ajoute aux titres J’aime'}
                 disabled={busy}
-                onClick={() => after(() => void toggleLike(item))}
+                onClick={() => {
+                  void toggleLike(item);
+                }}
               />
             </>
           )}
@@ -426,10 +431,10 @@ function QuickBtn({
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-col items-center gap-1.5 rounded-xl px-2 py-2 text-center text-yt-muted transition hover:bg-yt-hover hover:text-white"
+      className="flex min-h-[4.5rem] flex-col items-center justify-center gap-2 rounded-xl px-2 py-3 text-center text-yt-muted transition hover:bg-yt-hover hover:text-white"
     >
-      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white">{icon}</span>
-      <span className="text-[11px] font-medium leading-tight text-white">{label}</span>
+      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 text-white">{icon}</span>
+      <span className="text-xs font-medium leading-tight text-white">{label}</span>
     </button>
   );
 }
@@ -452,12 +457,12 @@ function Row({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="flex w-full items-start gap-3 px-4 py-3 text-left text-sm hover:bg-yt-hover disabled:cursor-default disabled:opacity-40"
+      className="flex min-h-[3.25rem] w-full items-center gap-3 px-4 py-3.5 text-left text-[15px] hover:bg-yt-hover disabled:cursor-default disabled:opacity-40"
     >
-      <span className="mt-0.5 shrink-0 text-yt-muted">{icon}</span>
-      <span className="min-w-0">
-        <span className="block truncate text-white">{label}</span>
-        {sub ? <span className="block truncate text-xs text-yt-muted">{sub}</span> : null}
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center text-yt-muted">{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium text-white">{label}</span>
+        {sub ? <span className="block truncate text-sm text-yt-muted">{sub}</span> : null}
       </span>
     </button>
   );
