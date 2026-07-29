@@ -97,6 +97,7 @@ data class ArtistMetaDto(
     val name: String,
     val subscribers: String? = null,
     val thumbnails: List<Thumb>? = emptyList(),
+    val description: String? = null,
 ) {
     fun asTrack(): TrackDto = TrackDto(
         id = id,
@@ -125,6 +126,11 @@ data class ArtistDetailResponse(
     val songs: List<TrackDto>? = emptyList(),
     val tracks: List<TrackDto>? = emptyList(),
     val albums: List<TrackDto>? = emptyList(),
+    val singles: List<TrackDto>? = emptyList(),
+    val videos: List<TrackDto>? = emptyList(),
+    val featured: List<TrackDto>? = emptyList(),
+    val similar: List<TrackDto>? = emptyList(),
+    val playlists: List<TrackDto>? = emptyList(),
 )
 
 @JsonClass(generateAdapter = false)

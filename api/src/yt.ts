@@ -1,3 +1,5 @@
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Innertube, UniversalCache, ClientType } from 'youtubei.js';
 import { extractThumbs, mapAny, mapListItem, parseAuthorField, artistsFromHeader, extractYear } from './mappers.js';
 import { getFullLibrary, getHistory } from './library.js';
@@ -14,7 +16,31 @@ import {
 } from './searchRank.js';
 import type { AlbumMeta, ArtistMeta, PlaylistMeta, Shelf, Track } from './types.js';
 
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
 let yt: Innertube | null = null;
+
+type AudioFormat = {
+  url: string;
+  mimeType?: string;
+  bitrate?: number;
+  contentLength?: number;
+  expiresAt: number;
+};
+
+/** Cache URLs googlevideo (évite re-decipher à chaque play / prefetch). */
+const audioFormatCache = new Map<string, AudioFormat>();
+const audioFormatInflight = new Map<string, Promise<AudioFormat>>();
+
+function parseExpireMs(url: string): number | null {
+  try {
+    const exp = new URL(url).searchParams.get('expire');
+    if (exp && /^\d+$/.test(exp)) return Number(exp) * 1000;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
 
 /** `m:ss` ou `h:mm:ss` si ≥ 1 h (évite `164:16`). */
 function formatDurationClock(totalSeconds: number): string {
@@ -31,7 +57,7 @@ function formatDurationClock(totalSeconds: number): string {
 export async function getYT(): Promise<Innertube> {
   if (yt) return yt;
   yt = await Innertube.create({
-    cache: new UniversalCache(false),
+    cache: new UniversalCache(true, join(ROOT, 'data', 'yt-cache')),
     generate_session_locally: true,
     client_type: ClientType.WEB,
   });
@@ -825,17 +851,43 @@ export async function getPlaylist(playlistId: string): Promise<{
   return { playlist: meta, tracks };
 }
 
-export async function getAudioFormat(videoId: string) {
-  const innertube = await getYT();
-  const format = await innertube.getStreamingData(videoId, {
-    type: 'audio',
-    quality: 'bestefficiency',
+export async function getAudioFormat(videoId: string): Promise<AudioFormat> {
+  const cached = audioFormatCache.get(videoId);
+  // Marge 90 s avant expire pour éviter une URL déjà morte
+  if (cached && cached.expiresAt > Date.now() + 90_000) {
+    return cached;
+  }
+
+  const pending = audioFormatInflight.get(videoId);
+  if (pending) return pending;
+
+  const job = (async (): Promise<AudioFormat> => {
+    const innertube = await getYT();
+    const format = await innertube.getStreamingData(videoId, {
+      type: 'audio',
+      quality: 'bestefficiency',
+    });
+    const url = await format.decipher(innertube.session.player);
+    const expiresAt = parseExpireMs(url) ?? Date.now() + 3 * 60 * 60 * 1000;
+    const entry: AudioFormat = {
+      url,
+      mimeType: format.mime_type,
+      bitrate: format.bitrate,
+      contentLength: format.content_length,
+      expiresAt,
+    };
+    audioFormatCache.set(videoId, entry);
+    if (audioFormatCache.size > 250) {
+      const stale = [...audioFormatCache.entries()]
+        .sort((a, b) => a[1].expiresAt - b[1].expiresAt)
+        .slice(0, 80);
+      for (const [id] of stale) audioFormatCache.delete(id);
+    }
+    return entry;
+  })().finally(() => {
+    audioFormatInflight.delete(videoId);
   });
-  const url = await format.decipher(innertube.session.player);
-  return {
-    url,
-    mimeType: format.mime_type,
-    bitrate: format.bitrate,
-    contentLength: format.content_length,
-  };
+
+  audioFormatInflight.set(videoId, job);
+  return job;
 }

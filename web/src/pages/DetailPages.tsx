@@ -6,7 +6,7 @@ import { ShelfRow } from '../components/MediaCard';
 import { CoverImage } from '../components/CoverImage';
 import { usePlayer } from '../store/player';
 import { useLibrary } from '../store/library';
-import { Play, Download, Library, Heart, Radio, Check, UserPlus, UserMinus } from 'lucide-react';
+import { Play, Download, Library, Heart, Radio, Check, UserPlus, UserMinus, Shuffle } from 'lucide-react';
 import { ArtistLinks } from '../components/ArtistLinks';
 import { BackButton } from '../components/BackButton';
 
@@ -16,16 +16,18 @@ export function ArtistPage() {
   const [radio, setRadio] = useState<Track[]>([]);
   const playQueue = usePlayer((s) => s.playQueue);
   const startRadio = usePlayer((s) => s.startRadio);
-  const { hasArtist, applyLibrary } = useLibrary();
+  const { hasArtist, applyLibrary, liked, albums } = useLibrary();
   const [busy, setBusy] = useState(false);
   const [radioBusy, setRadioBusy] = useState(false);
   const [following, setFollowing] = useState(false);
   const [followBusy, setFollowBusy] = useState(false);
+  const [showBio, setShowBio] = useState(false);
 
   useEffect(() => {
     if (!id) return;
     setData(null);
     setFollowing(false);
+    setShowBio(false);
     api.artist(id).then(setData).catch(console.error);
     api.artistRadio(id).then((r) => setRadio(r.tracks)).catch(() => setRadio([]));
     api
@@ -50,6 +52,14 @@ export function ArtistPage() {
     );
   }
   const inLib = hasArtist(data.artist.id);
+  const artistName = data.artist.name.toLowerCase();
+  const matchesArtist = (t: Track) =>
+    (t.artists || []).some(
+      (a) => a.id === data.artist.id || a.name?.toLowerCase() === artistName,
+    );
+  const libTracks = liked.filter((t) => matchesArtist(t)).slice(0, 12);
+  const libAlbums = albums.filter((t) => matchesArtist(t) || t.id === data.artist.id).slice(0, 12);
+  const bio = data.artist.description?.trim();
 
   return (
     <div className="animate-fade-up">
@@ -62,6 +72,22 @@ export function ArtistPage() {
           <p className="text-xs uppercase tracking-widest text-yt-muted">Artiste</p>
           <h1 className="font-display text-4xl font-semibold tracking-tight sm:text-5xl">{data.artist.name}</h1>
           {data.artist.subscribers && <p className="mt-2 text-sm text-yt-muted">{data.artist.subscribers}</p>}
+          {bio && (
+            <div className="mt-3 max-w-2xl">
+              <p className="text-sm leading-relaxed text-yt-muted">
+                {showBio || bio.length <= 220 ? bio : `${bio.slice(0, 220).trimEnd()}…`}
+              </p>
+              {bio.length > 220 && (
+                <button
+                  type="button"
+                  className="mt-1 text-xs font-medium text-white hover:underline"
+                  onClick={() => setShowBio((v) => !v)}
+                >
+                  {showBio ? 'Réduire' : 'À propos'}
+                </button>
+              )}
+            </div>
+          )}
           <div className="mt-4 flex flex-wrap gap-2">
             {data.songs[0] && (
               <button
@@ -157,15 +183,37 @@ export function ArtistPage() {
         </section>
       )}
 
+      {(libTracks.length > 0 || libAlbums.length > 0) && (
+        <section className="mb-8">
+          <h2 className="mb-3 font-display text-xl font-semibold">Dans ma bibliothèque</h2>
+          {libAlbums.length > 0 && (
+            <ShelfRow
+              title="Albums enregistrés"
+              items={libAlbums.map((a) => ({ ...a, type: 'album' as const }))}
+            />
+          )}
+          {libTracks.map((t, i) => (
+            <TrackRow key={`lib-${t.id}`} track={t} index={i} queue={libTracks} />
+          ))}
+        </section>
+      )}
+
       <ShelfRow title="Albums" items={data.albums.map((a) => ({ ...a, type: 'album' as const }))} />
       <ShelfRow
         title="Singles & EP"
         items={(data.singles || []).map((a) => ({ ...a, type: a.type === 'unknown' ? ('album' as const) : a.type }))}
       />
+      <ShelfRow
+        title="Apparitions"
+        items={(data.featured || []).map((a) => ({
+          ...a,
+          type: a.type === 'unknown' ? ('album' as const) : a.type,
+        }))}
+      />
       <ShelfRow title="Vidéos" items={data.videos || []} />
       <ShelfRow title="Playlists" items={(data.playlists || []).map((p) => ({ ...p, type: 'playlist' as const }))} />
       <ShelfRow
-        title="Artistes similaires"
+        title="Les fans aiment aussi"
         items={(data.similar || []).map((a) => ({ ...a, type: 'artist' as const }))}
       />
 
@@ -228,6 +276,10 @@ export function AlbumPage() {
         tracks={data.tracks}
         inLibrary={hasAlbum(data.album.id)}
         onPlay={() => void playQueue(data.tracks, 0)}
+        onShuffle={() => {
+          const shuffled = [...data.tracks].sort(() => Math.random() - 0.5);
+          void playQueue(shuffled, 0);
+        }}
         onRadio={() => {
           setRadioBusy(true);
           void startRadio({
@@ -289,6 +341,10 @@ export function PlaylistPage() {
       tracks={data.tracks}
       liked={isPlaylistLiked(data.playlist.id)}
       onPlay={() => void playQueue(data.tracks, 0)}
+      onShuffle={() => {
+        const shuffled = [...data.tracks].sort(() => Math.random() - 0.5);
+        void playQueue(shuffled, 0);
+      }}
       onLike={async () => {
         const r = await api.likePlaylist({
           id: data.playlist.id,
@@ -315,6 +371,7 @@ function CollectionHeader({
   cover,
   tracks,
   onPlay,
+  onShuffle,
   onRadio,
   radioBusy,
   onAddLibrary,
@@ -329,6 +386,7 @@ function CollectionHeader({
   cover: { thumbnails?: Track['thumbnails']; title?: string; name?: string };
   tracks: Track[];
   onPlay: () => void;
+  onShuffle?: () => void;
   onRadio?: () => void;
   radioBusy?: boolean;
   onAddLibrary?: () => Promise<void>;
@@ -358,6 +416,15 @@ function CollectionHeader({
             >
               <Play className="h-4 w-4 fill-white" /> Lecture
             </button>
+            {onShuffle && tracks.length > 1 && (
+              <button
+                type="button"
+                onClick={onShuffle}
+                className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-4 py-2.5 text-sm text-yt-muted hover:text-white"
+              >
+                <Shuffle className="h-4 w-4" /> Aléatoire
+              </button>
+            )}
             {onRadio && (
               <button
                 type="button"

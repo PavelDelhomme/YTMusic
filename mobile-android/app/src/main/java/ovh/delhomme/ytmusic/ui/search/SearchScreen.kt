@@ -131,6 +131,7 @@ fun SearchScreen(
     onPlay: (List<TrackDto>, Int) -> Unit,
     onMore: (TrackDto) -> Unit,
     onOpenDetail: (TrackDto) -> Unit,
+    onOpenArtist: ((String?, String) -> Unit)? = null,
     vm: SearchViewModel = viewModel(factory = SearchViewModel.factory(container)),
 ) {
     val state by vm.state.collectAsState()
@@ -223,6 +224,7 @@ fun SearchScreen(
                                     }
                                 },
                                 onMore = { onMore(track) },
+                                onOpenArtist = onOpenArtist,
                             )
                         }
                     }

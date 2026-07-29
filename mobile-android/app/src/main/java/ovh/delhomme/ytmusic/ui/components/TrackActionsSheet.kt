@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -21,6 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Album
@@ -32,7 +34,6 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.material.icons.filled.LibraryAddCheck
 import androidx.compose.material.icons.filled.Mic
@@ -45,6 +46,7 @@ import androidx.compose.material.icons.filled.RemoveFromQueue
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SpatialAudioOff
+import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -70,6 +72,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -77,11 +80,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
+import ovh.delhomme.ytmusic.data.ArtistRef
 import ovh.delhomme.ytmusic.data.CreatePlaylistBody
 import ovh.delhomme.ytmusic.data.PlaylistDto
 import ovh.delhomme.ytmusic.data.RecoFeedbackBody
 import ovh.delhomme.ytmusic.data.TrackDto
 import ovh.delhomme.ytmusic.data.buildRadioQueue
+import ovh.delhomme.ytmusic.data.resolveArtistId
 import ovh.delhomme.ytmusic.player.PlayerController
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -102,24 +107,41 @@ fun TrackActionsSheet(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val maxSheetBody = (LocalConfiguration.current.screenHeightDp * 0.72f).dp
+    var enriched by remember(track.id) { mutableStateOf(track) }
     var pinned by remember { mutableStateOf(false) }
     var showSleep by remember { mutableStateOf(false) }
     var downloaded by remember { mutableStateOf(false) }
     var albumInLibrary by remember { mutableStateOf(false) }
     var liked by remember(track.id) { mutableStateOf(track.id in likedIds) }
     val playerUi by player.state.collectAsState()
-    val queueIndex = playerUi.queue.indexOfFirst { it.id == track.id }
+    val queueIndex = playerUi.queue.indexOfFirst { it.id == enriched.id }
     val inQueue = queueIndex >= 0
     val isCurrent = inQueue && queueIndex == playerUi.queueIndex
     val inLibrary = liked ||
-        (track.isAlbum() && albumInLibrary) ||
-        (track.album?.id != null && albumInLibrary && !track.isPlayable())
+        (enriched.isAlbum() && albumInLibrary) ||
+        (enriched.album?.id != null && albumInLibrary && !enriched.isPlayable())
 
     LaunchedEffect(track.id, likedIds) {
         liked = track.id in likedIds
+        enriched = track
         pinned = container.quickAccess.isPinned(track.id)
         runCatching {
             container.ensureFreshToken()
+            // Enrichit artistes / album (ids) pour « Accéder à… »
+            if (track.isPlayable()) {
+                runCatching { container.api.track(track.id).track }.getOrNull()?.let { meta ->
+                    enriched = track.copy(
+                        artists = when {
+                            !meta.artists.isNullOrEmpty() -> meta.artists
+                            else -> track.artists
+                        },
+                        album = meta.album ?: track.album,
+                        thumbnails = track.thumbnails?.takeIf { it.isNotEmpty() } ?: meta.thumbnails,
+                        duration = track.duration ?: meta.duration,
+                    )
+                }
+            }
             val lib = container.api.library()
             downloaded = track.id in lib.downloaded
             val serverLiked = lib.liked.any { it.id == track.id }
@@ -129,8 +151,41 @@ fun TrackActionsSheet(
                     if (serverLiked) likedIds + track.id else likedIds - track.id,
                 )
             }
-            val albumId = track.album?.id ?: track.id.takeIf { track.isAlbum() }
+            val albumId = enriched.album?.id ?: enriched.id.takeIf { enriched.isAlbum() }
             albumInLibrary = albumId != null && lib.albums.any { it.id == albumId }
+        }
+    }
+
+    fun openArtistPage(artist: ArtistRef) {
+        scope.launch {
+            val id = resolveArtistId(container.api, artist.id, artist.name)
+            if (id.isNullOrBlank()) {
+                Toast.makeText(context, "Artiste introuvable", Toast.LENGTH_SHORT).show()
+            } else {
+                onOpenArtist?.invoke(id)
+                onDismiss()
+            }
+        }
+    }
+
+    fun openAlbumPage() {
+        scope.launch {
+            var albumId = enriched.album?.id
+            if (albumId.isNullOrBlank() && enriched.isPlayable()) {
+                albumId = runCatching { container.api.track(enriched.id).track.album?.id }.getOrNull()
+            }
+            if (albumId.isNullOrBlank() && !enriched.album?.name.isNullOrBlank()) {
+                albumId = runCatching {
+                    container.api.search(enriched.album!!.name!!, "album").albums.firstOrNull()?.id
+                }.getOrNull()
+            }
+            if (albumId.isNullOrBlank() && enriched.isAlbum()) albumId = enriched.id
+            if (albumId.isNullOrBlank()) {
+                Toast.makeText(context, "Album introuvable", Toast.LENGTH_SHORT).show()
+            } else {
+                onOpenAlbum?.invoke(albumId)
+                onDismiss()
+            }
         }
     }
 
@@ -141,18 +196,32 @@ fun TrackActionsSheet(
     ) {
         val onSurface = MaterialTheme.colorScheme.onSurface
         val muted = MaterialTheme.colorScheme.onSurfaceVariant
+        val namedArtists = enriched.artists.orEmpty().mapNotNull { a ->
+            val name = a.name.trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            if (name.equals("Inconnu", true) || name.equals("Unknown", true)) return@mapNotNull null
+            a.copy(name = name)
+        }
+        val canOpenAlbum = !enriched.album?.id.isNullOrBlank() ||
+            !enriched.album?.name.isNullOrBlank() ||
+            enriched.isAlbum()
 
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = maxSheetBody)
+                .verticalScroll(rememberScrollState()),
+        ) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            MediaCover(track, 56.dp)
+            MediaCover(enriched, 56.dp)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    track.title,
+                    enriched.title,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = onSurface,
@@ -161,8 +230,8 @@ fun TrackActionsSheet(
                 )
                 Text(
                     buildString {
-                        append(track.artistLine())
-                        track.duration?.takeIf { it.isNotBlank() }?.let {
+                        append(enriched.artistLine())
+                        enriched.duration?.takeIf { it.isNotBlank() }?.let {
                             append(" · ")
                             append(it)
                         }
@@ -173,19 +242,19 @@ fun TrackActionsSheet(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (track.isPlayable()) {
+            if (enriched.isPlayable()) {
                 IconButton(
                     onClick = {
                         scope.launch {
                             runCatching {
-                                val r = container.api.like(track)
+                                val r = container.api.like(enriched)
                                 liked = r.liked
                                 onLikedChanged(
-                                    if (r.liked) likedIds + track.id else likedIds - track.id,
+                                    if (r.liked) likedIds + enriched.id else likedIds - enriched.id,
                                 )
                                 container.api.recoFeedback(
                                     RecoFeedbackBody(
-                                        track.id,
+                                        enriched.id,
                                         if (r.liked) "good" else "bad",
                                         "actions_like",
                                     ),
@@ -206,7 +275,7 @@ fun TrackActionsSheet(
             }
         }
 
-        if (track.isPlayable()) {
+        if (enriched.isPlayable()) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -214,7 +283,7 @@ fun TrackActionsSheet(
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
                 QuickAction(Icons.Default.SkipNext, "Lire ensuite") {
-                    player.playNext(track)
+                    player.playNext(enriched)
                     Toast.makeText(context, "Sera lu ensuite", Toast.LENGTH_SHORT).show()
                     onDismiss()
                 }
@@ -226,7 +295,7 @@ fun TrackActionsSheet(
                         type = "text/plain"
                         putExtra(
                             Intent.EXTRA_TEXT,
-                            "${track.title} — ${track.artistLine()}\nhttps://music.youtube.com/watch?v=${track.id}",
+                            "${enriched.title} — ${enriched.artistLine()}\nhttps://music.youtube.com/watch?v=${enriched.id}",
                         )
                     }
                     context.startActivity(Intent.createChooser(send, "Partager"))
@@ -236,11 +305,33 @@ fun TrackActionsSheet(
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
         }
 
-        if (track.isPlayable()) {
+        // Accès artiste / album en haut (toujours visibles + scrollables)
+        namedArtists.forEach { a ->
+            SheetAction(Icons.Default.Person, "Accéder à la page de l'artiste", a.name) {
+                openArtistPage(a)
+            }
+        }
+        if (canOpenAlbum) {
+            SheetAction(
+                Icons.Default.Album,
+                "Accéder à l'album",
+                enriched.album?.name ?: enriched.title.takeIf { enriched.isAlbum() },
+            ) {
+                openAlbumPage()
+            }
+        }
+        if (namedArtists.isNotEmpty() || canOpenAlbum) {
+            HorizontalDivider(
+                Modifier.padding(vertical = 4.dp),
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+            )
+        }
+
+        if (enriched.isPlayable()) {
             SheetAction(Icons.Default.AutoAwesome, "En rapport", "Mix · similaires + découverte") {
                 scope.launch {
                     runCatching {
-                        val mix = buildRadioQueue(container.api, "track", track.id, track)
+                        val mix = buildRadioQueue(container.api, "track", enriched.id, enriched)
                         if (mix.isNotEmpty()) {
                             player.play(mix, 0, title = "En rapport")
                             Toast.makeText(context, "Mix démarré", Toast.LENGTH_SHORT).show()
@@ -253,19 +344,19 @@ fun TrackActionsSheet(
                 scope.launch {
                     runCatching {
                         container.api.recoFeedback(
-                            RecoFeedbackBody(track.id, "bad", "actions_dislike"),
+                            RecoFeedbackBody(enriched.id, "bad", "actions_dislike"),
                         )
                         Toast.makeText(context, "Retour enregistré", Toast.LENGTH_SHORT).show()
                     }
                     onDismiss()
                 }
             }
-            if (track.artists.orEmpty().any { !it.id.isNullOrBlank() }) {
+            if (namedArtists.isNotEmpty()) {
                 SheetAction(Icons.Default.SpatialAudioOff, "Radio proche de l'artiste", "Plus du même univers") {
                     scope.launch {
                         runCatching {
                             val mix = buildRadioQueue(
-                                container.api, "track", track.id, track, stayClose = true,
+                                container.api, "track", enriched.id, enriched, stayClose = true,
                             )
                             if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio")
                         }
@@ -273,22 +364,24 @@ fun TrackActionsSheet(
                     }
                 }
             }
-            track.album?.id?.let { albumId ->
+            enriched.album?.id?.let { albumId ->
                 SheetAction(Icons.Default.Album, "Radio de l'album") {
                     scope.launch {
                         runCatching {
-                            val mix = buildRadioQueue(container.api, "album", albumId, track)
+                            val mix = buildRadioQueue(container.api, "album", albumId, enriched)
                             if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio album")
                         }
                         onDismiss()
                     }
                 }
             }
-            track.artists.orEmpty().firstOrNull { !it.id.isNullOrBlank() }?.id?.let { artistId ->
-                SheetAction(Icons.Default.Mic, "Radio de l'artiste") {
+            namedArtists.firstOrNull()?.let { artist ->
+                SheetAction(Icons.Default.Mic, "Radio de l'artiste", artist.name) {
                     scope.launch {
                         runCatching {
-                            val mix = buildRadioQueue(container.api, "artist", artistId, track)
+                            val artistId = resolveArtistId(container.api, artist.id, artist.name)
+                                ?: return@runCatching
+                            val mix = buildRadioQueue(container.api, "artist", artistId, enriched)
                             if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio artiste")
                         }
                         onDismiss()
@@ -303,7 +396,7 @@ fun TrackActionsSheet(
                 }
             } else {
                 SheetAction(Icons.Default.QueueMusic, "Ajouter à la file d'attente") {
-                    player.addToQueue(track)
+                    player.addToQueue(enriched)
                     Toast.makeText(context, "Ajouté à la file", Toast.LENGTH_SHORT).show()
                     onDismiss()
                 }
@@ -317,7 +410,7 @@ fun TrackActionsSheet(
                     onDismiss()
                 } else {
                     scope.launch {
-                        runCatching { container.api.download(track.id) }
+                        runCatching { container.api.download(enriched.id) }
                             .onSuccess {
                                 downloaded = true
                                 Toast.makeText(context, "Téléchargement lancé", Toast.LENGTH_SHORT).show()
@@ -336,9 +429,9 @@ fun TrackActionsSheet(
             ) {
                 scope.launch {
                     runCatching {
-                        val r = container.api.like(track)
+                        val r = container.api.like(enriched)
                         liked = r.liked
-                        onLikedChanged(if (r.liked) likedIds + track.id else likedIds - track.id)
+                        onLikedChanged(if (r.liked) likedIds + enriched.id else likedIds - enriched.id)
                         Toast.makeText(
                             context,
                             if (r.liked) "Dans la bibliothèque" else "Retiré de la bibliothèque",
@@ -348,11 +441,11 @@ fun TrackActionsSheet(
                     onDismiss()
                 }
             }
-            track.album?.id?.let { albumId ->
+            enriched.album?.id?.let { albumId ->
                 SheetAction(
                     if (albumInLibrary) Icons.Default.CheckCircle else Icons.Default.Album,
                     if (albumInLibrary) "Album dans la bibliothèque" else "Enregistrer l'album",
-                    track.album.name,
+                    enriched.album?.name,
                 ) {
                     scope.launch {
                         runCatching {
@@ -364,9 +457,9 @@ fun TrackActionsSheet(
                                 container.api.saveAlbum(
                                     TrackDto(
                                         id = albumId,
-                                        title = track.album.name ?: track.title,
-                                        artists = track.artists,
-                                        thumbnails = track.thumbnails,
+                                        title = enriched.album?.name ?: enriched.title,
+                                        artists = enriched.artists,
+                                        thumbnails = enriched.thumbnails,
                                         type = "album",
                                     ),
                                 )
@@ -380,7 +473,7 @@ fun TrackActionsSheet(
                     }
                 }
             }
-        } else if (track.isAlbum() || track.isPlaylist() || track.isArtist()) {
+        } else if (enriched.isAlbum() || enriched.isPlaylist() || enriched.isArtist()) {
             SheetAction(
                 if (inLibrary || albumInLibrary) Icons.Default.LibraryAddCheck else Icons.Default.LibraryAdd,
                 if (inLibrary || albumInLibrary) "Dans la bibliothèque" else "Enregistrer dans la bibliothèque",
@@ -388,17 +481,17 @@ fun TrackActionsSheet(
                 scope.launch {
                     runCatching {
                         when {
-                            track.isAlbum() -> {
+                            enriched.isAlbum() -> {
                                 if (albumInLibrary) {
-                                    container.api.removeAlbum(track.id)
+                                    container.api.removeAlbum(enriched.id)
                                     albumInLibrary = false
                                 } else {
-                                    container.api.saveAlbum(track.copy(type = "album"))
+                                    container.api.saveAlbum(enriched.copy(type = "album"))
                                     albumInLibrary = true
                                 }
                             }
-                            track.isArtist() -> container.api.saveArtist(track.copy(type = "artist"))
-                            else -> container.api.like(track)
+                            enriched.isArtist() -> container.api.saveArtist(enriched.copy(type = "artist"))
+                            else -> container.api.like(enriched)
                         }
                         Toast.makeText(context, "Bibliothèque mise à jour", Toast.LENGTH_SHORT).show()
                     }.onFailure {
@@ -413,7 +506,7 @@ fun TrackActionsSheet(
             SheetAction(Icons.Default.PlaylistRemove, "Supprimer de la playlist") {
                 scope.launch {
                     runCatching {
-                        container.api.removeFromPlaylist(playlistId, track.id)
+                        container.api.removeFromPlaylist(playlistId, enriched.id)
                         Toast.makeText(context, "Retiré de la playlist", Toast.LENGTH_SHORT).show()
                         onRemovedFromPlaylist?.invoke()
                     }.onFailure {
@@ -424,37 +517,12 @@ fun TrackActionsSheet(
             }
         }
 
-        track.album?.id?.let { albumId ->
-            SheetAction(Icons.Default.Album, "Accéder à l'album", track.album.name) {
-                onOpenAlbum?.invoke(albumId)
-                onDismiss()
-            }
-        }
-
-        val artists = track.artists.orEmpty().filter { !it.id.isNullOrBlank() }
-        when {
-            artists.size == 1 -> {
-                SheetAction(Icons.Default.Person, "Accéder à la page de l'artiste", artists[0].name) {
-                    onOpenArtist?.invoke(artists[0].id!!)
-                    onDismiss()
-                }
-            }
-            artists.size > 1 -> {
-                artists.forEach { a ->
-                    SheetAction(Icons.Default.Person, "Accéder à la page de l'artiste", a.name) {
-                        onOpenArtist?.invoke(a.id!!)
-                        onDismiss()
-                    }
-                }
-            }
-        }
-
         SheetAction(
             if (pinned) Icons.Default.PushPin else Icons.Outlined.PushPin,
             if (pinned) "Retirer de l'accès rapide" else "Épingler à l'accès rapide",
         ) {
             scope.launch {
-                pinned = container.quickAccess.toggle(track, container.api)
+                pinned = container.quickAccess.toggle(enriched, container.api)
                 Toast.makeText(
                     context,
                     if (pinned) "Épinglé" else "Retiré de l'accès rapide",
@@ -473,6 +541,7 @@ fun TrackActionsSheet(
         }
 
         Spacer(Modifier.height(24.dp))
+        } // end scroll Column
     }
 
     if (showSleep) {

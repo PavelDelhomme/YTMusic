@@ -10,6 +10,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -28,6 +29,7 @@ import ovh.delhomme.ytmusic.MainActivity
 import ovh.delhomme.ytmusic.R
 import ovh.delhomme.ytmusic.YtMusicApp
 import ovh.delhomme.ytmusic.data.TrackDto
+import ovh.delhomme.ytmusic.BuildConfig
 
 /**
  * Lecture arrière-plan + notification média persistante (style YTM) :
@@ -54,11 +56,24 @@ class PlaybackService : MediaSessionService() {
             ) {
                 refreshMediaButtons()
             }
+            if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
+                warmUpcoming(player.currentMediaItemIndex)
+            }
         }
     }
 
     override fun onCreate() {
         super.onCreate()
+        // Buffer court pour audio : démarrage ~0,6–1 s au lieu du défaut ~2,5 s
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs */ 6_000,
+                /* maxBufferMs */ 36_000,
+                /* bufferForPlaybackMs */ 600,
+                /* bufferForPlaybackAfterRebufferMs */ 1_500,
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
         val exo = ExoPlayer.Builder(this)
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -69,6 +84,7 @@ class PlaybackService : MediaSessionService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
+            .setLoadControl(loadControl)
             .build()
         exo.addListener(playerListener)
         player = exo
@@ -222,6 +238,18 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    private fun warmUpcoming(fromIndex: Int) {
+        val queue = Holder.queue
+        if (queue.isEmpty()) return
+        val base = BuildConfig.API_BASE_URL.trimEnd('/')
+        val ids = listOfNotNull(
+            queue.getOrNull(fromIndex)?.id,
+            queue.getOrNull(fromIndex + 1)?.id,
+            queue.getOrNull(fromIndex + 2)?.id,
+        )
+        StreamPrefetcher.warmMany(ids.map { "$base/api/stream/$it/url" })
+    }
+
     object Holder {
         @Volatile var player: ExoPlayer? = null
         @Volatile var service: PlaybackService? = null
@@ -249,6 +277,14 @@ fun ExoPlayer.playTracks(baseStreamUrl: (String) -> String, tracks: List<TrackDt
     val idx = startIndex.coerceIn(0, playable.lastIndex)
     PlaybackService.Holder.queue = playable
     PlaybackService.Holder.index = idx
+    val base = BuildConfig.API_BASE_URL.trimEnd('/')
+    StreamPrefetcher.warmMany(
+        listOfNotNull(
+            playable.getOrNull(idx)?.id,
+            playable.getOrNull(idx + 1)?.id,
+            playable.getOrNull(idx + 2)?.id,
+        ).map { "$base/api/stream/$it/url" },
+    )
     val items = playable.map { t ->
         MediaItem.Builder()
             .setMediaId(t.id)

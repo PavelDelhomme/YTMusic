@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -293,13 +294,26 @@ fun CollectionDetailScreen(
                                     }
                                 }
                                 if (tracks.isNotEmpty()) {
-                                    Button(
-                                        onClick = { onPlay(tracks, 0) },
-                                        modifier = Modifier.fillMaxWidth(),
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     ) {
-                                        Icon(Icons.Default.PlayArrow, null, Modifier.size(20.dp))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text("Lecture")
+                                        Button(
+                                            onClick = { onPlay(tracks, 0) },
+                                            modifier = Modifier.weight(1f),
+                                        ) {
+                                            Icon(Icons.Default.PlayArrow, null, Modifier.size(20.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("Lecture")
+                                        }
+                                        OutlinedButton(
+                                            onClick = { onPlay(tracks.shuffled(), 0) },
+                                            modifier = Modifier.weight(1f),
+                                        ) {
+                                            Icon(Icons.Default.Shuffle, null, Modifier.size(18.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("Aléatoire")
+                                        }
                                     }
                                     Spacer(Modifier.height(8.dp))
                                     OutlinedButton(

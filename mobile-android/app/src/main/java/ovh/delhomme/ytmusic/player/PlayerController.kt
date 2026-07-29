@@ -39,6 +39,9 @@ data class PlayerUiState(
 class PlayerController(
     private val context: Context,
     private val streamUrl: (String) -> String,
+    private val warmUrl: (String) -> String = { id ->
+        streamUrl(id).substringBefore('?').replace("/api/stream/$id", "/api/stream/$id/url")
+    },
 ) {
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
@@ -102,6 +105,7 @@ class PlayerController(
         if (title != null) queueTitle = title
         ensureService()
         connect()
+        warmAround(tracks, startIndex)
         val c = controller
         if (c != null) {
             playNow(c, tracks, startIndex)
@@ -324,6 +328,7 @@ class PlayerController(
         queue.add(insertAt, track)
         PlaybackService.Holder.queue = queue
         c.addMediaItem(insertAt, mediaItem(track))
+        StreamPrefetcher.warm(warmUrl(track.id))
         syncFrom(c)
     }
 
@@ -337,6 +342,7 @@ class PlayerController(
         queue.add(track)
         PlaybackService.Holder.queue = queue
         c.addMediaItem(mediaItem(track))
+        StreamPrefetcher.warm(warmUrl(track.id))
         syncFrom(c)
     }
 
@@ -365,6 +371,7 @@ class PlayerController(
         val idx = startIndex.coerceIn(0, playable.lastIndex)
         PlaybackService.Holder.queue = playable
         PlaybackService.Holder.index = idx
+        warmAround(playable, idx)
         player.setMediaItems(
             playable.map { mediaItem(it) },
             idx,
@@ -374,6 +381,19 @@ class PlayerController(
         player.prepare()
         if (autoplay) player.play() else player.pause()
         syncFrom(player)
+    }
+
+    private fun warmAround(tracks: List<TrackDto>, startIndex: Int) {
+        val playable = tracks.filter { it.isPlayable() }
+        if (playable.isEmpty()) return
+        val idx = startIndex.coerceIn(0, playable.lastIndex)
+        StreamPrefetcher.warmMany(
+            listOfNotNull(
+                playable.getOrNull(idx)?.id,
+                playable.getOrNull(idx + 1)?.id,
+                playable.getOrNull(idx + 2)?.id,
+            ).map(warmUrl),
+        )
     }
 
     private fun applyRepeatShuffle(player: Player) {
