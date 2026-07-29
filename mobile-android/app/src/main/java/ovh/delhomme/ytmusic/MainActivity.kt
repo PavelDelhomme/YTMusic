@@ -57,6 +57,7 @@ import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.ListenBody
 import ovh.delhomme.ytmusic.data.TrackDto
 import ovh.delhomme.ytmusic.data.buildRadioQueue
+import ovh.delhomme.ytmusic.player.PlaybackService
 import ovh.delhomme.ytmusic.player.PlayerController
 import ovh.delhomme.ytmusic.ui.auth.LoginScreen
 import ovh.delhomme.ytmusic.ui.components.AddToPlaylistSheet
@@ -211,6 +212,15 @@ private fun MainTabs(
     var pendingRemoteLabel by remember { mutableStateOf<String?>(null) }
     /** Empêche d’écraser l’état web juste après la restauration multi-appareils. */
     var suppressSessionPublishUntil by remember { mutableStateOf(0L) }
+
+    // Sync J’aime ↔ notification média (cœur dans le panneau système)
+    LaunchedEffect(likedIds) {
+        PlaybackService.Holder.syncLikedIds(likedIds)
+    }
+    DisposableEffect(Unit) {
+        PlaybackService.Holder.onLikedIdsChanged = { ids -> likedIds = ids }
+        onDispose { PlaybackService.Holder.onLikedIdsChanged = null }
+    }
 
     LaunchedEffect(Unit) {
         likedIds = runCatching {
