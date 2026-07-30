@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { usePlayer } from '../store/player';
 import { TrackRow } from './TrackRow';
-import { X, Radio } from 'lucide-react';
+import { SaveQueueSheet } from './SaveQueueSheet';
+import { Radio, Save, X } from 'lucide-react';
 
 export function QueuePanel() {
   const showQueue = usePlayer((s) => s.showQueue);
@@ -14,26 +16,41 @@ export function QueuePanel() {
   const playAt = usePlayer((s) => s.playAt);
   const appendRelated = usePlayer((s) => s.appendRelated);
   const play = usePlayer((s) => s.play);
+  const [saveOpen, setSaveOpen] = useState(false);
 
   if (!showQueue && !showLyrics) return null;
 
   return (
-    <aside className="fixed bottom-[88px] right-0 top-0 z-30 flex w-full max-w-md flex-col border-l border-yt-border bg-yt-surface shadow-2xl md:static md:bottom-auto md:z-10 md:max-w-sm">
-      <div className="flex items-center justify-between border-b border-yt-border px-4 py-3">
-        <h3 className="font-display text-base font-semibold">
+    <aside className="fixed bottom-[88px] right-0 top-0 z-30 flex w-full max-w-xl flex-col border-l border-yt-border bg-yt-surface shadow-2xl md:static md:bottom-auto md:z-10 md:max-w-lg lg:max-w-xl">
+      <div className="flex items-center justify-between gap-2 border-b border-yt-border px-4 py-3">
+        <h3 className="min-w-0 truncate font-display text-base font-semibold">
           {showLyrics ? 'Paroles' : "File d'attente"}
         </h3>
-        <button
-          type="button"
-          onClick={() => (showLyrics ? void toggleLyrics() : toggleQueue())}
-          className="rounded-full p-1.5 text-yt-muted hover:bg-yt-hover hover:text-white"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          {!showLyrics && (
+            <button
+              type="button"
+              disabled={queue.length === 0}
+              onClick={() => setSaveOpen(true)}
+              className="inline-flex items-center gap-1 rounded-full bg-white/8 px-2.5 py-1.5 text-xs text-white hover:bg-white/14 disabled:opacity-40"
+              title="Enregistrer la file"
+            >
+              <Save className="h-3.5 w-3.5" />
+              Enregistrer
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => (showLyrics ? void toggleLyrics() : toggleQueue())}
+            className="rounded-full p-1.5 text-yt-muted hover:bg-yt-hover hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {showLyrics ? (
-          <div className="whitespace-pre-wrap px-3 py-2 text-sm leading-relaxed text-yt-muted">
+          <div className="whitespace-pre-wrap px-3 py-2 text-base leading-8 text-[#c6c6c6]">
             {lyrics || 'Paroles indisponibles pour ce titre.'}
           </div>
         ) : (
@@ -46,10 +63,11 @@ export function QueuePanel() {
               >
                 <TrackRow
                   track={track}
-                  index={i}
                   queue={queue}
                   queueIndex={i}
+                  hideIndex
                   draggable
+                  alwaysActions
                   onPlay={() => void playAt(i)}
                 />
               </div>
@@ -74,6 +92,7 @@ export function QueuePanel() {
                     <TrackRow
                       track={track}
                       queue={related}
+                      hideIndex
                       onPlay={() => void play(track, [...queue, track], { preserveQueue: true })}
                     />
                   </div>
@@ -83,6 +102,7 @@ export function QueuePanel() {
           </>
         )}
       </div>
+      <SaveQueueSheet open={saveOpen} tracks={queue} onClose={() => setSaveOpen(false)} />
     </aside>
   );
 }

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ListMusic, Mic2, Sparkles } from 'lucide-react';
+import { ListMusic, Mic2, Save, Sparkles } from 'lucide-react';
 import { api, thumb, type Track } from '../api';
 import { usePlayer } from '../store/player';
 import { CoverImage } from './CoverImage';
 import { TrackRow } from './TrackRow';
+import { SaveQueueSheet } from './SaveQueueSheet';
 import { useNavigate } from 'react-router-dom';
 
 export type NowPlayingTab = 'queue' | 'lyrics' | 'related';
@@ -75,14 +76,14 @@ function SyncedLyrics({
 
   if (!lines.length) {
     return (
-      <div className="px-3 py-5 text-[15px] leading-8 text-[#c6c6c6]">
+      <div className="px-2 py-6 text-base leading-8 text-[#c6c6c6] sm:px-4 sm:text-[17px] sm:leading-9">
         {text || 'Paroles indisponibles pour ce titre.'}
       </div>
     );
   }
 
   return (
-    <div className="space-y-1 px-3 py-5">
+    <div className="space-y-1.5 px-2 py-6 sm:px-4">
       {lines.map((line, i) => {
         const active = i === activeIdx;
         const past = i < activeIdx;
@@ -90,9 +91,9 @@ function SyncedLyrics({
           <p
             key={`${i}-${line.t}`}
             ref={active ? activeRef : undefined}
-            className={`text-[15px] leading-8 transition-all duration-300 ${
+            className={`text-base leading-8 transition-all duration-300 sm:text-[17px] sm:leading-9 ${
               active
-                ? 'scale-[1.02] font-semibold text-white'
+                ? 'scale-[1.01] font-semibold text-white'
                 : past
                   ? 'text-white/35'
                   : 'text-[#c6c6c6]'
@@ -122,6 +123,7 @@ export function NowPlaying({
   const [lyricsTimed, setLyricsTimed] = useState<{ startMs: number; text: string }[] | null>(null);
   const [lyricsLoading, setLyricsLoading] = useState(false);
   const [queueVisible, setQueueVisible] = useState(QUEUE_PAGE);
+  const [saveOpen, setSaveOpen] = useState(false);
   const navigate = useNavigate();
   const queueScrollRef = useRef<HTMLDivElement>(null);
 
@@ -134,11 +136,15 @@ export function NowPlaying({
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.preventDefault();
+      if (saveOpen) {
+        setSaveOpen(false);
+        return;
+      }
       onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, onClose, saveOpen]);
 
   useEffect(() => {
     if (!open || !current?.id) return;
@@ -185,18 +191,18 @@ export function NowPlaying({
 
   return (
     <div className="fixed inset-0 z-[45] flex flex-col bg-[#030303] text-white animate-fade-up">
-      <div className="mx-auto grid min-h-0 w-full max-w-[1600px] flex-1 grid-cols-1 gap-4 overflow-hidden px-3 pb-[100px] pt-3 md:grid-cols-[1fr_minmax(300px,400px)] md:gap-10 md:px-8 lg:px-14">
+      <div className="mx-auto grid min-h-0 w-full max-w-[1800px] flex-1 grid-cols-1 gap-3 overflow-hidden px-2 pb-[100px] pt-3 sm:px-4 md:grid-cols-[minmax(260px,0.85fr)_minmax(420px,1.25fr)] md:gap-8 md:px-6 lg:grid-cols-[minmax(280px,0.75fr)_minmax(520px,1.35fr)] lg:gap-10 lg:px-10 xl:px-14">
         <div className="flex min-h-0 flex-col items-center justify-center overflow-hidden">
-          <div className="mb-5 flex rounded-full bg-[#1d1d1d] p-1 text-xs font-medium">
+          <div className="mb-4 flex rounded-full bg-[#1d1d1d] p-1 text-xs font-medium">
             <span className="rounded-full bg-white/15 px-5 py-1.5 text-white">Titre</span>
             <span className="rounded-full px-5 py-1.5 text-yt-muted">Vidéo</span>
           </div>
-          <div className="relative aspect-square w-full max-w-[min(92vw,560px)] overflow-hidden rounded-md shadow-[0_20px_60px_rgba(0,0,0,0.65)]">
+          <div className="relative aspect-square w-full max-w-[min(88vw,520px)] overflow-hidden rounded-md shadow-[0_20px_60px_rgba(0,0,0,0.65)] lg:max-w-[min(42vw,560px)]">
             <CoverImage item={current} size={800} rounded="md" />
           </div>
         </div>
 
-        <aside className="flex min-h-0 flex-col overflow-hidden md:pt-2">
+        <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden md:pt-1">
           <div className="mb-2 flex border-b border-white/10 text-[11px] font-bold tracking-wider sm:text-xs">
             <TabBtn active={tab === 'queue'} onClick={() => setTab('queue')} icon={<ListMusic className="h-3.5 w-3.5" />}>
               À suivre
@@ -217,20 +223,30 @@ export function NowPlaying({
             {tab === 'queue' && (
               <div>
                 <div className="mb-3 flex items-center justify-between gap-2 px-1 pt-1">
-                  <p className="text-xs text-yt-muted">
+                  <p className="min-w-0 truncate text-xs text-yt-muted">
                     Lecture à partir de :{' '}
                     <span className="font-medium text-white">File d&apos;attente</span>
+                    <span className="ml-2 tabular-nums text-yt-muted">
+                      {queue.length > 0 ? `${queueIndex + 1} / ${queue.length}` : '0 / 0'}
+                    </span>
                   </p>
-                  <span className="text-[11px] tabular-nums text-yt-muted">
-                    {queue.length > 0 ? `${queueIndex + 1} / ${queue.length}` : '0 / 0'}
-                  </span>
+                  <button
+                    type="button"
+                    disabled={queue.length === 0}
+                    onClick={() => setSaveOpen(true)}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/16 disabled:opacity-40"
+                    title="Enregistrer la file dans une playlist"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    Enregistrer
+                  </button>
                 </div>
                 <div className="mb-1 rounded-md bg-[#ff0033]/18 ring-1 ring-[#ff0033]/55">
                   <TrackRow
                     track={current}
                     queue={queue}
-                    index={queueIndex}
                     queueIndex={queueIndex}
+                    hideIndex
                     draggable
                     alwaysActions
                   />
@@ -241,9 +257,9 @@ export function NowPlaying({
                     <TrackRow
                       key={`up-${t.id}-${abs}`}
                       track={t}
-                      index={abs}
                       queue={queue}
                       queueIndex={abs}
+                      hideIndex
                       draggable
                       alwaysActions
                       onPlay={() => void playAt(abs)}
@@ -280,7 +296,7 @@ export function NowPlaying({
                       </button>
                     </div>
                     {relatedForQueue.map((t) => (
-                      <TrackRow key={`qrel-${t.id}`} track={t} queue={related} alwaysActions />
+                      <TrackRow key={`qrel-${t.id}`} track={t} queue={related} alwaysActions hideIndex />
                     ))}
                   </section>
                 )}
@@ -318,7 +334,7 @@ export function NowPlaying({
                     <p className="px-2 text-sm text-yt-muted">Chargement des suggestions…</p>
                   )}
                   {related.slice(0, 20).map((t) => (
-                    <TrackRow key={`rel-${t.id}`} track={t} queue={related} />
+                    <TrackRow key={`rel-${t.id}`} track={t} queue={related} hideIndex />
                   ))}
                 </section>
 
@@ -358,6 +374,12 @@ export function NowPlaying({
           </div>
         </aside>
       </div>
+
+      <SaveQueueSheet
+        open={saveOpen}
+        tracks={queue}
+        onClose={() => setSaveOpen(false)}
+      />
     </div>
   );
 }

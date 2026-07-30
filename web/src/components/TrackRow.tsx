@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import type { Track } from '../api';
 import { usePlayer } from '../store/player';
-import { GripVertical, Heart, MoreHorizontal, Play, Radio } from 'lucide-react';
+import { Heart, MoreHorizontal, Play, Radio } from 'lucide-react';
 import { useLibrary } from '../store/library';
 import { useEffect, useState } from 'react';
 import { ArtistLinks } from './ArtistLinks';
@@ -21,6 +21,8 @@ type Props = {
   draggable?: boolean;
   /** Affiche toujours like / radio / ⋮ (file d'attente) */
   alwaysActions?: boolean;
+  /** Masque le numéro de piste (plus de place pour le titre) */
+  hideIndex?: boolean;
   /** Contexte playlist locale (suppression) */
   playlistId?: string;
   onRemoveFromPlaylist?: () => void;
@@ -39,6 +41,7 @@ export function TrackRow({
   queueIndex,
   draggable,
   alwaysActions,
+  hideIndex,
   playlistId,
   onRemoveFromPlaylist,
 }: Props) {
@@ -87,7 +90,7 @@ export function TrackRow({
 
   return (
     <div
-      className={`group flex items-center gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-yt-hover sm:gap-3 sm:px-3 ${
+      className={`group flex items-center gap-2.5 rounded-lg px-1.5 py-2 transition-colors hover:bg-yt-hover sm:gap-3 sm:px-2 ${
         active ? 'bg-yt-hover/80' : ''
       } ${dragging ? 'opacity-50' : ''} ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
       draggable={Boolean(draggable && typeof queueIndex === 'number')}
@@ -112,14 +115,8 @@ export function TrackRow({
         moveInQueue(from, queueIndex);
       }}
     >
-      {draggable ? (
-        <span className="hidden shrink-0 text-yt-muted sm:inline" title="Glisser pour réordonner">
-          <GripVertical className="h-4 w-4" />
-        </span>
-      ) : null}
-
-      {typeof index === 'number' ? (
-        <span className="w-6 shrink-0 text-center text-xs tabular-nums text-yt-muted sm:w-7 sm:text-sm">
+      {typeof index === 'number' && !hideIndex ? (
+        <span className="w-5 shrink-0 text-center text-xs tabular-nums text-yt-muted sm:w-6 sm:text-sm">
           {index + 1}
         </span>
       ) : null}
@@ -127,7 +124,7 @@ export function TrackRow({
       <button
         type="button"
         onClick={open}
-        className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-yt-elevated"
+        className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-yt-elevated sm:h-12 sm:w-12"
       >
         <CoverImage item={enriched} size={96} rounded="md" />
         <span className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition group-hover:opacity-100">
@@ -137,7 +134,12 @@ export function TrackRow({
 
       <div className="min-w-0 flex-1 text-left">
         <button type="button" onClick={open} className="w-full text-left">
-          <div className={`truncate text-sm font-medium ${active ? 'text-yt-red' : 'text-white'}`}>
+          <div
+            className={`truncate text-[13px] font-medium leading-snug sm:text-sm ${
+              active ? 'text-yt-red' : 'text-white'
+            }`}
+            title={track.title}
+          >
             {track.title}
             {active && isPlaying ? (
               <span className="ml-1 text-xs font-normal text-yt-muted">· en lecture</span>
@@ -165,10 +167,10 @@ export function TrackRow({
         </div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
+      <div className="flex shrink-0 items-center gap-0 sm:gap-0.5">
         <span
-          className={`mr-1 min-w-[2.5rem] text-right text-xs tabular-nums text-yt-muted ${
-            showActions ? 'inline' : 'hidden sm:inline'
+          className={`mr-0.5 min-w-[2.25rem] text-right text-[11px] tabular-nums text-yt-muted sm:mr-1 sm:min-w-[2.5rem] sm:text-xs ${
+            showActions ? 'hidden lg:inline' : 'hidden sm:inline'
           }`}
         >
           {formatTrackDuration(track)}
@@ -180,11 +182,11 @@ export function TrackRow({
             e.stopPropagation();
             void toggleLike(track);
           }}
-          className={`flex h-10 w-10 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white ${
+          className={`flex h-9 w-9 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white sm:h-10 sm:w-10 ${
             liked || showActions ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           }`}
         >
-          <Heart className={`h-5 w-5 ${liked ? 'fill-yt-red text-yt-red' : ''}`} />
+          <Heart className={`h-4 w-4 sm:h-5 sm:w-5 ${liked ? 'fill-yt-red text-yt-red' : ''}`} />
         </button>
         {isPlayable(track) && (
           <button
@@ -194,22 +196,22 @@ export function TrackRow({
               e.stopPropagation();
               void startRadio({ kind: 'track', id: track.id, seed: track });
             }}
-            className={`flex h-10 w-10 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white ${
-              showActions ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+            className={`flex h-9 w-9 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white sm:h-10 sm:w-10 ${
+              showActions ? 'hidden opacity-100 sm:flex' : 'opacity-0 group-hover:opacity-100'
             }`}
           >
-            <Radio className="h-5 w-5" />
+            <Radio className="h-4 w-4 sm:h-5 sm:w-5" />
           </button>
         )}
         <button
           type="button"
           aria-label="Plus d'options"
           onClick={openMenu}
-          className={`flex h-10 w-10 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white ${
+          className={`flex h-9 w-9 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white sm:h-10 sm:w-10 ${
             showActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'
           }`}
         >
-          <MoreHorizontal className="h-5 w-5" />
+          <MoreHorizontal className="h-4 w-4 sm:h-5 sm:w-5" />
         </button>
       </div>
     </div>

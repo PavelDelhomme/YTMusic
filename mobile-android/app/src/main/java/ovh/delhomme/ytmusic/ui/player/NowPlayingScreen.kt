@@ -33,7 +33,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -50,7 +49,6 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -98,6 +96,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.CreatePlaylistBody
+import ovh.delhomme.ytmusic.data.PlaylistDto
 import ovh.delhomme.ytmusic.data.TimedLyricLine
 import ovh.delhomme.ytmusic.data.TrackDto
 import ovh.delhomme.ytmusic.data.buildRadioQueue
@@ -697,23 +696,15 @@ fun NowPlayingScreen(
         )
     }
     if (showSaveQueue) {
-        SaveQueueDialog(
+        SaveQueueSheet(
+            container = container,
+            queue = ui.queue,
             defaultName = ui.queueTitle.takeIf { it != "File d'attente" } ?: "Ma file d'attente",
             onDismiss = { showSaveQueue = false },
-            onConfirm = { name ->
+            onSaved = { name ->
                 showSaveQueue = false
-                scope.launch {
-                    runCatching {
-                        val pl = container.api.createPlaylist(CreatePlaylistBody(name))
-                        ui.queue.forEach { t ->
-                            if (t.isPlayable()) runCatching { container.api.addToPlaylist(pl.id, t) }
-                        }
-                        player.setQueueTitle(name)
-                        Toast.makeText(context, "Playlist « $name » créée", Toast.LENGTH_SHORT).show()
-                    }.onFailure {
-                        Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
-                    }
-                }
+                player.setQueueTitle(name)
+                Toast.makeText(context, "File enregistrée « $name »", Toast.LENGTH_SHORT).show()
             },
         )
     }
@@ -1045,8 +1036,33 @@ private fun QueueTrackRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         MediaCover(track, 48.dp)
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
+        Spacer(Modifier.width(12.dp))
+        Column(
+            Modifier
+                .weight(1f)
+                .pointerInput(index) {
+                    // Réordonner sans poignée visible : glisser verticalement sur le titre
+                    detectDragGestures(
+                        onDragEnd = { dragAccum = 0f },
+                        onDragCancel = { dragAccum = 0f },
+                        onDrag = { change, amount ->
+                            change.consume()
+                            dragAccum += amount.y
+                            val threshold = 48.dp.toPx()
+                            when {
+                                dragAccum > threshold -> {
+                                    onMove(index, index + 1)
+                                    dragAccum = 0f
+                                }
+                                dragAccum < -threshold -> {
+                                    if (index > 0) onMove(index, index - 1)
+                                    dragAccum = 0f
+                                }
+                            }
+                        },
+                    )
+                },
+        ) {
             Text(
                 track.title,
                 maxLines = 1,
@@ -1068,34 +1084,6 @@ private fun QueueTrackRow(
                 }
             }
         }
-        Icon(
-            Icons.Default.DragHandle,
-            contentDescription = "Déplacer",
-            tint = PlayerMuted,
-            modifier = Modifier
-                .size(28.dp)
-                .pointerInput(index) {
-                    detectDragGestures(
-                        onDragEnd = { dragAccum = 0f },
-                        onDragCancel = { dragAccum = 0f },
-                        onDrag = { change, amount ->
-                            change.consume()
-                            dragAccum += amount.y
-                            val threshold = 48.dp.toPx()
-                            when {
-                                dragAccum > threshold -> {
-                                    onMove(index, index + 1)
-                                    dragAccum = 0f
-                                }
-                                dragAccum < -threshold -> {
-                                    if (index > 0) onMove(index, index - 1)
-                                    dragAccum = 0f
-                                }
-                            }
-                        },
-                    )
-                },
-        )
     }
 }
 
@@ -1179,34 +1167,142 @@ private fun LyricsSheet(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SaveQueueDialog(
+private fun SaveQueueSheet(
+    container: AppContainer,
+    queue: List<TrackDto>,
     defaultName: String,
     onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
+    onSaved: (String) -> Unit,
 ) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var playlists by remember { mutableStateOf<List<PlaylistDto>>(emptyList()) }
     var name by remember { mutableStateOf(defaultName) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Enregistrer la file") },
-        text = {
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
-                singleLine = true,
-                label = { Text("Nom de la playlist") },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(name.trim().ifBlank { defaultName }) }) {
-                Text("Enregistrer")
+    var creating by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    val playable = remember(queue) { queue.filter { it.isPlayable() } }
+
+    LaunchedEffect(Unit) {
+        playlists = runCatching { container.api.library().playlists }.getOrDefault(emptyList())
+    }
+
+    fun addAllTo(playlistId: String, label: String) {
+        if (busy || playable.isEmpty()) return
+        busy = true
+        scope.launch {
+            runCatching {
+                playable.forEach { t ->
+                    runCatching { container.api.addToPlaylist(playlistId, t) }
+                }
+                onSaved(label)
+            }.onFailure {
+                Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Annuler") }
-        },
-    )
+            busy = false
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 28.dp),
+        ) {
+            Text(
+                "Enregistrer la file",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "${playable.size} titres → playlist",
+                style = MaterialTheme.typography.bodySmall,
+                color = PlayerMuted,
+                modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
+            )
+
+            TextButton(
+                onClick = { creating = !creating },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.PlaylistAdd, null, modifier = Modifier.padding(end = 8.dp))
+                Text(if (creating) "Masquer" else "Nouvelle playlist")
+            }
+
+            if (creating) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    singleLine = true,
+                    label = { Text("Nom de la playlist") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                )
+                TextButton(
+                    enabled = !busy && playable.isNotEmpty(),
+                    onClick = {
+                        val n = name.trim().ifBlank { defaultName }
+                        busy = true
+                        scope.launch {
+                            runCatching {
+                                val pl = container.api.createPlaylist(CreatePlaylistBody(n))
+                                playable.forEach { t ->
+                                    runCatching { container.api.addToPlaylist(pl.id, t) }
+                                }
+                                onSaved(n)
+                            }.onFailure {
+                                Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
+                            }
+                            busy = false
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                ) {
+                    Text(if (busy) "Enregistrement…" else "Créer et enregistrer")
+                }
+            }
+
+            Text(
+                "Playlists existantes",
+                style = MaterialTheme.typography.labelLarge,
+                color = PlayerMuted,
+                modifier = Modifier.padding(top = 20.dp, bottom = 8.dp),
+            )
+            if (playlists.isEmpty()) {
+                Text("Aucune playlist pour l’instant.", color = PlayerMuted)
+            } else {
+                playlists.forEach { pl ->
+                    TextButton(
+                        enabled = !busy && playable.isNotEmpty(),
+                        onClick = { addAllTo(pl.id, pl.displayName()) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Default.QueueMusic, null, modifier = Modifier.padding(end = 8.dp))
+                        Text(
+                            pl.displayName(),
+                            modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.Start,
+                        )
+                        Text(
+                            "${pl.tracks?.size ?: 0}",
+                            color = PlayerMuted,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 private fun formatMs(ms: Long): String {
