@@ -688,12 +688,21 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     }
 
     const filtered = (queue || []).filter(isPlayable);
-    // File = titres jouables seulement ; un seul titre → radio auto ensuite
-    const nextQueue = filtered.length ? filtered : [track];
-    const idx = Math.max(0, nextQueue.findIndex((t) => t.id === track.id));
+    // Ne jamais lancer un ID non-vidéo (album/playlist/mood) comme stream
+    if (!isPlayable(track) && !filtered.length) {
+      set({ isLoading: false, isPlaying: false });
+      return;
+    }
+    const nextQueue = filtered.length ? filtered : isPlayable(track) ? [track] : [];
+    if (!nextQueue.length) {
+      set({ isLoading: false, isPlaying: false });
+      return;
+    }
+    const playTrack = isPlayable(track) ? track : nextQueue[0];
+    const idx = Math.max(0, nextQueue.findIndex((t) => t.id === playTrack.id));
     const keepBoundary = Boolean(opts?.keepUserBoundary);
     set({
-      current: track,
+      current: playTrack,
       queue: nextQueue,
       queueIndex: idx >= 0 ? idx : 0,
       userQueueEnd: keepBoundary
@@ -709,15 +718,15 @@ export const usePlayer = create<PlayerState>((set, get) => ({
 
     // Un seul pipeline suggestions (évite related×2 + upNext en parallèle parasite)
     if (!opts?.noAutoRadio && get().autoplay !== false) {
-      void ensureAutoRadio(track.id);
+      void ensureAutoRadio(playTrack.id);
     } else {
-      void get().loadRelated(track.id);
+      void get().loadRelated(playTrack.id);
     }
 
     try {
-      await playLocal(track, get(), gen);
+      await playLocal(playTrack, get(), gen);
       if (gen !== playGeneration) return;
-      recordStarted(get().current || track);
+      recordStarted(get().current || playTrack);
       set({ isPlaying: true, isLoading: false });
       publish();
       // Prefetch léger une fois le titre lancé (pas pendant le démarrage)

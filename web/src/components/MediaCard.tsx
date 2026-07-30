@@ -21,22 +21,27 @@ function localPlaylistId(item: Track) {
 
 export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
   const play = usePlayer((s) => s.play);
+  const playQueue = usePlayer((s) => s.playQueue);
   const navigate = useNavigate();
   const openActions = useItemActions((s) => s.open);
   const { applyLibrary, isPlaylistLiked, hasAlbum, hasArtist } = useLibrary();
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [playBusy, setPlayBusy] = useState(false);
 
   const local = isLocalPlaylist(item);
+  const isMood = item.id.startsWith('mood:') || item.id.includes('moods_and_genres');
   const href = local
     ? `/local-playlist/${localPlaylistId(item)}`
-    : item.type === 'artist'
-      ? `/artist/${item.id}`
-      : item.type === 'album'
-        ? `/album/${item.id}`
-        : item.type === 'playlist'
-          ? `/playlist/${item.id}`
-          : null;
+    : isMood
+      ? `/mood/${encodeURIComponent(item.id.replace(/^mood:/, ''))}?title=${encodeURIComponent(item.title)}`
+      : item.type === 'artist'
+        ? `/artist/${item.id}`
+        : item.type === 'album'
+          ? `/album/${item.id}`
+          : item.type === 'playlist'
+            ? `/playlist/${item.id}`
+            : null;
 
   const inLib =
     saved ||
@@ -52,10 +57,56 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
     void play(item, queue);
   };
 
+  /** Bouton Play : lance vraiment l’album/playlist (pas seulement naviguer). */
   const onPlay = (e: MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (href) {
+    if (playBusy) return;
+
+    if (isMood && href) {
+      navigate(href);
+      return;
+    }
+
+    if (item.type === 'album' && !local) {
+      setPlayBusy(true);
+      void api
+        .album(item.id)
+        .then((r) => {
+          if (r.tracks?.length) void playQueue(r.tracks, 0);
+          else if (href) navigate(href);
+        })
+        .catch(() => {
+          if (href) navigate(href);
+        })
+        .finally(() => setPlayBusy(false));
+      return;
+    }
+
+    if ((item.type === 'playlist' || local) && !isMood) {
+      setPlayBusy(true);
+      if (local) {
+        const pl = useLibrary.getState().playlists.find((p) => p.id === localPlaylistId(item));
+        const tracks = pl?.tracks || [];
+        if (tracks.length) void playQueue(tracks, 0);
+        else if (href) navigate(href);
+        setPlayBusy(false);
+        return;
+      }
+      void api
+        .playlist(item.id)
+        .then((r) => {
+          if (r.tracks?.length) void playQueue(r.tracks, 0);
+          else if (href) navigate(href);
+        })
+        .catch(() => {
+          if (href) navigate(href);
+        })
+        .finally(() => setPlayBusy(false));
+      return;
+    }
+
+    if (href && item.type === 'artist') {
       navigate(href);
       return;
     }
@@ -185,7 +236,8 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
           <button
             type="button"
             onClick={onPlay}
-            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-yt-red text-white shadow-lg"
+            disabled={playBusy}
+            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-yt-red text-white shadow-lg disabled:opacity-60"
           >
             <Play className="h-5 w-5 fill-white" />
           </button>
@@ -193,12 +245,10 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
         {(item.type === 'playlist' || item.type === 'album') && (
           <button
             type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (href) navigate(href);
-            }}
-            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-yt-red text-white shadow-lg"
+            onClick={onPlay}
+            disabled={playBusy}
+            title="Lire"
+            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-yt-red text-white shadow-lg disabled:opacity-60"
           >
             <Play className="h-5 w-5 fill-white" />
           </button>
@@ -226,21 +276,23 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
             </button>
           )}
           <div className="truncate text-xs text-yt-muted">
-            {item.type === 'artist'
-              ? 'Artiste'
-              : item.type === 'playlist'
-                ? item.artists?.length
-                  ? <ArtistLinks track={item} />
-                  : 'Playlist'
-                : item.type === 'album'
+            {item.id.startsWith('mood:') || item.id.includes('moods_and_genres')
+              ? 'Ambiance'
+              : item.type === 'artist'
+                ? 'Artiste'
+                : item.type === 'playlist'
                   ? item.artists?.length
                     ? <ArtistLinks track={item} />
-                    : 'Album'
-                  : item.artists?.length
-                    ? <ArtistLinks track={item} />
-                    : item.type === 'song' || item.type === 'video'
-                      ? 'Titre'
-                      : item.type}
+                    : 'Playlist'
+                  : item.type === 'album'
+                    ? item.artists?.length
+                      ? <ArtistLinks track={item} />
+                      : 'Album'
+                    : item.artists?.length
+                      ? <ArtistLinks track={item} />
+                      : item.type === 'song' || item.type === 'video'
+                        ? 'Titre'
+                        : item.type}
           </div>
         </div>
         <button

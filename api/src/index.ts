@@ -32,6 +32,7 @@ import {
   getAlbum,
   getPlaylist,
   getArtistSongs,
+  getMoodCategory,
 } from './yt.js';
 import {
   getFullLibrary,
@@ -763,6 +764,16 @@ app.get('/api/explore', accountRequired, async (req, res) => {
       needsOnboarding: reco.needsOnboarding,
       radios: RADIO_CATEGORIES.map((c) => ({ id: c.id, title: c.title })),
     });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get('/api/mood/:id', accountRequired, async (req, res) => {
+  try {
+    const id = decodeURIComponent(p(req.params.id));
+    const title = typeof req.query.title === 'string' ? req.query.title : '';
+    res.json(await getMoodCategory(id, title));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

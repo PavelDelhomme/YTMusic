@@ -16,6 +16,14 @@ function initialOf(item: Props['item']) {
   return t.trim().charAt(0).toUpperCase() || '?';
 }
 
+/** Couleurs type tuiles YTM pour moods sans cover. */
+function moodTint(seed: string): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  const hue = h % 360;
+  return `hsl(${hue} 55% 32%)`;
+}
+
 function radiusClass(rounded: Props['rounded']) {
   if (rounded === 'full') return 'rounded-full';
   if (rounded === 'lg') return 'rounded-lg';
@@ -25,6 +33,8 @@ function radiusClass(rounded: Props['rounded']) {
 
 export function CoverImage({ item, size = 200, className = '', rounded = 'md', alt = '' }: Props) {
   const itemId = (item as { id?: string }).id || '';
+  const isMood = itemId.startsWith('mood:') || itemId.includes('moods_and_genres');
+  const title = (item as Track).title || (item as { name?: string }).name || '';
   const thumbKey = (item.thumbnails || []).map((t) => t.url).join('|');
   const candidates = useMemo(
     () => thumbCandidates(item, size),
@@ -41,14 +51,20 @@ export function CoverImage({ item, size = 200, className = '', rounded = 'md', a
 
   const src = candidates[idx] || '';
   const advance = () => setIdx((i) => (i + 1 < candidates.length ? i + 1 : i));
+  const tint = isMood ? moodTint(itemId || title) : undefined;
 
   return (
     <div className={`relative h-full w-full overflow-hidden bg-yt-elevated ${r} ${className}`}>
       <div
-        className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#3a3a3a] to-[#1a1a1a] text-lg font-semibold text-white/70"
+        className={`absolute inset-0 flex items-center justify-center text-lg font-semibold ${
+          tint ? 'text-white/90' : 'bg-gradient-to-br from-[#3a3a3a] to-[#1a1a1a] text-white/70'
+        }`}
+        style={tint ? { background: `linear-gradient(145deg, ${tint}, #121212)` } : undefined}
         aria-hidden
       >
-        {initialOf(item)}
+        <span className="relative px-2 text-center text-sm font-semibold leading-tight sm:text-base">
+          {isMood ? title || initialOf(item) : initialOf(item)}
+        </span>
       </div>
       {src ? (
         <img
