@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import type { Request, Response } from 'express';
-import { getAudioFormat, getYT } from './yt.js';
+import { getAudioFormat, getVideoFormat, getYT } from './yt.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -186,22 +186,27 @@ export async function handleStream(req: Request, res: Response) {
   }
 }
 
-/** Pré-résout l’URL audio (chauffe le cache format sans streamer). */
+/** Pré-résout l’URL audio/vidéo (chauffe le cache format sans streamer). */
 export async function handleStreamUrl(req: Request, res: Response) {
   const videoId = String(req.params.id || '');
   if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     res.status(400).json({ error: 'ID invalide' });
     return;
   }
+  const wantVideo = String(req.query.type || req.query.media || '') === 'video';
   try {
-    const format = await getAudioFormat(videoId);
+    const format = wantVideo ? await getVideoFormat(videoId) : await getAudioFormat(videoId);
     res.json({
       url: format.url,
       expiresAt: format.expiresAt,
       mimeType: format.mimeType ?? null,
+      kind: wantVideo ? 'video' : 'audio',
     });
   } catch (err) {
-    res.status(502).json({ error: 'Impossible de résoudre le stream', detail: String(err) });
+    res.status(502).json({
+      error: wantVideo ? 'Impossible de résoudre la vidéo' : 'Impossible de résoudre le stream',
+      detail: String(err),
+    });
   }
 }
 

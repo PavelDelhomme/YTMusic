@@ -496,16 +496,30 @@ class PlayerController(
     ) {
         val playable = tracks.filter { it.isPlayable() }
         if (playable.isEmpty()) return
-        val idx = startIndex.coerceIn(0, playable.lastIndex)
-        PlaybackService.Holder.queue = playable
+        // Fenêtre autour de l’index : évite OOM / TransactionTooLarge sur grosses bibliothèques
+        val maxItems = 250
+        val centered = if (playable.size > maxItems) {
+            val half = maxItems / 2
+            val raw = startIndex.coerceIn(0, playable.lastIndex)
+            val from = (raw - half).coerceAtLeast(0)
+            val to = (from + maxItems).coerceAtMost(playable.size)
+            val slice = playable.subList(from, to)
+            val localIdx = (raw - from).coerceIn(0, slice.lastIndex)
+            slice to localIdx
+        } else {
+            playable to startIndex.coerceIn(0, playable.lastIndex)
+        }
+        val window = centered.first
+        val idx = centered.second
+        PlaybackService.Holder.queue = window
         PlaybackService.Holder.index = idx
         PlaybackService.Holder.queueTitle = queueTitle
-        if (userQueueEnd <= 0 || userQueueEnd > playable.size) {
-            userQueueEnd = playable.size
+        if (userQueueEnd <= 0 || userQueueEnd > window.size) {
+            userQueueEnd = window.size
         }
-        warmAround(playable, idx)
+        warmAround(window, idx)
         player.setMediaItems(
-            playable.map { mediaItem(it) },
+            window.map { mediaItem(it) },
             idx,
             startPositionMs.coerceAtLeast(0L),
         )

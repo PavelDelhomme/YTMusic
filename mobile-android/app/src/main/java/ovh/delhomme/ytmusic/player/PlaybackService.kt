@@ -113,7 +113,8 @@ class PlaybackService : MediaSessionService() {
         val notificationProvider = DefaultMediaNotificationProvider.Builder(this)
             .setChannelName(R.string.playback_channel_name)
             .build()
-        notificationProvider.setSmallIcon(R.drawable.ic_brand_fg)
+        // Petite icône monochrome obligatoire (ic_brand_fg SVG → crash Samsung)
+        notificationProvider.setSmallIcon(R.drawable.ic_stat_play)
         setMediaNotificationProvider(notificationProvider)
 
         Holder.player = exo

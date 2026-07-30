@@ -14,7 +14,8 @@ const QUEUE_MAX = 100;
 
 type LyricLine = { t: number; text: string };
 
-function parseLyricLines(raw: string | null, duration: number): LyricLine[] {
+/** LRC uniquement — pas de faux timings sur texte brut (ça décale / n’arrête pas). */
+function parseLrcLines(raw: string | null): LyricLine[] {
   if (!raw?.trim()) return [];
   const timed: LyricLine[] = [];
   const lrcRe = /^\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]\s*(.*)$/;
@@ -26,47 +27,61 @@ function parseLyricLines(raw: string | null, duration: number): LyricLine[] {
     const frac = m[3] ? Number(m[3].padEnd(3, '0').slice(0, 3)) / 1000 : 0;
     timed.push({ t: min * 60 + sec + frac, text: m[4] || '' });
   }
-  if (timed.length > 0) return timed.filter((l) => l.text.trim());
-
-  const plain = raw
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-  if (!plain.length) return [];
-  const dur = duration > 0 ? duration : Math.max(plain.length * 3, 30);
-  return plain.map((text, i) => ({
-    t: (i / Math.max(1, plain.length)) * dur,
-    text,
-  }));
+  return timed.filter((l) => l.text.trim());
 }
 
 function SyncedLyrics({
   text,
   timed,
-  progress,
-  duration,
 }: {
   text: string | null;
   timed?: { startMs: number; text: string }[] | null;
-  progress: number;
-  duration: number;
 }) {
+  const audioEl = usePlayer((s) => s.audioEl);
+  const isPlaying = usePlayer((s) => s.isPlaying);
+  const [clock, setClock] = useState(0);
+
   const lines = useMemo(() => {
     if (timed?.length) {
       return timed.map((l) => ({ t: l.startMs / 1000, text: l.text }));
     }
-    return parseLyricLines(text, duration);
-  }, [text, timed, duration]);
+    return parseLrcLines(text);
+  }, [text, timed]);
+
+  // Horloge = audio réel ; en pause on fige (pas de setInterval qui avance)
+  useEffect(() => {
+    if (!lines.length) return;
+    let raf = 0;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      const el = usePlayer.getState().audioEl;
+      if (el && Number.isFinite(el.currentTime)) {
+        setClock(el.currentTime);
+      }
+      if (!el?.paused && !el?.ended) {
+        raf = requestAnimationFrame(tick);
+      }
+    };
+    // Sync immédiat (seek / ouverture)
+    const el = audioEl;
+    if (el && Number.isFinite(el.currentTime)) setClock(el.currentTime);
+    if (isPlaying) raf = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [lines.length, isPlaying, audioEl, timed, text]);
 
   const activeIdx = useMemo(() => {
     if (!lines.length) return -1;
     let idx = 0;
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].t <= progress + 0.15) idx = i;
+      if (lines[i].t <= clock + 0.05) idx = i;
       else break;
     }
     return idx;
-  }, [lines, progress]);
+  }, [lines, clock]);
 
   const activeRef = useRef<HTMLParagraphElement | null>(null);
 
@@ -74,9 +89,10 @@ function SyncedLyrics({
     activeRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, [activeIdx]);
 
+  // Texte brut sans timings → scroll libre, pas de faux karaoké
   if (!lines.length) {
     return (
-      <div className="px-2 py-6 text-base leading-8 text-[#c6c6c6] sm:px-4 sm:text-[17px] sm:leading-9">
+      <div className="whitespace-pre-wrap px-2 py-6 text-base leading-8 text-[#c6c6c6] sm:px-4 sm:text-[17px] sm:leading-9">
         {text || 'Paroles indisponibles pour ce titre.'}
       </div>
     );
@@ -91,7 +107,7 @@ function SyncedLyrics({
           <p
             key={`${i}-${line.t}`}
             ref={active ? activeRef : undefined}
-            className={`text-base leading-8 transition-all duration-300 sm:text-[17px] sm:leading-9 ${
+            className={`text-base leading-8 transition-all duration-200 sm:text-[17px] sm:leading-9 ${
               active
                 ? 'scale-[1.01] font-semibold text-white'
                 : past
@@ -127,14 +143,19 @@ export function NowPlaying({
   const loadRelated = usePlayer((s) => s.loadRelated);
   const toggleAutoplay = usePlayer((s) => s.toggleAutoplay);
   const topUpAutoplay = usePlayer((s) => s.topUpAutoplay);
-  const progress = usePlayer((s) => s.progress);
-  const duration = usePlayer((s) => s.duration);
+  const audioEl = usePlayer((s) => s.audioEl);
+  const isPlaying = usePlayer((s) => s.isPlaying);
   const [tab, setTab] = useState<NowPlayingTab>(initialTab);
+  const [mediaMode, setMediaMode] = useState<'cover' | 'video'>('cover');
   const [lyricsText, setLyricsText] = useState<string | null>(null);
   const [lyricsTimed, setLyricsTimed] = useState<{ startMs: number; text: string }[] | null>(null);
   const [lyricsLoading, setLyricsLoading] = useState(false);
   const [queueVisible, setQueueVisible] = useState(QUEUE_PAGE);
   const [saveOpen, setSaveOpen] = useState(false);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const [videoLoading, setVideoLoading] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const navigate = useNavigate();
   const queueScrollRef = useRef<HTMLDivElement>(null);
 
@@ -187,6 +208,80 @@ export function NowPlaying({
       .finally(() => setLyricsLoading(false));
   }, [open, tab, current?.id]);
 
+  // Charge l’URL vidéo progressive quand on bascule sur « Vidéo »
+  useEffect(() => {
+    if (!open || mediaMode !== 'video' || !current?.id) return;
+    let cancelled = false;
+    setVideoLoading(true);
+    setVideoError(null);
+    setVideoUrl(null);
+    void api
+      .streamUrl(current.id, 'video')
+      .then((r) => {
+        if (cancelled) return;
+        if (!r.url) throw new Error('URL vidéo vide');
+        setVideoUrl(r.url);
+      })
+      .catch((e) => {
+        if (!cancelled) setVideoError(String(e?.message || e || 'Vidéo indisponible'));
+      })
+      .finally(() => {
+        if (!cancelled) setVideoLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, mediaMode, current?.id]);
+
+  // Sync image+son : vidéo muette calée sur l’audio (pause / seek inclus)
+  useEffect(() => {
+    if (mediaMode !== 'video' || !videoRef.current || !audioEl) return;
+    const v = videoRef.current;
+    v.muted = true;
+    const sync = () => {
+      if (!Number.isFinite(audioEl.currentTime)) return;
+      if (Math.abs(v.currentTime - audioEl.currentTime) > 0.4) {
+        try {
+          v.currentTime = audioEl.currentTime;
+        } catch {
+          /* ignore seek race */
+        }
+      }
+      if (audioEl.paused || audioEl.ended) {
+        if (!v.paused) v.pause();
+      } else if (v.paused) {
+        void v.play().catch(() => {});
+      }
+    };
+    sync();
+    const onPlay = () => void v.play().catch(() => {});
+    const onPause = () => v.pause();
+    const onSeek = () => {
+      try {
+        v.currentTime = audioEl.currentTime;
+      } catch {
+        /* */
+      }
+    };
+    audioEl.addEventListener('play', onPlay);
+    audioEl.addEventListener('pause', onPause);
+    audioEl.addEventListener('seeked', onSeek);
+    audioEl.addEventListener('timeupdate', sync);
+    const iv = window.setInterval(sync, 500);
+    return () => {
+      audioEl.removeEventListener('play', onPlay);
+      audioEl.removeEventListener('pause', onPause);
+      audioEl.removeEventListener('seeked', onSeek);
+      audioEl.removeEventListener('timeupdate', sync);
+      window.clearInterval(iv);
+      v.pause();
+    };
+  }, [mediaMode, audioEl, videoUrl, isPlaying]);
+
+  useEffect(() => {
+    if (!open) setMediaMode('cover');
+  }, [open, current?.id]);
+
   if (!open || !current) return null;
 
   const boundary = Math.min(Math.max(userQueueEnd || 0, 0), queue.length);
@@ -217,11 +312,60 @@ export function NowPlaying({
       <div className="mx-auto grid min-h-0 w-full max-w-[1800px] flex-1 grid-cols-1 gap-3 overflow-hidden px-2 pb-[100px] pt-3 sm:px-4 md:grid-cols-[minmax(260px,0.85fr)_minmax(420px,1.25fr)] md:gap-8 md:px-6 lg:grid-cols-[minmax(280px,0.75fr)_minmax(520px,1.35fr)] lg:gap-10 lg:px-10 xl:px-14">
         <div className="flex min-h-0 flex-col items-center justify-center overflow-hidden">
           <div className="mb-4 flex rounded-full bg-[#1d1d1d] p-1 text-xs font-medium">
-            <span className="rounded-full bg-white/15 px-5 py-1.5 text-white">Titre</span>
-            <span className="rounded-full px-5 py-1.5 text-yt-muted">Vidéo</span>
+            <button
+              type="button"
+              onClick={() => setMediaMode('cover')}
+              className={`rounded-full px-5 py-1.5 transition ${
+                mediaMode === 'cover' ? 'bg-white/15 text-white' : 'text-yt-muted hover:text-white'
+              }`}
+            >
+              Titre
+            </button>
+            <button
+              type="button"
+              onClick={() => setMediaMode('video')}
+              className={`rounded-full px-5 py-1.5 transition ${
+                mediaMode === 'video' ? 'bg-white/15 text-white' : 'text-yt-muted hover:text-white'
+              }`}
+            >
+              Vidéo
+            </button>
           </div>
           <div className="relative aspect-square w-full max-w-[min(88vw,520px)] overflow-hidden rounded-md bg-yt-elevated shadow-[0_20px_60px_rgba(0,0,0,0.65)] lg:max-w-[min(42vw,560px)]">
-            <CoverImage item={current} size={800} rounded="md" alt={current.title} />
+            {mediaMode === 'cover' ? (
+              <CoverImage item={current} size={800} rounded="md" alt={current.title} />
+            ) : videoLoading ? (
+              <div className="flex h-full items-center justify-center text-sm text-yt-muted">Chargement vidéo…</div>
+            ) : videoError ? (
+              <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-sm text-yt-muted">
+                <CoverImage item={current} size={400} rounded="md" alt={current.title} />
+                <p>{videoError}</p>
+              </div>
+            ) : videoUrl ? (
+              <video
+                ref={videoRef}
+                key={videoUrl}
+                src={videoUrl}
+                className="h-full w-full object-contain bg-black"
+                playsInline
+                muted
+                preload="auto"
+                onLoadedMetadata={() => {
+                  const v = videoRef.current;
+                  const a = usePlayer.getState().audioEl;
+                  if (v && a && Number.isFinite(a.currentTime)) {
+                    try {
+                      v.currentTime = a.currentTime;
+                    } catch {
+                      /* */
+                    }
+                    if (!a.paused) void v.play().catch(() => {});
+                  }
+                }}
+              />
+            ) : (
+              <CoverImage item={current} size={800} rounded="md" alt={current.title} />
+            )}
           </div>
         </div>
 
@@ -406,8 +550,6 @@ export function NowPlaying({
                 <SyncedLyrics
                   text={lyricsText}
                   timed={lyricsTimed}
-                  progress={progress}
-                  duration={duration}
                 />
               ))}
 
