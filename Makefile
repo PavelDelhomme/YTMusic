@@ -21,7 +21,8 @@ DEVICE ?= R5CT7263YJL
 	docker-dev docker-dev-down docker-build \
 	mobile-qr mobile-hint mobile-adb mobile-install-adb test-register-adb \
 	android-sync android-build android-install android-prod android \
-	android-capacitor android-capacitor-prod \
+	android-capacitor android-capacitor-prod adb-fix \
+	adb-fix-keys \
 	update-apps status status-watch \
 	logs logs-tail logs-watch logs-history logs-archive \
 	db-status db-backup \
@@ -223,6 +224,14 @@ android-install: ## Build + installe l’APK Kotlin (ADB) — ensure-api
 
 android: ## Raccourci : ensure-api + APK Kotlin native
 	@$(MAKE) android-install DEVICE="$(DEVICE)" API_BASE_URL="$(or $(API_BASE_URL),$(or $(VITE_API_ORIGIN),http://127.0.0.1:8787))"
+
+adb-fix: ## Répare ADB unauthorized (diagnostic + reset USB)
+	@chmod +x $(ROOT)/scripts/adb-fix-auth.sh
+	@bash $(ROOT)/scripts/adb-fix-auth.sh
+
+adb-fix-keys: ## Régénère clés ADB (après révocation USB sur le téléphone)
+	@chmod +x $(ROOT)/scripts/adb-fix-auth.sh
+	@bash $(ROOT)/scripts/adb-fix-auth.sh --new-keys
 
 android-prod: ## APK Kotlin → API https://ytmusic.delhomme.ovh + install ADB
 	@chmod +x $(ROOT)/scripts/kotlin-android-install.sh
