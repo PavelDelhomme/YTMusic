@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
-import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -550,8 +549,18 @@ class PlayerController(
 
     private fun player(): Player? = controller ?: PlaybackService.Holder.player
 
+    /**
+     * Démarre le service en arrière-plan (pas FGS).
+     *
+     * Important : `startForegroundService()` impose un `startForeground()` sous ~5s.
+     * Media3 ne le fait qu’une fois la lecture démarrée → ANR/crash à l’ouverture
+     * de l’app si on force le FGS trop tôt. Le passage foreground est géré par
+     * MediaSessionService via la notification média quand `play()` démarre.
+     */
     private fun ensureService() {
-        ContextCompat.startForegroundService(context, Intent(context, PlaybackService::class.java))
+        runCatching {
+            context.startService(Intent(context, PlaybackService::class.java))
+        }
     }
 
     private fun syncFrom(player: Player) {
