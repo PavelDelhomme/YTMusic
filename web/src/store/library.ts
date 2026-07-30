@@ -9,6 +9,7 @@ type LibraryState = LibraryData & {
   createPlaylist: (name: string, description?: string) => Promise<import('../api').LibraryPlaylist | void>;
   deletePlaylist: (id: string) => Promise<void>;
   addToPlaylist: (playlistId: string, track: Track) => Promise<void>;
+  addTracksToPlaylist: (playlistId: string, tracks: Track[]) => Promise<void>;
   recordPlay: (track: Track) => Promise<void>;
   isLiked: (id: string) => boolean;
   hasAlbum: (id: string) => boolean;
@@ -99,6 +100,16 @@ export const useLibrary = create<LibraryState>((set, get) => ({
 
   addToPlaylist: async (playlistId, track) => {
     await api.addToPlaylist(playlistId, track);
+    await get().refresh();
+  },
+
+  addTracksToPlaylist: async (playlistId, tracks) => {
+    const seen = new Set<string>();
+    for (const t of tracks) {
+      if (!t?.id || seen.has(t.id)) continue;
+      seen.add(t.id);
+      await api.addToPlaylist(playlistId, t);
+    }
     await get().refresh();
   },
 
