@@ -329,8 +329,41 @@ function inferType(id: string, item: any): Track['type'] {
   if (pageType.includes('ALBUM') || id.startsWith('MPREb_') || id.startsWith('OLAK5')) return 'album';
   if (pageType.includes('PLAYLIST') || id.startsWith('PL') || id.startsWith('VL') || id.startsWith('RD'))
     return 'playlist';
+  // Tuiles Moods & genres / Charts (browse FE…) — pas des titres jouables
+  if (id.startsWith('mood:') || id.startsWith('FE') || id.includes('moods_and_genres')) return 'playlist';
   if (/^[a-zA-Z0-9_-]{11}$/.test(id)) return 'song';
   return 'unknown';
+}
+
+/** Tuiles colorées Explore « Chill / Focus / … » (MusicNavigationButton). */
+export function mapNavigationButton(item: any): Track | null {
+  if (!item) return null;
+  const isNav =
+    item.type === 'MusicNavigationButton' ||
+    (typeof item.button_text === 'string' && item.endpoint?.payload?.browseId);
+  if (!isNav) return null;
+
+  const browseId = String(item.endpoint?.payload?.browseId || '').trim();
+  const params = String(item.endpoint?.payload?.params || '').trim();
+  const title =
+    asText(item.button_text) || asText(item.text) || asText(item.title) || 'Sans titre';
+  if (!browseId && !params) return null;
+
+  // Même browseId pour toutes les catégories — l’unicité est dans `params`
+  const id = params
+    ? `mood:${params}`
+    : browseId.startsWith('FE')
+      ? `mood:${browseId}`
+      : browseId;
+
+  return {
+    id,
+    title,
+    artists: [],
+    album: browseId ? { name: title, id: browseId } : undefined,
+    thumbnails: [],
+    type: 'playlist',
+  };
 }
 
 export function mapListItem(item: any, fallbackThumbs?: Thumb[]): Track | null {
@@ -348,8 +381,11 @@ export function mapListItem(item: any, fallbackThumbs?: Thumb[]): Track | null {
   if (!id) return null;
 
   let title = asText(item.title) || asText(item.name);
+  if (!title) {
+    title = asText(item.flex_columns?.[0]?.title);
+  }
   if (!title && item.item_type === 'artist') {
-    title = asText(item.flex_columns?.[0]?.title) || 'Artiste';
+    title = 'Artiste';
   }
   if (!title) title = 'Sans titre';
 
@@ -402,10 +438,35 @@ export function mapTwoRowItem(item: any, fallbackThumbs?: Thumb[]): Track | null
     item.id ||
     item.endpoint?.payload?.browseId ||
     item.endpoint?.payload?.videoId ||
-    item.endpoint?.payload?.playlistId;
+    item.endpoint?.payload?.playlistId ||
+    item.navigationEndpoint?.browseEndpoint?.browseId ||
+    item.navigationEndpoint?.watchEndpoint?.videoId ||
+    item.endpoint?.browseEndpoint?.browseId ||
+    item.endpoint?.watchEndpoint?.videoId;
   if (!id) return null;
 
-  const title = asText(item.title) || 'Sans titre';
+  const title =
+    asText(item.title) ||
+    asText(item.title?.runs) ||
+    (Array.isArray(item.title?.runs) ? item.title.runs.map((r: any) => r.text || '').join('') : '') ||
+    'Sans titre';
+  // Normalise endpoint pour inferType
+  if (!item.endpoint?.payload && (item.navigationEndpoint || item.endpoint?.browseEndpoint)) {
+    const ne = item.navigationEndpoint || item.endpoint;
+    item = {
+      ...item,
+      endpoint: {
+        payload: {
+          browseId: ne.browseEndpoint?.browseId || ne.payload?.browseId,
+          videoId: ne.watchEndpoint?.videoId || ne.payload?.videoId,
+          playlistId: ne.watchEndpoint?.playlistId || ne.payload?.playlistId,
+          browseEndpointContextSupportedConfigs:
+            ne.browseEndpoint?.browseEndpointContextSupportedConfigs ||
+            ne.payload?.browseEndpointContextSupportedConfigs,
+        },
+      },
+    };
+  }
   const type = inferType(String(id), item);
   let artists = artistsFrom(item);
   if (type === 'artist' && !artists.length) {
@@ -441,6 +502,8 @@ export function mapAny(item: any, fallbackThumbs?: Thumb[]): Track | null {
     const nested = item.contents?.[0];
     return mapAny(nested, fallbackThumbs);
   }
+  const nav = mapNavigationButton(item);
+  if (nav) return nav;
   if (item.type === 'MusicResponsiveListItem' || item.flex_columns) {
     return mapListItem(item, fallbackThumbs);
   }

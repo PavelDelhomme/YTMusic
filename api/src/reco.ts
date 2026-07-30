@@ -259,7 +259,7 @@ export async function homeReco(userId: string) {
   }
 
   // Prefs-driven shelves
-  for (const g of prefs.genres.slice(0, 3)) {
+  for (const g of prefs.genres.slice(0, 4)) {
     try {
       const res = await search(`${g} mix`, 'song');
       const items = await hybridRank({
@@ -273,7 +273,8 @@ export async function homeReco(userId: string) {
     }
   }
 
-  for (const f of follows.slice(0, 2)) {
+  // Abonnements : plusieurs artistes, pas seulement le premier
+  for (const f of follows.slice(0, 5)) {
     try {
       const res = await search(f.artist_name || f.artist_id, 'song');
       const items = [...(res.songs || [])].slice(0, 16);
@@ -285,16 +286,31 @@ export async function homeReco(userId: string) {
     }
   }
 
-  if (searches.length) {
+  // Plusieurs recherches récentes (diversité), pas seulement la dernière
+  for (const h of searches.slice(0, 3)) {
+    const q = String(h.query || '').trim();
+    if (!q || q.length < 2) continue;
     try {
-      const q = searches[0].query;
       const res = await search(q, 'song');
       const items = await hybridRank({
         userId,
         candidates: [...(res.songs || [])],
         mode: 'discover',
       });
-      if (items.length) shelves.push({ title: `D’après ta recherche « ${q} »`, items: items.slice(0, 12) });
+      if (items.length) {
+        shelves.push({ title: `D’après ta recherche « ${q} »`, items: items.slice(0, 12) });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Ambiances onboarding → playlists / mix
+  for (const m of prefs.moods.slice(0, 3)) {
+    try {
+      const res = await search(`${m} playlist`, 'playlist');
+      const items = [...(res.playlists || [])].slice(0, 12);
+      if (items.length) shelves.push({ title: `Ambiance · ${m}`, items });
     } catch {
       /* ignore */
     }

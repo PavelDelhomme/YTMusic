@@ -69,11 +69,9 @@ export function PlayerBar({
   const activePlayerId = useSession((s) => s.activePlayerId);
   const activeName = devices.find((d) => d.id === activePlayerId)?.name;
 
-  const [volOpen, setVolOpen] = useState(false);
   const [muted, setMuted] = useState(false);
   const [uiPlaying, setUiPlaying] = useState(isPlaying);
   const prevVol = useRef(volume);
-  const volRef = useRef<HTMLDivElement>(null);
 
   // Icône play/pause = état réel de l’élément <audio> (touches média / MPRIS)
   useEffect(() => {
@@ -95,15 +93,6 @@ export function PlayerBar({
       el.removeEventListener('ended', sync);
     };
   }, [audioEl, isPlaying, queueIndex]);
-
-  useEffect(() => {
-    if (!volOpen) return;
-    const onDoc = (e: MouseEvent) => {
-      if (!volRef.current?.contains(e.target as Node)) setVolOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [volOpen]);
 
   if (!current) {
     if (compactEmpty) {
@@ -303,41 +292,44 @@ export function PlayerBar({
         </div>
 
         {/* Droite */}
-        <div className="relative flex shrink-0 items-center justify-end gap-1 sm:gap-1.5" onClick={stop} ref={volRef}>
-          <button
-            type="button"
-            title="Volume (clic = mute)"
-            onClick={toggleMute}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              stop(e);
-              setVolOpen((v) => !v);
-            }}
-            onDoubleClick={(e) => {
-              stop(e);
-              setVolOpen((v) => !v);
-            }}
-            className="flex h-11 w-11 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white"
-          >
-            {muted || volume === 0 ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
-          </button>
-          {volOpen && (
-            <div className="absolute bottom-14 right-0 z-50 w-48 rounded-xl border border-white/10 bg-yt-elevated p-4 shadow-xl">
+        <div className="relative flex shrink-0 items-center justify-end gap-1 sm:gap-1.5" onClick={stop}>
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <button
+              type="button"
+              title={muted || volume === 0 ? 'Réactiver le son' : 'Couper le son'}
+              aria-label={muted || volume === 0 ? 'Réactiver le son' : 'Couper le son'}
+              onClick={(e) => {
+                stop(e);
+                toggleMute();
+              }}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white"
+            >
+              {muted || volume === 0 ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
+            </button>
+            <div className="flex items-center gap-2">
               <input
                 type="range"
                 min={0}
                 max={1}
                 step={0.01}
-                value={volume}
+                value={muted ? 0 : volume}
                 onChange={(e) => {
                   const v = Number(e.target.value);
                   setVolume(v);
                   setMuted(v === 0);
+                  if (v > 0) prevVol.current = v;
                 }}
-                className="progress-range w-full"
+                onPointerDown={stop}
+                onClick={stop}
+                className="progress-range h-1.5 w-16 cursor-pointer accent-[#ff0033] sm:w-24 md:w-28"
+                aria-label="Volume"
+                title={`Volume ${Math.round((muted ? 0 : volume) * 100)} %`}
               />
+              <span className="hidden w-8 tabular-nums text-[11px] text-yt-muted sm:inline">
+                {Math.round((muted ? 0 : volume) * 100)}
+              </span>
             </div>
-          )}
+          </div>
           <button
             type="button"
             onClick={cycleRepeat}

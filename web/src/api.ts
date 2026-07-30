@@ -365,6 +365,14 @@ export const api = {
       needsOnboarding?: boolean;
       radios?: { id: string; title: string }[];
     }>('/api/explore'),
+  mood: (id: string, title?: string) => {
+    const params = new URLSearchParams();
+    if (title) params.set('title', title);
+    const q = params.toString();
+    return req<{ title: string; shelves: Shelf[] }>(
+      `/api/mood/${encodeURIComponent(id)}${q ? `?${q}` : ''}`,
+    );
+  },
   search: (q: string, filter = 'all', opts?: { noHistory?: boolean }) => {
     const params = new URLSearchParams({ q, filter });
     if (opts?.noHistory) params.set('noHistory', '1');

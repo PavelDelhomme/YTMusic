@@ -110,9 +110,7 @@ export async function getHomeMore(page: number, seedIds: string[] = []): Promise
 
   if (page === 1) {
     try {
-      const explore = await innertube.music.getExplore();
-      const sections = (explore as any).sections || (explore as any).contents || [];
-      shelves.push(...shelvesFrom(Array.isArray(sections) ? sections : []));
+      shelves.push(...(await getExplore()));
     } catch {
       /* ignore */
     }
@@ -198,7 +196,139 @@ export async function getExplore(): Promise<Shelf[]> {
   const innertube = await getYT();
   const explore = await innertube.music.getExplore();
   const sections = (explore as any).sections || (explore as any).contents || [];
-  return shelvesFrom(Array.isArray(sections) ? sections : []);
+  const shelves = shelvesFrom(Array.isArray(sections) ? sections : []);
+
+  // Boutons New releases / Charts / Moods (souvent hors sections)
+  const topButtons = (explore as any).top_buttons;
+  if (Array.isArray(topButtons) && topButtons.length) {
+    const items = topButtons.map((b: any) => mapAny(b)).filter(Boolean) as Track[];
+    if (items.length) {
+      shelves.unshift({ title: 'Explorer', items });
+    }
+  }
+  return shelves;
+}
+
+/**
+ * Contenu d’une catégorie Moods & genres (params du MusicNavigationButton).
+ */
+export async function getMoodCategory(
+  paramsOrId: string,
+  titleHint = '',
+): Promise<{ title: string; shelves: Shelf[] }> {
+  const raw = String(paramsOrId || '').replace(/^mood:/, '').trim();
+  if (!raw) return { title: titleHint || 'Moods', shelves: [] };
+
+  const innertube = await getYT();
+  const browseId = 'FEmusic_moods_and_genres_category';
+  const params = raw.startsWith('FE') ? undefined : raw;
+
+  const res = await innertube.session.actions.execute('/browse', {
+    browseId: raw.startsWith('FE') ? raw : browseId,
+    ...(params ? { params } : {}),
+    client: 'YTMUSIC',
+  } as any);
+
+  const data = (res as any)?.data || res;
+  const sectionList =
+    data?.contents?.singleColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content
+      ?.sectionListRenderer?.contents ||
+    data?.contents?.sectionListRenderer?.contents ||
+    [];
+
+  // Parse via youtubei si possible
+  let shelves: Shelf[] = [];
+  try {
+    const parsed = Parser.parseResponse(data);
+    const sections =
+      (parsed as any)?.contents_memo?.getType?.(YTNodes.MusicCarouselShelf) ||
+      (parsed as any)?.contents?.contents ||
+      [];
+    if (Array.isArray(sections) && sections.length) {
+      shelves = shelvesFrom(sections);
+    }
+  } catch {
+    /* fallback brut ci-dessous */
+  }
+
+  if (!shelves.length && Array.isArray(sectionList)) {
+    for (const block of sectionList) {
+      const carousel = block.musicCarouselShelfRenderer;
+      if (!carousel) continue;
+      const title =
+        carousel.header?.musicCarouselShelfBasicHeaderRenderer?.title?.runs
+          ?.map((r: { text?: string }) => r.text || '')
+          .join('') ||
+        titleHint ||
+        'Suggestions';
+      const items: Track[] = [];
+      for (const it of carousel.contents || []) {
+        const two = it.musicTwoRowItemRenderer;
+        const nav = it.musicNavigationButtonRenderer;
+        if (two) {
+          const mapped = mapAny({
+            type: 'MusicTwoRowItem',
+            title: two.title,
+            subtitle: two.subtitle,
+            thumbnail: two.thumbnailRenderer || two.thumbnail,
+            endpoint: two.navigationEndpoint,
+            id:
+              two.navigationEndpoint?.browseEndpoint?.browseId ||
+              two.navigationEndpoint?.watchEndpoint?.videoId,
+            item_type: two.navigationEndpoint?.browseEndpoint
+              ?.browseEndpointContextSupportedConfigs?.browseEndpointContextMusicConfig?.pageType
+              ?.toLowerCase()
+              ?.includes('album')
+              ? 'album'
+              : two.navigationEndpoint?.browseEndpoint
+                    ?.browseEndpointContextSupportedConfigs?.browseEndpointContextMusicConfig
+                    ?.pageType?.toLowerCase()
+                    ?.includes('playlist')
+                ? 'playlist'
+                : undefined,
+          });
+          if (mapped) items.push(mapped);
+        } else if (nav) {
+          const mapped = mapAny({
+            type: 'MusicNavigationButton',
+            button_text: nav.buttonText?.runs?.map((r: { text?: string }) => r.text || '').join('') || nav.buttonText,
+            endpoint: {
+              payload: {
+                browseId: nav.clickCommand?.browseEndpoint?.browseId,
+                params: nav.clickCommand?.browseEndpoint?.params,
+              },
+            },
+          });
+          if (mapped) items.push(mapped);
+        }
+      }
+      if (items.length) shelves.push({ title: String(title), items });
+    }
+  }
+
+  // Dernier recours : recherche par nom d’ambiance
+  if (!shelves.length && titleHint) {
+    try {
+      const result = await innertube.music.search(`${titleHint} mix`, { type: 'playlist' } as any);
+      const items: Track[] = [];
+      for (const shelf of (result as any).contents || []) {
+        for (const item of shelf?.contents || shelf?.items || []) {
+          const m = mapAny(item);
+          if (m) items.push(m.type === 'playlist' ? m : { ...m, type: m.type || 'playlist' });
+        }
+      }
+      if (items.length) shelves.push({ title: titleHint, items: items.slice(0, 20) });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const title =
+    titleHint ||
+    shelves[0]?.title ||
+    'Moods & genres';
+
+  return { title, shelves };
 }
 
 type SearchBuckets = {
@@ -928,7 +1058,26 @@ export async function getAlbum(albumId: string): Promise<{
   tracks: Track[];
 }> {
   const innertube = await getYT();
-  const album = await innertube.music.getAlbum(albumId);
+  let id = albumId;
+
+  // OLAK5… = browse album ; youtubei.getAlbum n’accepte que MPR*
+  if (id.startsWith('OLAK5')) {
+    try {
+      const browse = await innertube.session.actions.execute('/browse', {
+        browseId: id,
+        client: 'YTMUSIC',
+      } as any);
+      const data = (browse as any)?.data || browse;
+      const mpr =
+        JSON.stringify(data).match(/"browseId":"(MPREb_[^"]+)"/)?.[1] ||
+        JSON.stringify(data).match(/MPREb_[A-Za-z0-9_-]+/)?.[0];
+      if (mpr) id = mpr;
+    } catch {
+      /* try getAlbum with original — may throw */
+    }
+  }
+
+  const album = await innertube.music.getAlbum(id);
   const header = (album as any).header || {};
   const cover = extractThumbs(header, album);
 
@@ -945,7 +1094,7 @@ export async function getAlbum(albumId: string): Promise<{
     .filter(Boolean)
     .map((t: Track) => {
       if (!t.thumbnails?.length && cover.length) t.thumbnails = cover;
-      if (!t.album) t.album = { name: String(header.title?.text || header.title || 'Album'), id: albumId };
+      if (!t.album) t.album = { name: String(header.title?.text || header.title || 'Album'), id };
       return t;
     }) as Track[];
 
@@ -964,7 +1113,7 @@ export async function getAlbum(albumId: string): Promise<{
     artists = [...counts.values()]
       .sort((a, b) => b.n - a.n)
       .slice(0, 4)
-      .map(({ name, id }) => ({ name, id }));
+      .map(({ name, id: artistId }) => ({ name, id: artistId }));
   }
 
   // Enrichir les pistes sans artiste
@@ -975,7 +1124,7 @@ export async function getAlbum(albumId: string): Promise<{
   }
 
   const meta: AlbumMeta = {
-    id: albumId,
+    id,
     title: String(header.title?.text || header.title || 'Album'),
     year,
     artists,
@@ -1018,6 +1167,47 @@ export async function getPlaylist(playlistId: string): Promise<{
   return { playlist: meta, tracks };
 }
 
+async function audioFormatViaYtDlp(videoId: string): Promise<AudioFormat> {
+  const { spawn } = await import('node:child_process');
+  const ytdlp = join(ROOT, 'bin', 'yt-dlp');
+  const url = await new Promise<string>((resolve, reject) => {
+    const proc = spawn(
+      ytdlp,
+      [
+        '-f',
+        'bestaudio[ext=m4a]/bestaudio/best',
+        '-g',
+        '--no-playlist',
+        '--no-warnings',
+        `https://www.youtube.com/watch?v=${videoId}`,
+      ],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    let out = '';
+    let err = '';
+    proc.stdout.on('data', (c) => {
+      out += String(c);
+    });
+    proc.stderr.on('data', (c) => {
+      err += String(c);
+    });
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      const line = out
+        .split('\n')
+        .map((l) => l.trim())
+        .find((l) => /^https?:\/\//.test(l));
+      if (code === 0 && line) resolve(line);
+      else reject(new Error(err.trim() || `yt-dlp -g exit ${code}`));
+    });
+  });
+  return {
+    url,
+    mimeType: url.includes('mime=audio%2Fmp4') || url.includes('itag=140') ? 'audio/mp4' : 'audio/webm',
+    expiresAt: parseExpireMs(url) ?? Date.now() + 3 * 60 * 60 * 1000,
+  };
+}
+
 export async function getAudioFormat(videoId: string): Promise<AudioFormat> {
   const cached = audioFormatCache.get(videoId);
   // Marge 90 s avant expire pour éviter une URL déjà morte
@@ -1030,27 +1220,44 @@ export async function getAudioFormat(videoId: string): Promise<AudioFormat> {
 
   const job = (async (): Promise<AudioFormat> => {
     const innertube = await getYT();
-    const format = await innertube.getStreamingData(videoId, {
-      type: 'audio',
-      quality: 'bestefficiency',
-    });
-    const url = await format.decipher(innertube.session.player);
-    const expiresAt = parseExpireMs(url) ?? Date.now() + 3 * 60 * 60 * 1000;
-    const entry: AudioFormat = {
-      url,
-      mimeType: format.mime_type,
-      bitrate: format.bitrate,
-      contentLength: format.content_length,
-      expiresAt,
-    };
-    audioFormatCache.set(videoId, entry);
-    if (audioFormatCache.size > 250) {
-      const stale = [...audioFormatCache.entries()]
-        .sort((a, b) => a[1].expiresAt - b[1].expiresAt)
-        .slice(0, 80);
-      for (const [id] of stale) audioFormatCache.delete(id);
+    // WEB/ANDROID cassent souvent le decipher ; IOS renvoie des URLs jouables.
+    const clients = ['IOS', 'ANDROID', 'WEB'] as const;
+    let lastErr: unknown;
+    for (const client of clients) {
+      try {
+        const format = await innertube.getStreamingData(videoId, {
+          type: 'audio',
+          quality: 'bestefficiency',
+          client,
+        });
+        const url = await format.decipher(innertube.session.player);
+        if (!url) throw new Error('empty stream url');
+        const entry: AudioFormat = {
+          url,
+          mimeType: format.mime_type,
+          bitrate: format.bitrate,
+          contentLength: format.content_length,
+          expiresAt: parseExpireMs(url) ?? Date.now() + 3 * 60 * 60 * 1000,
+        };
+        audioFormatCache.set(videoId, entry);
+        if (audioFormatCache.size > 250) {
+          const stale = [...audioFormatCache.entries()]
+            .sort((a, b) => a[1].expiresAt - b[1].expiresAt)
+            .slice(0, 80);
+          for (const [id] of stale) audioFormatCache.delete(id);
+        }
+        return entry;
+      } catch (err) {
+        lastErr = err;
+      }
     }
-    return entry;
+    try {
+      const entry = await audioFormatViaYtDlp(videoId);
+      audioFormatCache.set(videoId, entry);
+      return entry;
+    } catch (err) {
+      throw lastErr || err;
+    }
   })().finally(() => {
     audioFormatInflight.delete(videoId);
   });

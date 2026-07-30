@@ -5,6 +5,7 @@ import { ExplorePage } from './pages/ExplorePage';
 import { SearchPage } from './pages/SearchPage';
 import { LibraryPage } from './pages/LibraryPage';
 import { ArtistPage, ArtistSongsPage, AlbumPage, PlaylistPage } from './pages/DetailPages';
+import { MoodPage } from './pages/MoodPage';
 import { LocalPlaylistPage } from './pages/LocalPlaylistPage';
 import { ImportPage } from './pages/ImportPage';
 import { OfflinePage } from './pages/OfflinePage';
@@ -32,6 +33,7 @@ export default function App() {
           <Route path="artist/:id" element={<ArtistPage />} />
           <Route path="album/:id" element={<AlbumPage />} />
           <Route path="playlist/:id" element={<PlaylistPage />} />
+          <Route path="mood/:id" element={<MoodPage />} />
           <Route path="local-playlist/:id" element={<LocalPlaylistPage />} />
         </Route>
       </Routes>
