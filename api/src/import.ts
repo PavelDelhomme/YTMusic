@@ -109,19 +109,22 @@ export async function importByKind(
       type: 'album',
       tracks,
     });
-    if (options?.createLocalCopy !== false) {
+    // Pas de playlist miroir par défaut : un album reste un album en biblio
+    let playlistCopy = false;
+    if (options?.createLocalCopy === true) {
       const pl = createPlaylist(
         userId,
         album.title,
         `Album · ${album.artists.map((a) => a.name).join(', ')}`,
       );
       for (const t of tracks) addToPlaylist(userId, pl.id, t);
+      playlistCopy = true;
     }
     return {
       kind: 'album',
       id: album.id,
       title: album.title,
-      added: { album: true, tracks: tracks.length, playlist: true },
+      added: { album: true, tracks: tracks.length, playlist: playlistCopy },
       tracks,
     };
   }
