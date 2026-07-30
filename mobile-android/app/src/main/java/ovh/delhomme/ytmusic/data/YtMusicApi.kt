@@ -48,6 +48,8 @@ data class PlaybackStateDto(
     val current: TrackDto? = null,
     val queue: List<TrackDto> = emptyList(),
     val queueIndex: Int = 0,
+    val userQueueEnd: Int? = null,
+    val autoplay: Boolean? = null,
     val isPlaying: Boolean = false,
     /** Position en secondes (aligné web / WS). */
     val progress: Double = 0.0,
@@ -342,6 +344,15 @@ interface YtMusicApi {
 
     @PUT("api/session/state")
     suspend fun publishSessionState(@Body body: Map<String, @JvmSuppressWildcards Any?>): SessionSnapshot
+
+    @POST("api/session/device")
+    suspend fun registerSessionDevice(@Body body: Map<String, @JvmSuppressWildcards Any?>): SessionSnapshot
+
+    @POST("api/session/active")
+    suspend fun setSessionActive(@Body body: Map<String, @JvmSuppressWildcards Any?>): SessionSnapshot
+
+    @POST("api/session/transfer")
+    suspend fun transferSession(@Body body: Map<String, @JvmSuppressWildcards Any?>): SessionSnapshot
 
     @POST("api/download/{id}")
     suspend fun download(@Path("id") id: String): Map<String, Any>

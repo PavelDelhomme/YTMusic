@@ -295,6 +295,7 @@ private fun MainTabs(
                         positionMs = posMs,
                         autoplay = autoplay,
                         title = "File synchronisée",
+                        userQueueEnd = st?.userQueueEnd,
                     )
                     pendingRemoteLabel = null
                 } else if (st?.current != null) {
@@ -317,6 +318,8 @@ private fun MainTabs(
                     "current" to t,
                     "queue" to ui.queue,
                     "queueIndex" to ui.queueIndex,
+                    "userQueueEnd" to ui.userQueueEnd,
+                    "autoplay" to ui.autoplaySuggestions,
                     "isPlaying" to ui.playing,
                     "progress" to (ui.positionMs / 1000.0),
                     "duration" to (ui.durationMs / 1000.0).coerceAtLeast(0.0),
@@ -326,6 +329,8 @@ private fun MainTabs(
                         ovh.delhomme.ytmusic.player.RepeatMode.All -> "all"
                         ovh.delhomme.ytmusic.player.RepeatMode.One -> "one"
                     },
+                    "updatedAt" to System.currentTimeMillis(),
+                    "deviceId" to container.deviceId,
                 ),
             )
         }
@@ -340,6 +345,54 @@ private fun MainTabs(
         while (true) {
             kotlinx.coroutines.delay(5_000)
             publishPlayback()
+        }
+    }
+
+    // Heartbeat + pull file si un autre appareil a avancé (HTTP soft sync)
+    LaunchedEffect(Unit) {
+        while (true) {
+            runCatching {
+                container.api.registerSessionDevice(
+                    mapOf(
+                        "deviceId" to container.deviceId,
+                        "name" to (android.os.Build.MODEL ?: "Android"),
+                        "deviceType" to "mobile",
+                        "canPlay" to true,
+                    ),
+                )
+                if (System.currentTimeMillis() >= suppressSessionPublishUntil) {
+                    val snap = container.api.session()
+                    val st = snap.state
+                    val remoteQueue = st?.queue.orEmpty().filter { it.isPlayable() }
+                    val ui = player.state.value
+                    val localIds = ui.queue.map { it.id }
+                    val remoteIds = remoteQueue.map { it.id }
+                    val remoteNewer =
+                        (st?.updatedAt ?: 0L) > (System.currentTimeMillis() - 120_000) &&
+                            remoteIds.isNotEmpty() &&
+                            remoteIds != localIds &&
+                            snap.activePlayerId != null &&
+                            snap.activePlayerId != container.deviceId
+                    if (remoteNewer && !ui.playing) {
+                        val current = st?.current?.takeIf { it.isPlayable() }
+                        val idx = when {
+                            current != null -> remoteQueue.indexOfFirst { it.id == current.id }
+                                .takeIf { it >= 0 } ?: (st?.queueIndex ?: 0)
+                            else -> st?.queueIndex ?: 0
+                        }.coerceIn(0, remoteQueue.lastIndex)
+                        suppressSessionPublishUntil = System.currentTimeMillis() + 8_000L
+                        player.restoreQueue(
+                            tracks = remoteQueue,
+                            startIndex = idx,
+                            positionMs = ((st?.progress ?: 0.0) * 1000.0).toLong().coerceAtLeast(0L),
+                            autoplay = false,
+                            title = "File synchronisée",
+                            userQueueEnd = st?.userQueueEnd,
+                        )
+                    }
+                }
+            }
+            kotlinx.coroutines.delay(4_000)
         }
     }
 
@@ -684,7 +737,7 @@ private fun MainTabs(
     }
 
     if (showCast) {
-        CastSheet(container = container, onDismiss = { showCast = false })
+        CastSheet(container = container, player = player, onDismiss = { showCast = false })
     }
 
     if (forceOnboarding) {

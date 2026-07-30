@@ -412,6 +412,16 @@ export const api = {
     }),
   sessionSnapshot: () =>
     req<{ devices: any[]; activePlayerId: string | null; state: any }>('/api/session'),
+  sessionTransfer: (targetId: string, state?: Record<string, unknown>) =>
+    req<{ devices: any[]; activePlayerId: string | null; state: any }>('/api/session/transfer', {
+      method: 'POST',
+      body: JSON.stringify({ targetId, state }),
+    }),
+  sessionSetActive: (targetId: string) =>
+    req<{ devices: any[]; activePlayerId: string | null; state: any }>('/api/session/active', {
+      method: 'POST',
+      body: JSON.stringify({ targetId }),
+    }),
   listen: (payload: {
     trackId: string;
     event: 'start' | 'progress' | 'complete' | 'skip';

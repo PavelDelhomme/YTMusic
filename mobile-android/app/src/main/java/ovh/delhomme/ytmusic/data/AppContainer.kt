@@ -31,6 +31,7 @@ class AppContainer(context: Context) {
         val token = runBlocking { tokenStore.getAccess() }
         val req = chain.request().newBuilder()
             .header("X-Device-Id", deviceId)
+            .header("X-Device-Name", android.os.Build.MODEL ?: "Android")
             .apply {
                 if (!token.isNullOrBlank()) header("Authorization", "Bearer $token")
             }

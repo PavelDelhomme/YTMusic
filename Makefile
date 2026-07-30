@@ -304,7 +304,12 @@ status: ## Statut coloré API / Vite / Docker / DB
 	fi
 	@echo ""
 	@echo "📱 ADB :"
-	@adb devices 2>/dev/null | awk 'NR>1 && $$2=="device"{printf "  \033[1;32m✅\033[0m %s\n", $$1}' || echo "  (adb indisponible)"
+	@adb devices -l 2>/dev/null | awk 'NR>1 && NF{ \
+	  if($$2=="device") printf "  \033[1;32m✅\033[0m %s\n", $$0; \
+	  else if($$2=="unauthorized") printf "  \033[1;33m⚠ unauthorized\033[0m %s  → accepte la popup USB\n", $$1; \
+	  else if($$2=="offline") printf "  \033[1;31m❌ offline\033[0m %s\n", $$1; \
+	  else printf "  \033[0;90m· %s\033[0m\n", $$0; \
+	}' || echo "  (adb indisponible)"
 	@echo ""
 	@LAN=$$(hostname -I 2>/dev/null | awk '{print $$1}'); \
 	if [ -n "$$LAN" ]; then echo "  LAN → http://$$LAN:5173"; fi

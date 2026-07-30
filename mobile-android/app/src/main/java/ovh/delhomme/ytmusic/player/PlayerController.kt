@@ -316,9 +316,11 @@ class PlayerController(
         positionMs: Long,
         autoplay: Boolean,
         title: String? = "File d'attente",
+        userQueueEnd: Int? = null,
     ) {
         if (tracks.isEmpty()) return
         if (title != null) queueTitle = title
+        this.userQueueEnd = (userQueueEnd ?: tracks.size).coerceIn(0, tracks.size)
         ensureService()
         connect()
         val c = controller ?: PlaybackService.Holder.player
