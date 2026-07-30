@@ -33,6 +33,10 @@ data class PlayerUiState(
     val repeat: RepeatMode = RepeatMode.Off,
     /** Libellé source : « File d'attente », nom de playlist, mix… */
     val queueTitle: String = "File d'attente",
+    /** Fin exclusive de la file lancée par l’utilisateur ; au-delà = suggestions auto. */
+    val userQueueEnd: Int = 0,
+    /** Lecture automatique (suggestions après la file). */
+    val autoplaySuggestions: Boolean = true,
 )
 
 /** Pont UI ↔ Media3 PlaybackService (lecture arrière-plan). */
@@ -59,6 +63,10 @@ class PlayerController(
     private var queueTitle: String = "File d'attente"
     private var shuffleEnabled: Boolean = false
     private var repeatMode: RepeatMode = RepeatMode.Off
+    private var userQueueEnd: Int = 0
+    private val playerPrefs = context.getSharedPreferences("ytm_player", Context.MODE_PRIVATE)
+    private var autoplaySuggestions: Boolean =
+        playerPrefs.getBoolean("autoplay_suggestions", true)
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
@@ -101,22 +109,83 @@ class PlayerController(
         controllerFuture = null
     }
 
-    fun play(tracks: List<TrackDto>, startIndex: Int = 0, title: String? = null) {
+    fun play(
+        tracks: List<TrackDto>,
+        startIndex: Int = 0,
+        title: String? = null,
+        /** Fin exclusive file utilisateur ; null = toute la file lancée est « user ». */
+        userQueueEnd: Int? = null,
+    ) {
         if (title != null) queueTitle = title
         ensureService()
         connect()
         warmAround(tracks, startIndex)
+        val playable = tracks.filter { it.isPlayable() }
+        this.userQueueEnd = (userQueueEnd ?: playable.size).coerceIn(0, playable.size)
         val c = controller
         if (c != null) {
             playNow(c, tracks, startIndex)
         } else {
             pending = tracks to startIndex
+            PlaybackService.Holder.queue = playable
             PlaybackService.Holder.player?.let { exo ->
                 exo.playTracks(streamUrl, tracks, startIndex)
                 applyRepeatShuffle(exo)
                 syncFrom(exo)
             }
         }
+    }
+
+    fun toggleAutoplaySuggestions() {
+        setAutoplaySuggestions(!autoplaySuggestions)
+    }
+
+    fun setAutoplaySuggestions(on: Boolean) {
+        autoplaySuggestions = on
+        playerPrefs.edit().putBoolean("autoplay_suggestions", on).apply()
+        if (!on) {
+            val queue = PlaybackService.Holder.queue
+            val end = userQueueEnd.coerceIn(0, queue.size).coerceAtLeast(
+                (_state.value.queueIndex + 1).coerceAtMost(queue.size),
+            )
+            val trimmed = queue.take(end)
+            userQueueEnd = trimmed.size
+            PlaybackService.Holder.queue = trimmed
+            val c = player()
+            if (c != null && trimmed.isNotEmpty()) {
+                val idx = c.currentMediaItemIndex.coerceIn(0, trimmed.lastIndex)
+                c.setMediaItems(trimmed.map { mediaItem(it) }, idx, c.currentPosition)
+                c.prepare()
+                syncFrom(c)
+            } else {
+                _state.value = _state.value.copy(
+                    queue = trimmed,
+                    queueSize = trimmed.size,
+                    userQueueEnd = userQueueEnd,
+                    autoplaySuggestions = false,
+                )
+            }
+            return
+        }
+        _state.value = _state.value.copy(autoplaySuggestions = true)
+    }
+
+    /** Ajoute des suggestions après la file utilisateur (zone auto). */
+    fun appendAutoTracks(tracks: List<TrackDto>) {
+        if (!autoplaySuggestions) return
+        val extra = tracks.filter { it.isPlayable() }
+        if (extra.isEmpty()) return
+        val c = player() ?: return
+        val queue = PlaybackService.Holder.queue.toMutableList()
+        val existing = queue.map { it.id }.toHashSet()
+        val toAdd = extra.filter { it.id !in existing }.take(80)
+        if (toAdd.isEmpty()) return
+        if (userQueueEnd <= 0) userQueueEnd = (_state.value.queueIndex + 1).coerceAtMost(queue.size)
+        queue.addAll(toAdd)
+        PlaybackService.Holder.queue = queue
+        toAdd.forEach { c.addMediaItem(mediaItem(it)) }
+        warmAround(queue, c.currentMediaItemIndex.coerceAtLeast(0))
+        syncFrom(c)
     }
 
     fun setQueueTitle(title: String) {
@@ -278,6 +347,7 @@ class PlayerController(
         val cur = p.currentMediaItemIndex.coerceAtLeast(0)
         if (index !in queue.indices || index == cur) return
         queue.removeAt(index)
+        if (index < userQueueEnd) userQueueEnd = (userQueueEnd - 1).coerceAtLeast(0)
         PlaybackService.Holder.queue = queue
         p.removeMediaItem(index)
         syncFrom(p)
@@ -289,6 +359,9 @@ class PlayerController(
         if (from !in queue.indices || to !in queue.indices || from == to) return
         val item = queue.removeAt(from)
         queue.add(to, item)
+        if (from < userQueueEnd) userQueueEnd -= 1
+        if (to < userQueueEnd) userQueueEnd += 1
+        userQueueEnd = userQueueEnd.coerceIn(0, queue.size)
         PlaybackService.Holder.queue = queue
         p.moveMediaItem(from, to)
         syncFrom(p)
@@ -373,6 +446,8 @@ class PlayerController(
         val insertAt = (idx + 1).coerceAtMost(queue.size)
         queue.add(insertAt, track)
         PlaybackService.Holder.queue = queue
+        if (insertAt < userQueueEnd) userQueueEnd += 1
+        else userQueueEnd = insertAt + 1
         c.addMediaItem(insertAt, mediaItem(track))
         StreamPrefetcher.warmTrack(ovh.delhomme.ytmusic.BuildConfig.API_BASE_URL, track.id)
         syncFrom(c)
@@ -385,9 +460,13 @@ class PlayerController(
             return
         }
         val queue = PlaybackService.Holder.queue.toMutableList()
-        queue.add(track)
+        val end = userQueueEnd.coerceIn(0, queue.size).coerceAtLeast(
+            (c.currentMediaItemIndex + 1).coerceAtMost(queue.size),
+        )
+        queue.add(end, track)
+        userQueueEnd = end + 1
         PlaybackService.Holder.queue = queue
-        c.addMediaItem(mediaItem(track))
+        c.addMediaItem(end, mediaItem(track))
         StreamPrefetcher.warmTrack(ovh.delhomme.ytmusic.BuildConfig.API_BASE_URL, track.id)
         syncFrom(c)
     }
@@ -417,6 +496,9 @@ class PlayerController(
         val idx = startIndex.coerceIn(0, playable.lastIndex)
         PlaybackService.Holder.queue = playable
         PlaybackService.Holder.index = idx
+        if (userQueueEnd <= 0 || userQueueEnd > playable.size) {
+            userQueueEnd = playable.size
+        }
         warmAround(playable, idx)
         player.setMediaItems(
             playable.map { mediaItem(it) },
@@ -481,6 +563,8 @@ class PlayerController(
             shuffle = shuffleEnabled,
             repeat = repeatMode,
             queueTitle = queueTitle,
+            userQueueEnd = userQueueEnd.coerceIn(0, queue.size),
+            autoplaySuggestions = autoplaySuggestions,
         )
         if (idx in queue.indices) PlaybackService.Holder.index = idx
     }

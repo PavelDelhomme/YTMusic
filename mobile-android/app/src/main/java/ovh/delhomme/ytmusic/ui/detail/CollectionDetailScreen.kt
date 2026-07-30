@@ -58,6 +58,7 @@ fun CollectionDetailScreen(
     reloadToken: Int = 0,
     onBack: () -> Unit,
     onPlay: (List<TrackDto>, Int) -> Unit,
+    onPlayNamed: (List<TrackDto>, Int, String) -> Unit = { tracks, idx, _ -> onPlay(tracks, idx) },
     onMore: (TrackDto, playlistId: String?) -> Unit,
 ) {
     val context = LocalContext.current
@@ -343,7 +344,7 @@ fun CollectionDetailScreen(
                                                         Toast.LENGTH_SHORT,
                                                     ).show()
                                                 } else {
-                                                    onPlay(mix, 0)
+                                                    onPlayNamed(mix, 0, "Radio")
                                                     Toast.makeText(
                                                         context,
                                                         "Radio démarrée",

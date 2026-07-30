@@ -15,6 +15,10 @@ type PlayerState = {
   current: Track | null;
   queue: Track[];
   queueIndex: number;
+  /** Fin exclusive de la file « utilisateur » (album / playlist lancée). Au-delà = autoplay. */
+  userQueueEnd: number;
+  /** Suggestions automatiques après la file (style YTM). */
+  autoplay: boolean;
   isPlaying: boolean;
   isLoading: boolean;
   shuffle: boolean;
@@ -27,7 +31,11 @@ type PlayerState = {
   lyrics: string | null;
   related: Track[];
   hydrated: boolean;
-  play: (track: Track, queue?: Track[], opts?: { preserveQueue?: boolean; noAutoRadio?: boolean }) => Promise<void>;
+  play: (
+    track: Track,
+    queue?: Track[],
+    opts?: { preserveQueue?: boolean; noAutoRadio?: boolean; keepUserBoundary?: boolean },
+  ) => Promise<void>;
   playQueue: (tracks: Track[], startIndex?: number) => Promise<void>;
   playAt: (index: number) => Promise<void>;
   toggle: () => void;
@@ -41,6 +49,8 @@ type PlayerState = {
   cycleRepeat: () => void;
   toggleQueue: () => void;
   toggleLyrics: () => void;
+  toggleAutoplay: () => void;
+  setAutoplay: (on: boolean) => void;
   addNext: (track: Track) => void;
   addToQueue: (track: Track) => void;
   moveInQueue: (fromIndex: number, toIndex: number) => void;
@@ -101,6 +111,8 @@ type PersistedPlayer = {
   current: Track | null;
   queue: Track[];
   queueIndex: number;
+  userQueueEnd?: number;
+  autoplay?: boolean;
   volume: number;
   shuffle: boolean;
   repeat: RepeatMode;
@@ -121,15 +133,24 @@ function slimTrack(t: Track): Track {
   };
 }
 
-function trimQueueForPersist(queue: Track[], queueIndex: number): { queue: Track[]; queueIndex: number } {
+function trimQueueForPersist(
+  queue: Track[],
+  queueIndex: number,
+  userQueueEnd: number,
+): { queue: Track[]; queueIndex: number; userQueueEnd: number } {
   if (queue.length <= QUEUE_KEEP_BEFORE + 1 + QUEUE_KEEP_AFTER) {
-    return { queue: queue.map(slimTrack), queueIndex };
+    return {
+      queue: queue.map(slimTrack),
+      queueIndex,
+      userQueueEnd: Math.min(userQueueEnd, queue.length),
+    };
   }
   const start = Math.max(0, queueIndex - QUEUE_KEEP_BEFORE);
   const end = Math.min(queue.length, queueIndex + 1 + QUEUE_KEEP_AFTER);
   return {
     queue: queue.slice(start, end).map(slimTrack),
     queueIndex: queueIndex - start,
+    userQueueEnd: Math.max(0, Math.min(userQueueEnd, end) - start),
   };
 }
 
@@ -157,12 +178,18 @@ function persistPlayer() {
       progress = audio.currentTime;
     }
 
-    const trimmed = trimQueueForPersist(s.queue || [], s.queueIndex || 0);
+    const trimmed = trimQueueForPersist(
+      s.queue || [],
+      s.queueIndex || 0,
+      typeof s.userQueueEnd === 'number' ? s.userQueueEnd : (s.queue || []).length,
+    );
     const payload: PersistedPlayer = {
-      v: 2,
+      v: 3,
       current: s.current ? slimTrack(s.current) : null,
       queue: trimmed.queue,
       queueIndex: trimmed.queueIndex,
+      userQueueEnd: trimmed.userQueueEnd,
+      autoplay: s.autoplay !== false,
       volume: s.volume,
       shuffle: s.shuffle,
       repeat: s.repeat,
@@ -177,10 +204,12 @@ function persistPlayer() {
       const qi = Math.max(0, s.queueIndex || 0);
       const q = (s.queue || []).slice(qi, qi + 25).map(slimTrack);
       const compact: PersistedPlayer = {
-        v: 2,
+        v: 3,
         current: s.current ? slimTrack(s.current) : q[0] || null,
         queue: q.length ? q : s.current ? [slimTrack(s.current)] : [],
         queueIndex: 0,
+        userQueueEnd: Math.min(typeof s.userQueueEnd === 'number' ? s.userQueueEnd : q.length, q.length),
+        autoplay: s.autoplay !== false,
         volume: s.volume,
         shuffle: s.shuffle,
         repeat: s.repeat,
@@ -387,12 +416,13 @@ function schedulePrefetch(queue: Track[], queueIndex: number) {
   prefetchAround(ids, idx, { ahead: 12, behind: 2, fullAhead: 4 });
 }
 
-/** Remplit la file avec un radio / similaires si plus rien à suivre (style YTM). */
+/** Remplit la zone autoplay (après userQueueEnd) — ne touche pas à la file utilisateur. */
 async function ensureAutoRadio(seedId: string) {
   const cur = usePlayer.getState();
-  const upcoming = cur.queue.slice(cur.queueIndex + 1).filter(isPlayable);
-  // Vise une file longue (scroll jusqu’à ~100 dans l’UI)
-  if (upcoming.length >= 40) {
+  if (cur.autoplay === false) return;
+  const userEnd = Math.max(cur.userQueueEnd || 0, cur.queueIndex + 1);
+  const autoUpcoming = cur.queue.slice(userEnd).filter(isPlayable);
+  if (autoUpcoming.length >= 40) {
     schedulePrefetch(cur.queue, cur.queueIndex);
     return;
   }
@@ -407,8 +437,10 @@ async function ensureAutoRadio(seedId: string) {
     );
     if (!pool.length) return;
     const state = usePlayer.getState();
-    const remaining = state.queue.slice(state.queueIndex + 1).filter(isPlayable);
-    if (remaining.length >= 40) return;
+    if (state.autoplay === false) return;
+    const boundary = Math.max(state.userQueueEnd || 0, state.queueIndex + 1);
+    const autoLen = state.queue.length - boundary;
+    if (autoLen >= 40) return;
     const existing = new Set(state.queue.map((t) => t.id));
     const extra: Track[] = [];
     for (const t of pool) {
@@ -418,7 +450,8 @@ async function ensureAutoRadio(seedId: string) {
       if (extra.length >= 80) break;
     }
     if (!extra.length) return;
-    const queue = [...state.queue.slice(0, state.queueIndex + 1), ...remaining, ...extra];
+    // Garde la file user intacte ; n’ajoute qu’en zone autoplay
+    const queue = [...state.queue, ...extra];
     usePlayer.setState({
       queue,
       related: related.length ? related : radio,
@@ -509,6 +542,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   current: null,
   queue: [],
   queueIndex: 0,
+  userQueueEnd: 0,
+  autoplay: true,
   isPlaying: false,
   isLoading: false,
   shuffle: false,
@@ -548,10 +583,16 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       saved.current ||
       (queue.length ? queue[queueIndex] || queue[0] : null) ||
       null;
+    const userQueueEnd =
+      typeof saved.userQueueEnd === 'number'
+        ? Math.min(Math.max(saved.userQueueEnd, queue.length ? queueIndex + 1 : 0), queue.length)
+        : queue.length;
     set({
       current,
       queue,
       queueIndex: queue.length ? queueIndex : 0,
+      userQueueEnd,
+      autoplay: saved.autoplay !== false,
       volume: typeof saved.volume === 'number' ? saved.volume : 0.9,
       shuffle: Boolean(saved.shuffle),
       repeat: saved.repeat || 'off',
@@ -577,10 +618,15 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         track,
         queue: queue?.length ? queue : [track],
       });
+      const remoteQueue = queue?.length ? queue : [track];
+      const remoteIdx = Math.max(0, remoteQueue.findIndex((t) => t.id === track.id));
       set({
         current: track,
-        queue: queue?.length ? queue : [track],
-        queueIndex: Math.max(0, (queue || [track]).findIndex((t) => t.id === track.id)),
+        queue: remoteQueue,
+        queueIndex: remoteIdx,
+        userQueueEnd: opts?.keepUserBoundary
+          ? Math.min(get().userQueueEnd || remoteQueue.length, remoteQueue.length)
+          : remoteQueue.length,
         isPlaying: true,
         isLoading: false,
       });
@@ -591,10 +637,14 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     // File = titres jouables seulement ; un seul titre → radio auto ensuite
     const nextQueue = filtered.length ? filtered : [track];
     const idx = Math.max(0, nextQueue.findIndex((t) => t.id === track.id));
+    const keepBoundary = Boolean(opts?.keepUserBoundary);
     set({
       current: track,
       queue: nextQueue,
       queueIndex: idx >= 0 ? idx : 0,
+      userQueueEnd: keepBoundary
+        ? Math.min(Math.max(get().userQueueEnd || 0, (idx >= 0 ? idx : 0) + 1), nextQueue.length)
+        : nextQueue.length,
       isLoading: true,
       progress: 0,
       lyrics: null,
@@ -610,8 +660,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       set({ isPlaying: true, isLoading: false });
       publish();
       void get().loadRelated(track.id);
-      // Toujours proposer une suite si la file est courte (1 titre ou fin proche)
-      if (!opts?.noAutoRadio) {
+      // Suite autoplay (zone après userQueueEnd) si activée
+      if (!opts?.noAutoRadio && get().autoplay !== false) {
         void ensureAutoRadio(track.id);
       }
     } catch (err) {
@@ -630,7 +680,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       set({ queueIndex: index, current: track, isPlaying: true });
       return;
     }
-    await get().play(track, queue, { preserveQueue: true });
+    await get().play(track, queue, { preserveQueue: true, keepUserBoundary: true });
     set({ queueIndex: index });
     publish();
   },
@@ -730,6 +780,16 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       return;
     }
     let nextIndex = queueIndex + 1;
+    const end = get().userQueueEnd || 0;
+    if (get().autoplay === false && nextIndex >= end) {
+      const audio = get().audioEl;
+      if (audio) audio.pause();
+      set({ isPlaying: false });
+      refreshMediaSession();
+      persistPlayer();
+      publish();
+      return;
+    }
     if (nextIndex >= queue.length) {
       if (repeat === 'all' || repeat === 'one') {
         nextIndex = 0;
@@ -875,6 +935,33 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     }
   },
 
+  toggleAutoplay: () => {
+    get().setAutoplay(!get().autoplay);
+  },
+
+  setAutoplay: (on) => {
+    if (!on) {
+      set((s) => {
+        const end = Math.max(s.userQueueEnd || 0, s.queueIndex + 1, s.current ? 1 : 0);
+        const trimmed = s.queue.slice(0, Math.min(end, s.queue.length));
+        return {
+          autoplay: false,
+          queue: trimmed,
+          userQueueEnd: trimmed.length,
+          queueIndex: Math.min(s.queueIndex, Math.max(0, trimmed.length - 1)),
+        };
+      });
+      persistPlayer();
+      publish();
+      return;
+    }
+    set({ autoplay: true });
+    persistPlayer();
+    publish();
+    const cur = get().current;
+    if (cur?.id) void ensureAutoRadio(cur.id);
+  },
+
   addNext: (track) => {
     const state = get();
     const empty = !state.current || state.queue.length === 0;
@@ -887,8 +974,12 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     }
     set((s) => {
       const q = [...s.queue];
-      q.splice(s.queueIndex + 1, 0, track);
-      return { queue: q };
+      const insertAt = s.queueIndex + 1;
+      q.splice(insertAt, 0, track);
+      let end = typeof s.userQueueEnd === 'number' ? s.userQueueEnd : s.queue.length;
+      if (insertAt < end) end += 1;
+      else end = insertAt + 1;
+      return { queue: q, userQueueEnd: end };
     });
     publish();
   },
@@ -901,7 +992,13 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       return;
     }
     if (!isActivePlayer()) sendCmd({ action: 'add_queue', track });
-    set((s) => ({ queue: [...s.queue, track] }));
+    set((s) => {
+      const q = [...s.queue];
+      let end = typeof s.userQueueEnd === 'number' ? s.userQueueEnd : s.queue.length;
+      end = Math.min(Math.max(end, s.queueIndex + 1), q.length);
+      q.splice(end, 0, track);
+      return { queue: q, userQueueEnd: end + 1 };
+    });
     publish();
   },
 
@@ -916,7 +1013,10 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       if (fromIndex === qi) qi = toIndex;
       else if (fromIndex < qi && toIndex >= qi) qi -= 1;
       else if (fromIndex > qi && toIndex <= qi) qi += 1;
-      return { queue: q, queueIndex: qi };
+      let end = typeof s.userQueueEnd === 'number' ? s.userQueueEnd : s.queue.length;
+      if (fromIndex < end) end -= 1;
+      if (toIndex < end) end += 1;
+      return { queue: q, queueIndex: qi, userQueueEnd: Math.max(qi + 1, end) };
     });
     publish();
   },
@@ -928,22 +1028,30 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       if (index === s.queueIndex) return s;
       const q = s.queue.filter((_, i) => i !== index);
       const qi = index < s.queueIndex ? s.queueIndex - 1 : s.queueIndex;
-      return { queue: q, queueIndex: Math.max(0, Math.min(qi, q.length - 1)) };
+      let end = typeof s.userQueueEnd === 'number' ? s.userQueueEnd : s.queue.length;
+      if (index < end) end -= 1;
+      return {
+        queue: q,
+        queueIndex: Math.max(0, Math.min(qi, q.length - 1)),
+        userQueueEnd: Math.min(end, q.length),
+      };
     });
     publish();
   },
 
   appendRelated: (tracks) => {
     set((s) => {
+      if (s.autoplay === false) return s;
       const ids = new Set(s.queue.map((t) => t.id));
       const extra = tracks.filter((t) => isPlayable(t) && !ids.has(t.id));
+      // Zone auto uniquement — ne pas étendre userQueueEnd
       return { queue: [...s.queue, ...extra], related: tracks };
     });
     publish();
   },
 
   clearQueue: () => {
-    set({ queue: [], queueIndex: 0 });
+    set({ queue: [], queueIndex: 0, userQueueEnd: 0 });
     publish();
   },
 
@@ -1068,6 +1176,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       current: state.current ?? get().current,
       queue: state.queue ?? get().queue,
       queueIndex: state.queueIndex ?? get().queueIndex,
+      userQueueEnd: state.userQueueEnd ?? get().userQueueEnd,
+      autoplay: state.autoplay ?? get().autoplay,
       isPlaying: state.isPlaying ?? get().isPlaying,
       progress: state.progress ?? get().progress,
       duration: state.duration ?? get().duration,

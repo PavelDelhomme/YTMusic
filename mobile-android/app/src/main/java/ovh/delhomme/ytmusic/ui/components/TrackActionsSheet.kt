@@ -333,7 +333,7 @@ fun TrackActionsSheet(
                     runCatching {
                         val mix = buildRadioQueue(container.api, "track", enriched.id, enriched)
                         if (mix.isNotEmpty()) {
-                            player.play(mix, 0, title = "En rapport")
+                            player.play(mix, 0, title = "En rapport", userQueueEnd = 1)
                             Toast.makeText(context, "Mix démarré", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -358,7 +358,7 @@ fun TrackActionsSheet(
                             val mix = buildRadioQueue(
                                 container.api, "track", enriched.id, enriched, stayClose = true,
                             )
-                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio")
+                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio", userQueueEnd = 1)
                         }
                         onDismiss()
                     }
@@ -369,7 +369,7 @@ fun TrackActionsSheet(
                     scope.launch {
                         runCatching {
                             val mix = buildRadioQueue(container.api, "album", albumId, enriched)
-                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio album")
+                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio album", userQueueEnd = 1)
                         }
                         onDismiss()
                     }
@@ -382,7 +382,7 @@ fun TrackActionsSheet(
                             val artistId = resolveArtistId(container.api, artist.id, artist.name)
                                 ?: return@runCatching
                             val mix = buildRadioQueue(container.api, "artist", artistId, enriched)
-                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio artiste")
+                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio artiste", userQueueEnd = 1)
                         }
                         onDismiss()
                     }

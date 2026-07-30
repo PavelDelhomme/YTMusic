@@ -9,16 +9,26 @@ export function QueuePanel() {
   const showLyrics = usePlayer((s) => s.showLyrics);
   const queue = usePlayer((s) => s.queue);
   const queueIndex = usePlayer((s) => s.queueIndex);
+  const userQueueEnd = usePlayer((s) => s.userQueueEnd);
+  const autoplay = usePlayer((s) => s.autoplay);
   const lyrics = usePlayer((s) => s.lyrics);
   const related = usePlayer((s) => s.related);
   const toggleQueue = usePlayer((s) => s.toggleQueue);
   const toggleLyrics = usePlayer((s) => s.toggleLyrics);
+  const toggleAutoplay = usePlayer((s) => s.toggleAutoplay);
   const playAt = usePlayer((s) => s.playAt);
   const appendRelated = usePlayer((s) => s.appendRelated);
   const play = usePlayer((s) => s.play);
   const [saveOpen, setSaveOpen] = useState(false);
 
   if (!showQueue && !showLyrics) return null;
+
+  const boundary = Math.min(
+    Math.max(userQueueEnd || 0, queueIndex + 1),
+    queue.length,
+  );
+  const userTracks = queue.slice(0, boundary);
+  const autoTracks = autoplay ? queue.slice(boundary) : [];
 
   return (
     <aside className="fixed bottom-[88px] right-0 top-0 z-30 flex w-full max-w-xl flex-col border-l border-yt-border bg-yt-surface shadow-2xl md:static md:bottom-auto md:z-10 md:max-w-lg lg:max-w-xl">
@@ -30,7 +40,7 @@ export function QueuePanel() {
           {!showLyrics && (
             <button
               type="button"
-              disabled={queue.length === 0}
+              disabled={userTracks.length === 0}
               onClick={() => setSaveOpen(true)}
               className="inline-flex items-center gap-1 rounded-full bg-white/8 px-2.5 py-1.5 text-xs text-white hover:bg-white/14 disabled:opacity-40"
               title="Enregistrer la file"
@@ -55,10 +65,12 @@ export function QueuePanel() {
           </div>
         ) : (
           <>
-            <div className="mb-2 px-2 text-xs text-yt-muted">{queue.length} titres</div>
-            {queue.map((track, i) => (
+            <div className="mb-2 px-2 text-xs text-yt-muted">
+              {userTracks.length} titre{userTracks.length > 1 ? 's' : ''} dans ta file
+            </div>
+            {userTracks.map((track, i) => (
               <div
-                key={`${track.id}-${i}`}
+                key={`u-${track.id}-${i}`}
                 className={i === queueIndex ? 'rounded-lg ring-1 ring-yt-red/40' : undefined}
               >
                 <TrackRow
@@ -73,36 +85,96 @@ export function QueuePanel() {
               </div>
             ))}
 
-            {related.length > 0 && (
-              <section className="mt-6 border-t border-yt-border pt-4">
-                <div className="mb-2 flex items-center justify-between px-2">
+            <section className="mt-5 border-t border-yt-border pt-4">
+              <div className="mb-2 flex items-center justify-between gap-2 px-2">
+                <div className="min-w-0">
                   <h4 className="flex items-center gap-2 font-display text-sm font-semibold">
-                    <Radio className="h-4 w-4 text-yt-red" /> Similaires
+                    <Radio className="h-4 w-4 text-yt-red" /> À suivre
                   </h4>
-                  <button
-                    type="button"
-                    className="text-xs text-yt-muted hover:text-white"
-                    onClick={() => appendRelated(related)}
-                  >
-                    Ajouter à la file
-                  </button>
+                  <p className="text-[11px] text-yt-muted">Lecture automatique</p>
                 </div>
-                {related.slice(0, 12).map((track) => (
-                  <div key={`rel-${track.id}`}>
-                    <TrackRow
-                      track={track}
-                      queue={related}
-                      hideIndex
-                      onPlay={() => void play(track, [...queue, track], { preserveQueue: true })}
-                    />
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autoplay}
+                  onClick={() => toggleAutoplay()}
+                  className={`relative h-7 w-12 shrink-0 rounded-full transition ${
+                    autoplay ? 'bg-yt-red' : 'bg-white/15'
+                  }`}
+                  title={autoplay ? 'Désactiver la lecture auto' : 'Activer la lecture auto'}
+                >
+                  <span
+                    className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition ${
+                      autoplay ? 'left-5' : 'left-0.5'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {!autoplay && (
+                <p className="px-2 py-3 text-center text-xs text-yt-muted">
+                  Lecture auto désactivée.
+                </p>
+              )}
+
+              {autoplay &&
+                autoTracks.map((track, i) => {
+                  const abs = boundary + i;
+                  return (
+                    <div key={`a-${track.id}-${abs}`}>
+                      <TrackRow
+                        track={track}
+                        queue={queue}
+                        queueIndex={abs}
+                        hideIndex
+                        draggable
+                        alwaysActions
+                        onPlay={() => void playAt(abs)}
+                      />
+                    </div>
+                  );
+                })}
+
+              {autoplay && autoTracks.length === 0 && related.length > 0 && (
+                <>
+                  <div className="mb-2 flex items-center justify-between px-2">
+                    <span className="text-xs text-yt-muted">Propositions</span>
+                    <button
+                      type="button"
+                      className="text-xs text-yt-muted hover:text-white"
+                      onClick={() => appendRelated(related)}
+                    >
+                      Ajouter à la file
+                    </button>
                   </div>
-                ))}
-              </section>
-            )}
+                  {related.slice(0, 12).map((track) => (
+                    <div key={`rel-${track.id}`}>
+                      <TrackRow
+                        track={track}
+                        queue={related}
+                        hideIndex
+                        onPlay={() =>
+                          void play(track, [...queue, track], {
+                            preserveQueue: true,
+                            keepUserBoundary: true,
+                          })
+                        }
+                      />
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {autoplay && autoTracks.length === 0 && related.length === 0 && (
+                <p className="px-2 py-3 text-center text-xs text-yt-muted">
+                  Chargement des suggestions…
+                </p>
+              )}
+            </section>
           </>
         )}
       </div>
-      <SaveQueueSheet open={saveOpen} tracks={queue} onClose={() => setSaveOpen(false)} />
+      <SaveQueueSheet open={saveOpen} tracks={userTracks} onClose={() => setSaveOpen(false)} />
     </aside>
   );
 }
