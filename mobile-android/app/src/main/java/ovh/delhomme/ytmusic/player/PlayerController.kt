@@ -149,6 +149,9 @@ class PlayerController(
     fun skipNext() {
         connect()
         val p = player() ?: PlaybackService.Holder.player ?: return
+        // REPEAT_MODE_ONE bloque le next ExoPlayer : on le désactive le temps du saut
+        val wasOne = repeatMode == RepeatMode.One
+        if (wasOne) p.repeatMode = Player.REPEAT_MODE_OFF
         when {
             p.hasNextMediaItem() -> {
                 p.seekToNextMediaItem()
@@ -168,6 +171,10 @@ class PlayerController(
                 p.play()
             }
         }
+        if (wasOne) {
+            p.repeatMode = Player.REPEAT_MODE_ONE
+            repeatMode = RepeatMode.One
+        }
         syncFrom(p)
     }
 
@@ -184,6 +191,8 @@ class PlayerController(
             syncFrom(p)
             return
         }
+        val wasOne = repeatMode == RepeatMode.One
+        if (wasOne) p.repeatMode = Player.REPEAT_MODE_OFF
         when {
             p.hasPreviousMediaItem() -> {
                 p.seekToPreviousMediaItem()
@@ -196,6 +205,10 @@ class PlayerController(
             }
             else -> p.seekTo(0L)
         }
+        if (wasOne) {
+            p.repeatMode = Player.REPEAT_MODE_ONE
+            repeatMode = RepeatMode.One
+        }
         syncFrom(p)
     }
 
@@ -203,7 +216,20 @@ class PlayerController(
         connect()
         val p = player() ?: PlaybackService.Holder.player ?: return
         if (forcePrevious) {
-            if (p.hasPreviousMediaItem()) p.seekToPreviousMediaItem()
+            val wasOne = repeatMode == RepeatMode.One
+            if (wasOne) p.repeatMode = Player.REPEAT_MODE_OFF
+            if (p.hasPreviousMediaItem()) {
+                p.seekToPreviousMediaItem()
+                p.play()
+            } else if (p.mediaItemCount > 1) {
+                val prev = if (p.currentMediaItemIndex > 0) p.currentMediaItemIndex - 1 else p.mediaItemCount - 1
+                p.seekTo(prev, 0L)
+                p.play()
+            }
+            if (wasOne) {
+                p.repeatMode = Player.REPEAT_MODE_ONE
+                repeatMode = RepeatMode.One
+            }
             syncFrom(p)
         } else {
             skipPrev()

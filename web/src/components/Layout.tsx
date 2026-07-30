@@ -536,7 +536,7 @@ export function Layout() {
           reportListenProgress(t, d);
         }}
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
-        onEnded={() => void next()}
+        onEnded={() => void next({ fromEnded: true })}
       />
     </div>
   );
