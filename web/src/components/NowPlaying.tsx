@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ListMusic, Mic2, Save, Sparkles } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { ListMusic, Mic2, Radio, Save, Sparkles } from 'lucide-react';
 import { api, thumb, type Track } from '../api';
 import { usePlayer } from '../store/player';
 import { CoverImage } from './CoverImage';
@@ -116,8 +116,18 @@ export function NowPlaying({
   onClose: () => void;
   initialTab?: NowPlayingTab;
 }) {
-  const { current, queue, queueIndex, related, playAt, appendRelated, loadRelated, progress, duration } =
-    usePlayer();
+  const current = usePlayer((s) => s.current);
+  const queue = usePlayer((s) => s.queue);
+  const queueIndex = usePlayer((s) => s.queueIndex);
+  const userQueueEnd = usePlayer((s) => s.userQueueEnd);
+  const autoplay = usePlayer((s) => s.autoplay);
+  const related = usePlayer((s) => s.related);
+  const playAt = usePlayer((s) => s.playAt);
+  const appendRelated = usePlayer((s) => s.appendRelated);
+  const loadRelated = usePlayer((s) => s.loadRelated);
+  const toggleAutoplay = usePlayer((s) => s.toggleAutoplay);
+  const progress = usePlayer((s) => s.progress);
+  const duration = usePlayer((s) => s.duration);
   const [tab, setTab] = useState<NowPlayingTab>(initialTab);
   const [lyricsText, setLyricsText] = useState<string | null>(null);
   const [lyricsTimed, setLyricsTimed] = useState<{ startMs: number; text: string }[] | null>(null);
@@ -175,17 +185,26 @@ export function NowPlaying({
 
   if (!open || !current) return null;
 
-  const upcomingAll = queue.slice(queueIndex + 1);
-  const upcoming = upcomingAll.slice(0, Math.min(queueVisible, QUEUE_MAX));
-  const canLoadMoreQueue = upcoming.length < Math.min(upcomingAll.length, QUEUE_MAX);
+  const boundary = Math.min(Math.max(userQueueEnd || 0, 0), queue.length);
+  const playingUser = queueIndex < boundary;
+  const userUpcomingAll = playingUser ? queue.slice(queueIndex + 1, boundary) : [];
+  const autoList = autoplay
+    ? playingUser
+      ? queue.slice(boundary)
+      : queue.slice(queueIndex)
+    : [];
+  const autoVisible = autoList.slice(0, Math.min(queueVisible + (playingUser ? 0 : 1), QUEUE_MAX));
+  const canLoadMoreQueue = autoVisible.length < Math.min(autoList.length, QUEUE_MAX);
   const relatedArtists = uniqueArtists(related);
   const relatedForQueue = related.filter((t) => !queue.some((q) => q.id === t.id)).slice(0, 20);
+  const userRemaining = playingUser ? 1 + userUpcomingAll.length : 0;
+  const saveTracks = queue.slice(0, Math.max(boundary, playingUser ? queueIndex + 1 : boundary));
 
   const onQueueScroll = () => {
     const el = queueScrollRef.current;
     if (!el || !canLoadMoreQueue) return;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
-      setQueueVisible((n) => Math.min(QUEUE_MAX, n + QUEUE_PAGE, upcomingAll.length));
+      setQueueVisible((n) => Math.min(QUEUE_MAX, n + QUEUE_PAGE, autoList.length));
     }
   };
 
@@ -222,84 +241,157 @@ export function NowPlaying({
           >
             {tab === 'queue' && (
               <div>
-                <div className="mb-3 flex items-center justify-between gap-2 px-1 pt-1">
-                  <p className="min-w-0 truncate text-xs text-yt-muted">
-                    Lecture à partir de :{' '}
-                    <span className="font-medium text-white">File d&apos;attente</span>
-                    <span className="ml-2 tabular-nums text-yt-muted">
-                      {queue.length > 0 ? `${queueIndex + 1} / ${queue.length}` : '0 / 0'}
-                    </span>
-                  </p>
-                  <button
-                    type="button"
-                    disabled={queue.length === 0}
-                    onClick={() => setSaveOpen(true)}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/16 disabled:opacity-40"
-                    title="Enregistrer la file dans une playlist"
-                  >
-                    <Save className="h-3.5 w-3.5" />
-                    Enregistrer
-                  </button>
-                </div>
-                <div className="mb-1 rounded-md bg-[#ff0033]/18 ring-1 ring-[#ff0033]/55">
-                  <TrackRow
-                    track={current}
-                    queue={queue}
-                    queueIndex={queueIndex}
-                    hideIndex
-                    draggable
-                    alwaysActions
-                  />
-                </div>
-                {upcoming.map((t, i) => {
-                  const abs = queueIndex + 1 + i;
-                  return (
-                    <TrackRow
-                      key={`up-${t.id}-${abs}`}
-                      track={t}
-                      queue={queue}
-                      queueIndex={abs}
-                      hideIndex
-                      draggable
-                      alwaysActions
-                      onPlay={() => void playAt(abs)}
-                    />
-                  );
-                })}
-                {canLoadMoreQueue && (
-                  <button
-                    type="button"
-                    className="w-full py-3 text-center text-xs text-yt-muted hover:text-white"
-                    onClick={() =>
-                      setQueueVisible((n) => Math.min(QUEUE_MAX, n + QUEUE_PAGE, upcomingAll.length))
-                    }
-                  >
-                    Charger plus ({upcoming.length} / {Math.min(upcomingAll.length, QUEUE_MAX)} à suivre)
-                  </button>
-                )}
-                {upcomingAll.length === 0 && (
-                  <p className="px-2 py-6 text-center text-sm text-yt-muted">
-                    Aucun titre à suivre — lance une radio ou un album.
-                  </p>
-                )}
+                <section>
+                  <div className="mb-3 flex items-center justify-between gap-2 px-1 pt-1">
+                    <p className="min-w-0 truncate text-xs text-yt-muted">
+                      <span className="font-medium text-white">File d&apos;attente</span>
+                      <span className="ml-2 tabular-nums text-yt-muted">
+                        {userRemaining} titre{userRemaining > 1 ? 's' : ''}
+                      </span>
+                    </p>
+                    <button
+                      type="button"
+                      disabled={saveTracks.length === 0}
+                      onClick={() => setSaveOpen(true)}
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/16 disabled:opacity-40"
+                      title="Enregistrer la file dans une playlist"
+                    >
+                      <Save className="h-3.5 w-3.5" />
+                      Enregistrer
+                    </button>
+                  </div>
+                  {playingUser ? (
+                    <>
+                      <div className="mb-1 rounded-md bg-[#ff0033]/18 ring-1 ring-[#ff0033]/55">
+                        <TrackRow
+                          track={current}
+                          queue={queue}
+                          queueIndex={queueIndex}
+                          hideIndex
+                          draggable
+                          alwaysActions
+                        />
+                      </div>
+                      {userUpcomingAll.map((t, i) => {
+                        const abs = queueIndex + 1 + i;
+                        return (
+                          <TrackRow
+                            key={`user-${t.id}-${abs}`}
+                            track={t}
+                            queue={queue}
+                            queueIndex={abs}
+                            hideIndex
+                            draggable
+                            alwaysActions
+                            onPlay={() => void playAt(abs)}
+                          />
+                        );
+                      })}
+                    </>
+                  ) : (
+                    <p className="px-2 py-3 text-center text-xs text-yt-muted">
+                      Ta file est terminée — suite en lecture auto.
+                    </p>
+                  )}
+                </section>
 
-                {relatedForQueue.length > 0 && (
-                  <section className="mt-6 border-t border-white/10 pt-4">
-                    <div className="mb-3 flex items-center justify-between px-1">
-                      <h3 className="font-display text-base font-semibold">Similaires</h3>
-                      <button
-                        type="button"
-                        className="text-xs text-yt-muted hover:text-white"
-                        onClick={() => appendRelated(relatedForQueue)}
-                      >
-                        Tout ajouter à la file
-                      </button>
+                <section className="mt-5 border-t border-white/10 pt-4">
+                  <div className="mb-3 flex items-center justify-between gap-2 px-1">
+                    <div className="min-w-0">
+                      <h3 className="flex items-center gap-2 font-display text-base font-semibold">
+                        <Radio className="h-4 w-4 text-yt-red" />
+                        À suivre
+                      </h3>
+                      <p className="mt-0.5 text-[11px] text-yt-muted">
+                        Lecture automatique · suggestions
+                      </p>
                     </div>
-                    {relatedForQueue.map((t) => (
-                      <TrackRow key={`qrel-${t.id}`} track={t} queue={related} alwaysActions hideIndex />
-                    ))}
-                  </section>
-                )}
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={autoplay}
+                      onClick={() => toggleAutoplay()}
+                      className={`relative h-7 w-12 shrink-0 rounded-full transition ${
+                        autoplay ? 'bg-yt-red' : 'bg-white/15'
+                      }`}
+                      title={autoplay ? 'Désactiver la lecture auto' : 'Activer la lecture auto'}
+                    >
+                      <span
+                        className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition ${
+                          autoplay ? 'left-5' : 'left-0.5'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {!autoplay && (
+                    <p className="px-2 py-4 text-center text-sm text-yt-muted">
+                      Lecture auto désactivée — la file s&apos;arrête après tes titres.
+                    </p>
+                  )}
+
+                  {autoplay &&
+                    autoVisible.map((t, i) => {
+                      const abs = (playingUser ? boundary : queueIndex) + i;
+                      const isCurrent = abs === queueIndex;
+                      return (
+                        <div
+                          key={`auto-${t.id}-${abs}`}
+                          className={
+                            isCurrent
+                              ? 'mb-1 rounded-md bg-[#ff0033]/18 ring-1 ring-[#ff0033]/55'
+                              : undefined
+                          }
+                        >
+                          <TrackRow
+                            track={t}
+                            queue={queue}
+                            queueIndex={abs}
+                            hideIndex
+                            draggable
+                            alwaysActions
+                            onPlay={() => void playAt(abs)}
+                          />
+                        </div>
+                      );
+                    })}
+
+                  {autoplay && canLoadMoreQueue && (
+                    <button
+                      type="button"
+                      className="w-full py-3 text-center text-xs text-yt-muted hover:text-white"
+                      onClick={() =>
+                        setQueueVisible((n) => Math.min(QUEUE_MAX, n + QUEUE_PAGE, autoList.length))
+                      }
+                    >
+                      Charger plus ({autoVisible.length} / {Math.min(autoList.length, QUEUE_MAX)})
+                    </button>
+                  )}
+
+                  {autoplay && autoList.length === 0 && (
+                    <p className="px-2 py-4 text-center text-sm text-yt-muted">
+                      Chargement des suggestions…
+                    </p>
+                  )}
+
+                  {autoplay && relatedForQueue.length > 0 && autoList.length === 0 && (
+                    <div className="mt-2">
+                      <div className="mb-2 flex items-center justify-between px-1">
+                        <span className="text-xs text-yt-muted">Propositions</span>
+                        <button
+                          type="button"
+                          className="text-xs text-yt-muted hover:text-white"
+                          onClick={() => appendRelated(relatedForQueue)}
+                        >
+                          Tout ajouter
+                        </button>
+                      </div>
+                      {relatedForQueue.map((t) => (
+                        <TrackRow key={`qrel-${t.id}`} track={t} queue={related} alwaysActions hideIndex />
+                      ))}
+                    </div>
+                  )}
+                </section>
               </div>
             )}
 
@@ -377,7 +469,7 @@ export function NowPlaying({
 
       <SaveQueueSheet
         open={saveOpen}
-        tracks={queue}
+        tracks={saveTracks}
         onClose={() => setSaveOpen(false)}
       />
     </div>

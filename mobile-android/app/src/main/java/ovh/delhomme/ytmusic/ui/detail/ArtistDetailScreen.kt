@@ -62,6 +62,7 @@ fun ArtistDetailScreen(
     reloadToken: Int = 0,
     onBack: () -> Unit,
     onPlay: (List<TrackDto>, Int) -> Unit,
+    onPlayNamed: (List<TrackDto>, Int, String) -> Unit = { tracks, idx, _ -> onPlay(tracks, idx) },
     onMore: (TrackDto) -> Unit,
     onOpenDetail: (TrackDto) -> Unit,
 ) {
@@ -281,7 +282,7 @@ fun ArtistDetailScreen(
                                                 if (mix.isEmpty()) {
                                                     Toast.makeText(context, "Radio indisponible", Toast.LENGTH_SHORT).show()
                                                 } else {
-                                                    onPlay(mix, 0)
+                                                    onPlayNamed(mix, 0, "Radio")
                                                 }
                                             }
                                         },

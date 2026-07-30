@@ -161,7 +161,16 @@ fun YtMusicAppContent(container: AppContainer) {
                     showNowPlaying = false
                 },
                 onPlayNamed = { tracks, idx, title ->
-                    player.play(tracks, idx, title)
+                    val radioish =
+                        title.contains("radio", ignoreCase = true) ||
+                            title.equals("Mix", ignoreCase = true) ||
+                            title.contains("rapport", ignoreCase = true)
+                    player.play(
+                        tracks,
+                        idx,
+                        title,
+                        userQueueEnd = if (radioish) 1 else null,
+                    )
                     showNowPlaying = false
                 },
                 onLoggedOut = { loggedIn = false },
@@ -169,7 +178,7 @@ fun YtMusicAppContent(container: AppContainer) {
                     val t = player.state.value.track ?: return@MainTabs
                     scope.launch {
                         val mix = buildRadioQueue(container.api, "track", t.id, t)
-                        if (mix.isNotEmpty()) player.play(mix, 0)
+                        if (mix.isNotEmpty()) player.play(mix, 0, userQueueEnd = 1)
                     }
                 },
             )
@@ -566,6 +575,7 @@ private fun MainTabs(
                         reloadToken = detailReloadToken,
                         onBack = { nav.popBackStack() },
                         onPlay = onPlayTracks,
+                        onPlayNamed = onPlayNamed,
                         onMore = { track ->
                             menuTrack = track
                             menuPlaylistId = null
@@ -580,6 +590,7 @@ private fun MainTabs(
                         reloadToken = detailReloadToken,
                         onBack = { nav.popBackStack() },
                         onPlay = onPlayTracks,
+                        onPlayNamed = onPlayNamed,
                         onMore = { track, playlistId ->
                             menuTrack = track
                             menuPlaylistId = playlistId

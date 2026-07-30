@@ -57,6 +57,8 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -145,6 +147,25 @@ fun NowPlayingScreen(
     val queueListState = rememberLazyListState()
     val queueOpen = queueProgress.value > 0.55f
     val queueInteractive = queueProgress.value > 0.02f
+
+    // Remplit la zone « À suivre » (suggestions auto) sans toucher à la file user
+    LaunchedEffect(ui.track?.id, ui.autoplaySuggestions, ui.userQueueEnd, ui.queue.size) {
+        if (!ui.autoplaySuggestions) return@LaunchedEffect
+        val seed = ui.track?.id ?: return@LaunchedEffect
+        val boundary = ui.userQueueEnd.coerceIn(0, ui.queue.size)
+        val autoLen = (ui.queue.size - boundary).coerceAtLeast(0)
+        if (autoLen >= 40) return@LaunchedEffect
+        val related = runCatching { container.api.related(seed) }.getOrNull()
+        val up = runCatching { container.api.upNext(seed).tracks }.getOrDefault(emptyList())
+        val pool = (
+            up +
+                related?.radio.orEmpty() +
+                related?.related.orEmpty() +
+                related?.tracks.orEmpty()
+            )
+            .filter { it.isPlayable() && it.id != seed }
+        if (pool.isNotEmpty()) player.appendAutoTracks(pool)
+    }
 
     fun settleOrClose() {
         scope.launch {
@@ -537,7 +558,7 @@ fun NowPlayingScreen(
                                             scope.launch {
                                                 val mix = buildRadioQueue(container.api, "track", track.id, track)
                                                 if (mix.isNotEmpty()) {
-                                                    player.play(mix, 0, title = "Mix")
+                                                    player.play(mix, 0, title = "Mix", userQueueEnd = 1)
                                                     Toast.makeText(context, "Mix démarré", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
@@ -643,8 +664,8 @@ fun NowPlayingScreen(
 
                     item {
                         QueueSectionHeader(
-                            title = ui.queueTitle,
-                            count = "${ui.queueIndex + 1} / ${ui.queue.size.coerceAtLeast(1)}",
+                            title = "File d'attente",
+                            count = "${ui.userQueueEnd.coerceIn(0, ui.queue.size)}",
                             onExpand = { expandQueue() },
                             onSave = { showSaveQueue = true },
                             onQueueDrag = ::onQueueDrag,
@@ -652,7 +673,11 @@ fun NowPlayingScreen(
                         )
                     }
 
-                    itemsIndexed(ui.queue, key = { i, t -> "${t.id}-$i" }) { index, item ->
+                    val boundary = ui.userQueueEnd.coerceIn(0, ui.queue.size)
+                    itemsIndexed(
+                        ui.queue.take(boundary),
+                        key = { i, t -> "iu-${t.id}-$i" },
+                    ) { index, item ->
                         QueueTrackRow(
                             track = item,
                             index = index,
@@ -661,6 +686,47 @@ fun NowPlayingScreen(
                             onLongClick = { onMore?.invoke(item) },
                             onMove = { from, to -> player.moveInQueue(from, to) },
                         )
+                    }
+                    item {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("À suivre", fontWeight = FontWeight.SemiBold, color = PlayerFg)
+                                Text(
+                                    "Lecture automatique",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = PlayerMuted,
+                                )
+                            }
+                            Switch(
+                                checked = ui.autoplaySuggestions,
+                                onCheckedChange = { player.toggleAutoplaySuggestions() },
+                                colors = SwitchDefaults.colors(
+                                    checkedTrackColor = SeekRed,
+                                    checkedThumbColor = Color.White,
+                                ),
+                            )
+                        }
+                    }
+                    if (ui.autoplaySuggestions) {
+                        itemsIndexed(
+                            ui.queue.drop(boundary),
+                            key = { i, t -> "ia-${t.id}-${boundary + i}" },
+                        ) { i, item ->
+                            val abs = boundary + i
+                            QueueTrackRow(
+                                track = item,
+                                index = abs,
+                                highlighted = abs == ui.queueIndex,
+                                onClick = { player.playAt(abs) },
+                                onLongClick = { onMore?.invoke(item) },
+                                onMove = { from, to -> player.moveInQueue(from, to) },
+                            )
+                        }
                     }
                     item { Spacer(Modifier.height(40.dp)) }
                 }
@@ -674,6 +740,7 @@ fun NowPlayingScreen(
                         onMore = onMore,
                         onMove = player::moveInQueue,
                         onSave = { showSaveQueue = true },
+                        onToggleAutoplay = player::toggleAutoplaySuggestions,
                         modifier = Modifier
                             .fillMaxSize()
                             .graphicsLayer {
@@ -698,7 +765,7 @@ fun NowPlayingScreen(
     if (showSaveQueue) {
         SaveQueueSheet(
             container = container,
-            queue = ui.queue,
+            queue = ui.queue.take(ui.userQueueEnd.coerceIn(0, ui.queue.size)).ifEmpty { ui.queue },
             defaultName = ui.queueTitle.takeIf { it != "File d'attente" } ?: "Ma file d'attente",
             onDismiss = { showSaveQueue = false },
             onSaved = { name ->
@@ -908,8 +975,13 @@ private fun QueueExpandedBody(
     onMore: ((TrackDto) -> Unit)?,
     onMove: (Int, Int) -> Unit,
     onSave: () -> Unit,
+    onToggleAutoplay: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val boundary = ui.userQueueEnd.coerceIn(0, ui.queue.size)
+    val userTracks = ui.queue.take(boundary)
+    val autoTracks = if (ui.autoplaySuggestions) ui.queue.drop(boundary) else emptyList()
+
     Column(modifier.fillMaxWidth()) {
         Row(
             Modifier
@@ -918,13 +990,13 @@ private fun QueueExpandedBody(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                ui.queueTitle,
+                "File d'attente",
                 Modifier.weight(1f),
                 fontWeight = FontWeight.SemiBold,
                 color = PlayerFg,
             )
             Text(
-                "${ui.queueIndex + 1} / ${ui.queue.size.coerceAtLeast(1)}",
+                "${userTracks.size}",
                 style = MaterialTheme.typography.labelMedium,
                 color = PlayerMuted,
                 modifier = Modifier.padding(end = 8.dp),
@@ -934,12 +1006,62 @@ private fun QueueExpandedBody(
             }
         }
         LazyColumn(Modifier.fillMaxSize(), state = listState) {
-            itemsIndexed(ui.queue, key = { i, t -> "q-${t.id}-$i" }) { index, item ->
+            itemsIndexed(userTracks, key = { i, t -> "u-${t.id}-$i" }) { index, item ->
                 QueueTrackRow(
                     track = item,
                     index = index,
                     highlighted = index == ui.queueIndex,
                     onClick = { onPlayAt(index) },
+                    onLongClick = { onMore?.invoke(item) },
+                    onMove = onMove,
+                )
+            }
+            item {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "À suivre",
+                            fontWeight = FontWeight.SemiBold,
+                            color = PlayerFg,
+                        )
+                        Text(
+                            "Lecture automatique",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PlayerMuted,
+                        )
+                    }
+                    Switch(
+                        checked = ui.autoplaySuggestions,
+                        onCheckedChange = { onToggleAutoplay() },
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = SeekRed,
+                            checkedThumbColor = Color.White,
+                        ),
+                    )
+                }
+            }
+            if (!ui.autoplaySuggestions) {
+                item {
+                    Text(
+                        "Lecture auto désactivée",
+                        Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = PlayerMuted,
+                    )
+                }
+            }
+            itemsIndexed(autoTracks, key = { i, t -> "a-${t.id}-${boundary + i}" }) { i, item ->
+                val abs = boundary + i
+                QueueTrackRow(
+                    track = item,
+                    index = abs,
+                    highlighted = abs == ui.queueIndex,
+                    onClick = { onPlayAt(abs) },
                     onLongClick = { onMore?.invoke(item) },
                     onMove = onMove,
                 )
