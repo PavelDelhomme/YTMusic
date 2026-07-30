@@ -87,13 +87,19 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
         val filter = _state.value.filter
         job = viewModelScope.launch {
             delay(280)
-            _state.value = _state.value.copy(loading = true)
+            val currentQ = _state.value.query.trim()
+            val currentFilter = _state.value.filter
+            if (currentQ.length < 2) return@launch
+            _state.value = _state.value.copy(loading = true, error = null, sections = emptyList())
             try {
                 container.ensureFreshToken()
-                val res = container.api.search(q.trim(), filter)
+                val res = container.api.search(currentQ, currentFilter)
+                // Ignore si l’utilisateur a déjà changé la requête
+                if (_state.value.query.trim() != currentQ || _state.value.filter != currentFilter) {
+                    return@launch
+                }
                 val sections = buildList {
                     res.topResult?.let {
-                        // Évite de dupliquer le top dans la 1re section titres
                         add(SearchSection("Meilleur résultat", listOf(it)))
                     }
                     val topId = res.topResult?.id
@@ -110,8 +116,9 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
                         add(SearchSection("Vidéos", res.videos.filter { it.id != topId }.take(12)))
                     }
                 }
-                _state.value = _state.value.copy(loading = false, sections = sections)
+                _state.value = _state.value.copy(loading = false, sections = sections, error = null)
             } catch (e: Exception) {
+                if (_state.value.query.trim() != currentQ) return@launch
                 _state.value = _state.value.copy(loading = false, error = e.message)
             }
         }
