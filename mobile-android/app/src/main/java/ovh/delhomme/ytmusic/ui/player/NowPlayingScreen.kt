@@ -285,8 +285,12 @@ fun NowPlayingScreen(
 
     LaunchedEffect(Unit) {
         while (isActive) {
-            player.tick()
-            delay(400)
+            if (ui.playing) {
+                player.tick()
+                delay(500)
+            } else {
+                delay(1_200)
+            }
         }
     }
 
