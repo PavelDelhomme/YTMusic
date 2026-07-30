@@ -27,16 +27,22 @@ export function wireMediaSession() {
   const play = () => {
     const p = usePlayer.getState();
     if (!p.current) return;
-    if (!p.isPlaying) p.toggle();
+    const audio = p.audioEl;
+    if (audio && !audio.paused) return;
+    p.toggle();
   };
   const pause = () => {
     const p = usePlayer.getState();
+    const audio = p.audioEl;
+    if (audio && !audio.paused) {
+      audio.pause();
+      usePlayer.setState({ isPlaying: false });
+      updateMediaSessionMetadata();
+      return;
+    }
     if (p.isPlaying) p.toggle();
   };
-  const stop = () => {
-    const p = usePlayer.getState();
-    if (p.isPlaying) p.toggle();
-  };
+  const stop = () => pause();
 
   setMediaHandler('play', play);
   setMediaHandler('pause', pause);
@@ -144,9 +150,15 @@ export function installMediaKeys(): () => void {
       if (!p.current && key !== 'MediaStop') return;
       if (key === 'MediaPlayPause') p.toggle();
       else if (key === 'MediaPlay') {
-        if (!p.isPlaying) p.toggle();
+        const audio = p.audioEl;
+        if (audio ? audio.paused : !p.isPlaying) p.toggle();
       } else if (key === 'MediaPause' || key === 'MediaStop') {
-        if (p.isPlaying) p.toggle();
+        const audio = p.audioEl;
+        if (audio && !audio.paused) {
+          audio.pause();
+          usePlayer.setState({ isPlaying: false });
+          updateMediaSessionMetadata();
+        } else if (p.isPlaying) p.toggle();
       } else if (key === 'MediaTrackNext') void p.next();
       else if (key === 'MediaTrackPrevious') void p.prev();
       return;

@@ -149,11 +149,24 @@ class PlayerController(
     fun skipNext() {
         connect()
         val p = player() ?: PlaybackService.Holder.player ?: return
-        if (p.hasNextMediaItem()) {
-            p.seekToNextMediaItem()
-        } else if (repeatMode == RepeatMode.All && p.mediaItemCount > 0) {
-            p.seekTo(0, 0L)
-            p.play()
+        when {
+            p.hasNextMediaItem() -> {
+                p.seekToNextMediaItem()
+                p.play()
+            }
+            repeatMode == RepeatMode.All && p.mediaItemCount > 0 -> {
+                p.seekTo(0, 0L)
+                p.play()
+            }
+            p.mediaItemCount > 1 -> {
+                val next = (p.currentMediaItemIndex + 1) % p.mediaItemCount
+                p.seekTo(next, 0L)
+                p.play()
+            }
+            else -> {
+                p.seekTo(0L)
+                p.play()
+            }
         }
         syncFrom(p)
     }
@@ -161,7 +174,7 @@ class PlayerController(
     /**
      * Précédent YTM :
      * - si position > 3 s → retour début du titre
-     * - sinon → titre précédent dans la file (pas une sélection UI non démarrée)
+     * - sinon → titre précédent dans la file
      */
     fun skipPrev() {
         connect()
@@ -169,14 +182,21 @@ class PlayerController(
         if (p.currentPosition > 3000L) {
             p.seekTo(0L)
             syncFrom(p)
-        } else if (p.hasPreviousMediaItem()) {
-            p.seekToPreviousMediaItem()
-            syncFrom(p)
-        } else if (repeatMode == RepeatMode.All && p.mediaItemCount > 0) {
-            p.seekTo(p.mediaItemCount - 1, 0L)
-            p.play()
-            syncFrom(p)
+            return
         }
+        when {
+            p.hasPreviousMediaItem() -> {
+                p.seekToPreviousMediaItem()
+                p.play()
+            }
+            p.mediaItemCount > 1 -> {
+                val prev = if (p.currentMediaItemIndex > 0) p.currentMediaItemIndex - 1 else p.mediaItemCount - 1
+                p.seekTo(prev, 0L)
+                p.play()
+            }
+            else -> p.seekTo(0L)
+        }
+        syncFrom(p)
     }
 
     fun skipPrevOrRestart(forcePrevious: Boolean) {

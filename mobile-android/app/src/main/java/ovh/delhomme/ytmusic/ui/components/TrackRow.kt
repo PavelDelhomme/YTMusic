@@ -161,7 +161,7 @@ fun TrackRow(
     }
 }
 
-/** Mini-lecteur style YT / Google Music — seek en haut, titre, artiste, cast, play. */
+/** Mini-lecteur style YT / Google Music — seek, prev, play, next. */
 @Composable
 fun MiniPlayerBar(
     track: TrackDto,
@@ -171,6 +171,8 @@ fun MiniPlayerBar(
     onCast: () -> Unit,
     onOpen: () -> Unit,
     onSeek: ((Float) -> Unit)? = null,
+    onPrev: (() -> Unit)? = null,
+    onNext: (() -> Unit)? = null,
     onOpenArtist: ((id: String?, name: String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -294,6 +296,16 @@ fun MiniPlayerBar(
                     tint = Color(0xFFF5F5F5),
                 )
             }
+            if (onPrev != null) {
+                IconButton(onClick = onPrev) {
+                    Icon(
+                        Icons.Default.SkipPrevious,
+                        contentDescription = "Précédent",
+                        tint = Color(0xFFF5F5F5),
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
+            }
             IconButton(onClick = onToggle) {
                 Icon(
                     if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -301,6 +313,16 @@ fun MiniPlayerBar(
                     tint = Color(0xFFF5F5F5),
                     modifier = Modifier.size(28.dp),
                 )
+            }
+            if (onNext != null) {
+                IconButton(onClick = onNext) {
+                    Icon(
+                        Icons.Default.SkipNext,
+                        contentDescription = "Suivant",
+                        tint = Color(0xFFF5F5F5),
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
             }
         }
     }

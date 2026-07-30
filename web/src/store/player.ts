@@ -637,63 +637,74 @@ export const usePlayer = create<PlayerState>((set, get) => ({
 
   toggle: () => {
     if (!isActivePlayer()) {
-      const playing = get().isPlaying;
+      const audio = get().audioEl;
+      const playing = audio ? !audio.paused : get().isPlaying;
       sendCmd({ action: playing ? 'pause' : 'resume' });
       set({ isPlaying: !playing });
       refreshMediaSession();
       return;
     }
-    const { audioEl, isPlaying, current, queue, progress } = get();
+    const { audioEl, current, queue, progress } = get();
     if (!audioEl) {
       if (current) {
         void get().play(current, queue.length ? queue : [current], { preserveQueue: true });
       }
       return;
     }
-    if (isPlaying) {
+    // Source de vérité = élément audio (évite icône pause alors que ça joue encore)
+    const actuallyPlaying = !audioEl.paused && !audioEl.ended;
+    if (actuallyPlaying) {
       audioEl.pause();
       set({ isPlaying: false });
       refreshMediaSession();
       persistPlayer();
-    } else {
-      const needsLoad =
-        !audioEl.src ||
-        audioEl.src === window.location.href ||
-        (current && audioEl.dataset.trackId !== current.id);
-      if (needsLoad && current) {
-        void (async () => {
-          set({ isLoading: true });
-          try {
-            await restoreAudioFromPersisted();
-            if (progress > 0) {
-              try {
-                audioEl.currentTime = progress;
-              } catch {
-                /* ignore */
-              }
-            }
-            await audioEl.play();
-            set({ isPlaying: true, isLoading: false });
-            refreshMediaSession();
-            publish();
-            if (current.id) void ensureAutoRadio(current.id);
-          } catch (err) {
-            console.error(err);
-            // Fallback : rejouer via play()
-            await get().play(current, queue.length ? queue : [current], {
-              preserveQueue: true,
-              noAutoRadio: false,
-            });
-          }
-        })();
-        return;
-      }
-      void audioEl.play().then(() => {
-        set({ isPlaying: true });
-        refreshMediaSession();
-      });
+      publish();
+      return;
     }
-    publish();
+    const needsLoad =
+      !audioEl.src ||
+      audioEl.src === window.location.href ||
+      (current && audioEl.dataset.trackId !== current.id);
+    if (needsLoad && current) {
+      void (async () => {
+        set({ isLoading: true });
+        try {
+          await restoreAudioFromPersisted();
+          if (progress > 0) {
+            try {
+              audioEl.currentTime = progress;
+            } catch {
+              /* ignore */
+            }
+          }
+          await audioEl.play();
+          set({ isPlaying: true, isLoading: false });
+          refreshMediaSession();
+          publish();
+          if (current.id) void ensureAutoRadio(current.id);
+        } catch (err) {
+          console.error(err);
+          await get().play(current, queue.length ? queue : [current], {
+            preserveQueue: true,
+            noAutoRadio: false,
+          });
+        }
+      })();
+      return;
+    }
+    void audioEl
+      .play()
+      .then(() => {
+        set({ isPlaying: true, isLoading: false });
+        refreshMediaSession();
+        publish();
+      })
+      .catch((err) => {
+        console.error(err);
+        if (current) {
+          void get().play(current, queue.length ? queue : [current], { preserveQueue: true });
+        }
+      });
   },
 
   next: async () => {
@@ -702,7 +713,15 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       return;
     }
     const { queue, queueIndex, repeat, shuffle, current, progress } = get();
-    if (!queue.length) return;
+    if (!queue.length) {
+      if (current?.id) {
+        await ensureAutoRadio(current.id);
+        const q = get().queue;
+        const idx = get().queueIndex;
+        if (idx + 1 < q.length) await get().playAt(idx + 1);
+      }
+      return;
+    }
     reportSkipIfEarly(progress);
     if (repeat === 'one') {
       await get().playAt(queueIndex);
@@ -712,27 +731,29 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     if (nextIndex >= queue.length) {
       if (repeat === 'all') {
         nextIndex = 0;
-      } else {
-        // Fin de file → charger des similaires puis rejouer next
-        if (current?.id) {
-          await ensureAutoRadio(current.id);
-          const q = get().queue;
-          if (get().queueIndex + 1 < q.length) {
-            await get().playAt(get().queueIndex + 1);
-          }
+      } else if (current?.id) {
+        await ensureAutoRadio(current.id);
+        const q = get().queue;
+        const idx = get().queueIndex;
+        if (idx + 1 < q.length) {
+          await get().playAt(idx + 1);
+          const played = get().current;
+          if (played?.id) void ensureAutoRadio(played.id);
         }
+        return;
+      } else {
         return;
       }
     }
-    if (shuffle) {
-      const remaining = queue.filter((_, i) => i !== queueIndex);
-      const shuffled = shuffleArray(remaining);
-      const nextTrack = shuffled[0];
-      if (nextTrack) {
-        const newQueue = [queue[queueIndex], ...shuffled];
-        set({ queue: newQueue });
-        await get().play(nextTrack, newQueue, { preserveQueue: true, noAutoRadio: true });
-        void ensureAutoRadio(nextTrack.id);
+    if (shuffle && queue.length > 1) {
+      const candidates = queue
+        .map((t, i) => ({ t, i }))
+        .filter((x) => x.i !== queueIndex);
+      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      if (pick) {
+        await get().playAt(pick.i);
+        const played = get().current;
+        if (played?.id) void ensureAutoRadio(played.id);
         return;
       }
     }
@@ -746,14 +767,26 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       sendCmd({ action: 'prev' });
       return;
     }
-    const { audioEl, progress, queueIndex } = get();
+    const { audioEl, progress, queueIndex, queue } = get();
     if (progress > 3 && audioEl) {
       audioEl.currentTime = 0;
       set({ progress: 0 });
       publish();
       return;
     }
-    if (queueIndex > 0) await get().playAt(queueIndex - 1);
+    if (queueIndex > 0) {
+      await get().playAt(queueIndex - 1);
+      return;
+    }
+    // Début de file : restart le titre courant
+    if (audioEl) {
+      audioEl.currentTime = 0;
+      set({ progress: 0 });
+      if (audioEl.paused) void get().toggle();
+      publish();
+    } else if (queue[0]) {
+      await get().playAt(0);
+    }
   },
 
   setProgress: (n) => {
