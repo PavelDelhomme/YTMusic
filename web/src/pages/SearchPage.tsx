@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, type Track } from '../api';
 import { TrackRow } from '../components/TrackRow';
@@ -28,6 +28,7 @@ export function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [history, setHistory] = useState<string[]>([]);
+  const searchSeq = useRef(0);
 
   useEffect(() => {
     if (q) return;
@@ -49,29 +50,29 @@ export function SearchPage() {
   }, [q]);
 
   useEffect(() => {
-    if (!q) return;
-    let cancelled = false;
-    const reqId = `${q}::${filter}::${Date.now()}`;
+    if (!q) {
+      setData(null);
+      setLoading(false);
+      setError('');
+      return;
+    }
+    const seq = ++searchSeq.current;
     setLoading(true);
     setError('');
     setData(null); // évite d’afficher l’ancienne recherche (Keny…) pendant le chargement
     api
       .search(q, filter)
       .then((res) => {
-        if (cancelled) return;
+        if (searchSeq.current !== seq) return;
         setData(res);
       })
       .catch((e) => {
-        if (cancelled) return;
+        if (searchSeq.current !== seq) return;
         setError(String(e.message || e));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (searchSeq.current === seq) setLoading(false);
       });
-    return () => {
-      cancelled = true;
-      void reqId;
-    };
   }, [q, filter]);
 
   const noteClick = (track: Track) => {
@@ -153,7 +154,7 @@ export function SearchPage() {
       )}
 
       {data && (
-        <div className="space-y-8">
+        <div key={`${q}::${filter}`} className="space-y-8">
           {data.topResult && filter === 'all' && (
             <section>
               <h2 className="mb-3 font-display text-xl font-semibold">Meilleur résultat</h2>

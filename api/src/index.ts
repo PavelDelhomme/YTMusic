@@ -777,7 +777,9 @@ app.get('/api/search', accountRequired, async (req, res) => {
     const noHistory =
       req.query.noHistory === '1' ||
       req.query.noHistory === 'true' ||
-      String(req.query.source || '') === 'prefs';
+      String(req.query.source || '') === 'prefs' ||
+      // Frappe live / très courte : ne pas polluer l’historique
+      q.length < 3;
     if (!noHistory) addSearchHistory(req.userId!, q);
     res.json(await search(q, String(req.query.filter || 'all'), { userId: req.userId! }));
   } catch (err) {

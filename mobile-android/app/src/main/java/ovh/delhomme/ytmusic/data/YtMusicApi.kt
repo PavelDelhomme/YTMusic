@@ -259,7 +259,11 @@ interface YtMusicApi {
     suspend fun search(
         @Query("q") q: String,
         @Query("filter") filter: String = "all",
+        @Query("noHistory") noHistory: String? = null,
     ): SearchResponse
+
+    @POST("api/search/history")
+    suspend fun recordSearchClick(@Body body: Map<String, String>): Map<String, Any>
 
     @GET("api/track/{id}")
     suspend fun track(@Path("id") id: String): TrackInfoResponse

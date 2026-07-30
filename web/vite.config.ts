@@ -58,8 +58,17 @@ export default defineConfig({
             },
           },
           {
+            // Recherche / suggestions : jamais de cache SW (sinon vieux Keny après une nouvelle query)
             urlPattern: ({ url }) =>
-              url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/stream/'),
+              url.pathname.startsWith('/api/search') ||
+              url.pathname.startsWith('/api/search/'),
+            handler: 'NetworkOnly',
+          },
+          {
+            urlPattern: ({ url }) =>
+              url.pathname.startsWith('/api/') &&
+              !url.pathname.startsWith('/api/stream/') &&
+              !url.pathname.startsWith('/api/search'),
             handler: 'NetworkFirst',
             options: {
               cacheName: 'api-cache',

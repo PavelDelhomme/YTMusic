@@ -239,6 +239,35 @@ export function mergeTracks(...lists: Track[][]): Track[] {
   return uniqById(lists.flat());
 }
 
+/**
+ * Écarte les résultats hors-sujet (ex. favori Keny sur « tenebro rossi »)
+ * tout en gardant un fallback si YouTube ne renvoie que du bruit.
+ */
+export function filterByRelevance<T extends Track>(
+  items: T[],
+  query: string,
+  minScore = 140,
+): T[] {
+  if (!items.length || !foldText(query)) return items;
+  const scored = items.map((item, index) => ({
+    item,
+    index,
+    s: scoreSearchItem(item, query),
+  }));
+  const good = scored.filter((x) => x.s >= minScore);
+  if (good.length >= 2) return good.map((x) => x.item);
+  if (good.length === 1) {
+    const near = scored
+      .filter((x) => x.s < minScore && x.s >= Math.floor(minScore * 0.55))
+      .slice(0, 4);
+    return [...good, ...near]
+      .sort((a, b) => b.s - a.s || a.index - b.index)
+      .map((x) => x.item);
+  }
+  // Rien de pertinent : top 6 par score (évite page vide), jamais un dump brut
+  return [...scored].sort((a, b) => b.s - a.s || a.index - b.index).slice(0, 6).map((x) => x.item);
+}
+
 /** Choisit le meilleur « top result » parmi les buckets déjà rankés. */
 export function pickTopResult(
   query: string,
@@ -270,7 +299,7 @@ export function pickTopResult(
 
   const ranked = rankByQuery(uniqById(candidates), query, personalization);
   const best = ranked[0];
-  if (!best) return buckets.topResult || null;
+  if (!best) return null;
   const bestRel = scoreSearchItem(best, query);
   const bestScore = bestRel + personalizeBoost(best, personalization, query);
 
@@ -278,14 +307,15 @@ export function pickTopResult(
   if (buckets.topResult) {
     const ytRel = scoreSearchItem(buckets.topResult, query);
     const ytScore = ytRel + personalizeBoost(buckets.topResult, personalization, query);
+    // Ne jamais renvoyer un top YT hors-sujet (ex. Keny) si un autre candidat matche mieux
     if (ytRel < 180) {
-      return bestRel >= 180 ? best : buckets.topResult;
+      return bestRel >= 120 ? best : null;
     }
     if (bestScore >= ytScore + 40) return best;
-    if (ytRel >= 400) return buckets.topResult;
+    if (ytRel >= 400 && ytRel >= bestRel - 20) return buckets.topResult;
   }
 
-  return bestRel >= 180 ? best : buckets.topResult || best;
+  return bestRel >= 120 ? best : null;
 }
 
 /** Libellés de shelf Innertube (EN + FR) → bucket. */

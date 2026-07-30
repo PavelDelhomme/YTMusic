@@ -326,21 +326,35 @@ export async function exploreReco(userId: string) {
 }
 
 export function suggestSearch(userId: string, q: string, ytSuggestions: string[]) {
-  const hist = listSearchHistory(userId, 20).map((h) => h.query as string);
+  const ql = q.trim().toLowerCase();
+  const hist = listSearchHistory(userId, 30).map((h) => String(h.query || '').trim()).filter(Boolean);
   const prefs = getPrefs(userId);
   const boost = [...prefs.genres, ...prefs.moods];
-  const merged = [
-    ...hist.filter((h) => !q || h.toLowerCase().includes(q.toLowerCase())),
-    ...boost.filter((b) => !q || b.toLowerCase().includes(q.toLowerCase())),
-    ...ytSuggestions,
-  ];
+
+  const histMatch = (h: string) => {
+    if (!ql) return true; // focus vide → récentes
+    const hl = h.toLowerCase();
+    // Évite « a » / « e » qui matchent « Keny Arkana »
+    if (ql.length < 2) return false;
+    return hl.startsWith(ql) || hl.includes(` ${ql}`) || (ql.length >= 4 && hl.includes(ql));
+  };
+
+  // YouTube d’abord dès qu’on tape : l’historique ne doit plus écraser la requête courante
+  const merged = ql
+    ? [
+        ...ytSuggestions,
+        ...hist.filter(histMatch),
+        ...boost.filter((b) => b.toLowerCase().includes(ql)),
+      ]
+    : [...hist.slice(0, 8), ...ytSuggestions, ...boost];
+
   const seen = new Set<string>();
   const out: string[] = [];
   for (const s of merged) {
-    const k = s.toLowerCase();
-    if (seen.has(k)) continue;
+    const k = String(s || '').trim().toLowerCase();
+    if (!k || seen.has(k)) continue;
     seen.add(k);
-    out.push(s);
+    out.push(String(s).trim());
     if (out.length >= 12) break;
   }
   return out;

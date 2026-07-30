@@ -70,6 +70,14 @@ export function Layout() {
   const hasPlayback = Boolean(currentTrack);
   const audioRef = useRef<HTMLAudioElement>(null);
   const lastRemoteAt = useRef(0);
+  const sugReq = useRef(0);
+
+  // Garde la barre alignée avec l’URL (évite de resoumettre / suggérer l’ancienne requête Keny…)
+  useEffect(() => {
+    if (!location.pathname.startsWith('/search')) return;
+    const urlQ = new URLSearchParams(location.search).get('q') || '';
+    setQ(urlQ);
+  }, [location.pathname, location.search]);
 
   useEffect(() => {
     wireRemotePlayer();
@@ -113,20 +121,31 @@ export function Layout() {
       setSuggestions([]);
       return;
     }
+    const id = ++sugReq.current;
     if (!q.trim()) {
       const t = setTimeout(() => {
         api
           .suggestions('')
-          .then((r) => setSuggestions(r.suggestions.slice(0, 8)))
-          .catch(() => setSuggestions([]));
+          .then((r) => {
+            if (sugReq.current !== id) return;
+            setSuggestions(r.suggestions.slice(0, 8));
+          })
+          .catch(() => {
+            if (sugReq.current === id) setSuggestions([]);
+          });
       }, 100);
       return () => clearTimeout(t);
     }
     const t = setTimeout(() => {
       api
         .suggestions(q)
-        .then((r) => setSuggestions(r.suggestions.slice(0, 8)))
-        .catch(() => setSuggestions([]));
+        .then((r) => {
+          if (sugReq.current !== id) return;
+          setSuggestions(r.suggestions.slice(0, 8));
+        })
+        .catch(() => {
+          if (sugReq.current === id) setSuggestions([]);
+        });
     }, 200);
     return () => clearTimeout(t);
   }, [q, user]);
@@ -350,6 +369,9 @@ export function Layout() {
                     setQ('');
                     setSuggestions([]);
                     setOpenSug(false);
+                    if (location.pathname.startsWith('/search')) {
+                      navigate('/search');
+                    }
                   }}
                 >
                   <X className="h-4 w-4" />

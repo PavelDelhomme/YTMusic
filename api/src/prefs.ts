@@ -232,12 +232,30 @@ export function addSearchHistory(
   query: string,
   clicked?: { id?: string; kind?: string },
 ) {
-  const q = query.trim();
-  if (!q) return;
+  const q = query.trim().replace(/\s+/g, ' ');
+  // Ignore frappes trop courtes (pollution « K », « Ke », « Ken »)
+  if (!q || (q.length < 3 && !clicked?.id)) return;
+
+  const recent = listSearchHistory(userId, 8) as { id: string; query: string; created_at: number }[];
+  const nq = q.toLowerCase();
+  const now = Date.now();
+
+  // Remplace les préfixes progressifs récents (« Keny » → « Keny Arkana »)
+  for (const last of recent) {
+    const lq = String(last.query || '').trim().toLowerCase();
+    if (!lq) continue;
+    const age = now - Number(last.created_at || 0);
+    if (age > 90_000) continue;
+    if (nq === lq && !clicked?.id) return; // doublon exact récent
+    if (nq.startsWith(lq) || lq.startsWith(nq)) {
+      db.prepare('DELETE FROM search_history WHERE id = ? AND user_id = ?').run(last.id, userId);
+    }
+  }
+
   db.prepare(
     `INSERT INTO search_history (id, user_id, query, clicked_id, clicked_kind, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(randomUUID(), userId, q, clicked?.id || null, clicked?.kind || null, Date.now());
+  ).run(randomUUID(), userId, q, clicked?.id || null, clicked?.kind || null, now);
 }
 
 export function listSearchHistory(userId: string, limit = 30) {

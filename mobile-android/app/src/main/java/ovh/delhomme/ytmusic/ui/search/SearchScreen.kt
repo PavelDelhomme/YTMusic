@@ -93,7 +93,8 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
             _state.value = _state.value.copy(loading = true, error = null, sections = emptyList())
             try {
                 container.ensureFreshToken()
-                val res = container.api.search(currentQ, currentFilter)
+                // Live typing : ne pas polluer l’historique (préfixes Keny / Keny Ar…)
+                val res = container.api.search(currentQ, currentFilter, noHistory = "1")
                 // Ignore si l’utilisateur a déjà changé la requête
                 if (_state.value.query.trim() != currentQ || _state.value.filter != currentFilter) {
                     return@launch
@@ -222,6 +223,20 @@ fun SearchScreen(
                                 track = track,
                                 highlighted = section.title == "Meilleur résultat",
                                 onClick = {
+                                    val q = state.query.trim()
+                                    if (q.length >= 2) {
+                                        scope.launch {
+                                            runCatching {
+                                                container.api.recordSearchClick(
+                                                    mapOf(
+                                                        "query" to q,
+                                                        "clickedId" to track.id,
+                                                        "clickedKind" to (track.type ?: "song"),
+                                                    ),
+                                                )
+                                            }
+                                        }
+                                    }
                                     if (track.isPlaylist() || track.isAlbum() || track.isArtist()) {
                                         onOpenDetail(track)
                                         return@TrackRow

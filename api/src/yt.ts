@@ -6,6 +6,7 @@ import { getFullLibrary, getHistory } from './library.js';
 import { listFollows, listSearchHistory } from './prefs.js';
 import {
   dedupeArtists,
+  filterByRelevance,
   foldText,
   mergeTracks,
   pickTopResult,
@@ -402,46 +403,33 @@ export async function search(
   const fromArtists = artistExtra ? collectFromResult(artistExtra) : emptyBuckets();
   const fromAlbums = albumExtra ? collectFromResult(albumExtra) : emptyBuckets();
 
-  const personalSongs: Track[] = [];
-  const personalArtists: Track[] = [];
-  // Uniquement sur requête 1 mot : sinon « tenebro rossi » + favori Keny = pollution totale
-  if (
-    (filterNorm === 'all' || filterNorm === 'song') &&
-    tokenize(q).length === 1 &&
-    foldText(q).length >= 3 &&
-    personalization?.artistNames?.length
-  ) {
-    const hints = personalization.artistNames
-      .filter((name) => name && name.length >= 3 && !foldText(q).includes(name))
-      .slice(0, 2);
-    const extras = await Promise.all(
-      hints.map((name) => innertubeSearch(`${q} ${name}`, 'song').catch(() => null)),
-    );
-    for (const extra of extras) {
-      if (!extra) continue;
-      const b = collectFromResult(extra);
-      // Ne garder que ce qui matche encore la requête seule
-      personalSongs.push(...b.songs.filter((t) => scoreSearchItem(t, q) >= 180));
-      personalArtists.push(...b.artists.filter((t) => scoreSearchItem(t, q) >= 180));
-    }
-  }
+  // Pas d’injection « query + artiste favori » : ça polluait (Keny sur n’importe quoi).
+  // La perso reste un soft-boost sur des résultats déjà pertinents (voir personalizeBoost).
 
-  const songs = rankByQuery(
-    mergeTracks(fromSongs.songs, main.songs, personalSongs, fromSongs.videos.slice(0, 5)),
-    q,
-    personalization,
-  );
-  const artists = dedupeArtists(
+  const songs = filterByRelevance(
     rankByQuery(
-      mergeTracks(fromArtists.artists, main.artists, personalArtists),
+      mergeTracks(fromSongs.songs, main.songs, fromSongs.videos.slice(0, 5)),
       q,
       personalization,
     ),
     q,
   );
-  const albums = rankByQuery(mergeTracks(fromAlbums.albums, main.albums), q, personalization);
-  const videos = rankByQuery(mergeTracks(main.videos, fromSongs.videos), q, personalization);
-  const playlists = rankByQuery(main.playlists, q, personalization);
+  const artists = dedupeArtists(
+    filterByRelevance(
+      rankByQuery(mergeTracks(fromArtists.artists, main.artists), q, personalization),
+      q,
+    ),
+    q,
+  );
+  const albums = filterByRelevance(
+    rankByQuery(mergeTracks(fromAlbums.albums, main.albums), q, personalization),
+    q,
+  );
+  const videos = filterByRelevance(
+    rankByQuery(mergeTracks(main.videos, fromSongs.videos), q, personalization),
+    q,
+  );
+  const playlists = filterByRelevance(rankByQuery(main.playlists, q, personalization), q);
 
   const topResult = pickTopResult(
     q,
@@ -457,10 +445,9 @@ export async function search(
   );
 
   if (filterNorm === 'song') {
-    const only = rankByQuery(
-      mergeTracks(main.songs, main.videos, personalSongs),
+    const only = filterByRelevance(
+      rankByQuery(mergeTracks(main.songs, main.videos), q, personalization),
       q,
-      personalization,
     );
     return {
       topResult: only[0] || topResult,
@@ -472,33 +459,36 @@ export async function search(
     };
   }
   if (filterNorm === 'video') {
-    const only = rankByQuery(main.videos.length ? main.videos : main.songs, q, personalization);
+    const only = filterByRelevance(
+      rankByQuery(main.videos.length ? main.videos : main.songs, q, personalization),
+      q,
+    );
     return { topResult: only[0] || null, songs: [], videos: only, albums: [], artists: [], playlists: [] };
   }
   if (filterNorm === 'album') {
-    const only = rankByQuery(main.albums, q, personalization);
+    const only = filterByRelevance(rankByQuery(main.albums, q, personalization), q);
     return { topResult: only[0] || null, songs: [], videos: [], albums: only, artists: [], playlists: [] };
   }
   if (filterNorm === 'artist') {
     // Préférer les vrais artistes ; si YT renvoie peu, enrichir via topResult / all
-    let only = rankByQuery(main.artists, q, personalization);
+    let only = filterByRelevance(rankByQuery(main.artists, q, personalization), q);
     if (only.length < 3) {
       const all = await innertubeSearch(q).catch(() => null);
       if (all) {
         const extra = collectFromResult(all);
         const merged = mergeTracks(only, extra.artists);
         if (extra.topResult?.type === 'artist') merged.unshift(extra.topResult);
-        only = rankByQuery(merged, q, personalization);
+        only = filterByRelevance(rankByQuery(merged, q, personalization), q);
       }
     }
-    if (main.topResult?.type === 'artist') {
+    if (main.topResult?.type === 'artist' && scoreSearchItem(main.topResult, q) >= 140) {
       only = mergeTracks([main.topResult], only);
     }
     only = dedupeArtists(only, q);
     return { topResult: only[0] || null, songs: [], videos: [], albums: [], artists: only, playlists: [] };
   }
   if (filterNorm === 'playlist') {
-    const only = rankByQuery(main.playlists, q, personalization);
+    const only = filterByRelevance(rankByQuery(main.playlists, q, personalization), q);
     return { topResult: only[0] || null, songs: [], videos: [], albums: [], artists: [], playlists: only };
   }
 
