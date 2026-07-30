@@ -34,8 +34,9 @@ lsusb -d 04e8: 2>/dev/null || lsusb | head -10
 echo ""
 
 # Groupe / udev
+me="$(id -un 2>/dev/null || whoami)"
 if getent group adbusers >/dev/null 2>&1; then
-  if getent group adbusers | grep -Eq "(^|,)${USER}(,|$)"; then
+  if getent group adbusers | grep -Eq "(^|,)${me}(,|$)"; then
     if id -nG 2>/dev/null | tr ' ' '\n' | grep -qx adbusers; then
       echo "✓ groupe adbusers OK (session courante)"
     else
@@ -43,7 +44,7 @@ if getent group adbusers >/dev/null 2>&1; then
     fi
   else
     echo "⚠ ajoute-toi à adbusers :"
-    echo "    sudo usermod -aG adbusers \$USER && newgrp adbusers"
+    echo "    sudo usermod -aG adbusers $me && newgrp adbusers"
   fi
 else
   echo "⚠ paquet android-udev recommandé : sudo pacman -S android-udev"

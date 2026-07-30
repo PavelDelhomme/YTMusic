@@ -136,13 +136,7 @@ fun YtMusicAppContent(container: AppContainer) {
     }
 
     LaunchedEffect(Unit) {
-        val token = container.tokenStore.getAccess()
-        loggedIn = if (token.isNullOrBlank()) {
-            false
-        } else {
-            runCatching { container.api.me().user != null }.getOrDefault(false) ||
-                container.ensureFreshToken()
-        }
+        loggedIn = container.validateSession()
     }
 
     BackHandler(enabled = loggedIn == true && showNowPlaying) {
