@@ -179,17 +179,24 @@ export async function similarForUser(userId: string, trackId: string, seedTrack?
   return { tracks: ranked, related, radio };
 }
 
-export async function radioForUser(userId: string, categoryId: string) {
+export async function radioForUser(
+  userId: string,
+  categoryId: string,
+  opts?: { light?: boolean },
+) {
+  const light = opts?.light === true;
   const cat = RADIO_CATEGORIES.find((c) => c.id === categoryId) || RADIO_CATEGORIES[0];
   let seedTrack: Track | null = null;
   let candidates: Track[] = [];
 
   if (cat.id === 'liked-radio') {
-    const top = getTopListened(userId, 15);
+    const top = getTopListened(userId, light ? 12 : 15);
     seedTrack = top[0] || null;
-    if (seedTrack) {
+    if (seedTrack && !light) {
       const { radio, related } = await getRelated(seedTrack.id);
       candidates = [...radio, ...related, ...top];
+    } else {
+      candidates = [...top];
     }
   }
 
@@ -201,7 +208,8 @@ export async function radioForUser(userId: string, categoryId: string) {
     const res = await search(q, 'song');
     candidates = [...(res.songs || []), ...(res.videos || [])];
     seedTrack = candidates[0] || null;
-    if (seedTrack) {
+    // Mode preview (Explorer) : pas de getRelated — 1 search suffit
+    if (seedTrack && !light) {
       try {
         const { radio, related } = await getRelated(seedTrack.id);
         candidates = [...candidates, ...radio, ...related];
@@ -217,7 +225,11 @@ export async function radioForUser(userId: string, categoryId: string) {
     seed: seedTrack,
     mode: cat.mode,
   });
-  return { category: cat, tracks: tracks.slice(0, 40), seed: seedTrack };
+  return {
+    category: cat,
+    tracks: tracks.slice(0, light ? 12 : 40),
+    seed: seedTrack,
+  };
 }
 
 export async function homeReco(userId: string) {
@@ -258,63 +270,89 @@ export async function homeReco(userId: string) {
     shelves.push({ title: 'Tes plus écoutés', items: top.slice(0, 20) });
   }
 
-  // Prefs-driven shelves
-  for (const g of prefs.genres.slice(0, 4)) {
-    try {
-      const res = await search(`${g} mix`, 'song');
-      const items = await hybridRank({
-        userId,
-        candidates: [...(res.songs || []), ...(res.videos || [])],
-        mode: 'radio',
-      });
-      if (items.length) shelves.push({ title: `Pour toi · ${g}`, items: items.slice(0, 16) });
-    } catch {
-      /* ignore */
-    }
+  // Shelves YT en parallèle (évite ~15 search séquentiels → cold start ~6s)
+  type ExtraShelf = { title: string; items: Track[]; order: number };
+  const extras: ExtraShelf[] = [];
+  let order = 0;
+
+  const jobs: Promise<void>[] = [];
+
+  for (const g of prefs.genres.slice(0, 3)) {
+    const slot = order++;
+    jobs.push(
+      (async () => {
+        try {
+          const res = await search(`${g} mix`, 'song');
+          const items = await hybridRank({
+            userId,
+            candidates: [...(res.songs || []), ...(res.videos || [])],
+            mode: 'radio',
+          });
+          if (items.length) extras.push({ title: `Pour toi · ${g}`, items: items.slice(0, 16), order: slot });
+        } catch {
+          /* ignore */
+        }
+      })(),
+    );
   }
 
-  // Abonnements : plusieurs artistes, pas seulement le premier
-  for (const f of follows.slice(0, 5)) {
-    try {
-      const res = await search(f.artist_name || f.artist_id, 'song');
-      const items = [...(res.songs || [])].slice(0, 16);
-      if (items.length) {
-        shelves.push({ title: `Abonnement · ${f.artist_name || f.artist_id}`, items });
-      }
-    } catch {
-      /* ignore */
-    }
+  for (const f of follows.slice(0, 3)) {
+    const slot = order++;
+    const name = f.artist_name || f.artist_id;
+    jobs.push(
+      (async () => {
+        try {
+          const res = await search(name, 'song');
+          const items = [...(res.songs || [])].slice(0, 16);
+          if (items.length) extras.push({ title: `Abonnement · ${name}`, items, order: slot });
+        } catch {
+          /* ignore */
+        }
+      })(),
+    );
   }
 
-  // Plusieurs recherches récentes (diversité), pas seulement la dernière
-  for (const h of searches.slice(0, 3)) {
+  for (const h of searches.slice(0, 2)) {
     const q = String(h.query || '').trim();
     if (!q || q.length < 2) continue;
-    try {
-      const res = await search(q, 'song');
-      const items = await hybridRank({
-        userId,
-        candidates: [...(res.songs || [])],
-        mode: 'discover',
-      });
-      if (items.length) {
-        shelves.push({ title: `D’après ta recherche « ${q} »`, items: items.slice(0, 12) });
-      }
-    } catch {
-      /* ignore */
-    }
+    const slot = order++;
+    jobs.push(
+      (async () => {
+        try {
+          const res = await search(q, 'song');
+          const items = await hybridRank({
+            userId,
+            candidates: [...(res.songs || [])],
+            mode: 'discover',
+          });
+          if (items.length) {
+            extras.push({ title: `D’après ta recherche « ${q} »`, items: items.slice(0, 12), order: slot });
+          }
+        } catch {
+          /* ignore */
+        }
+      })(),
+    );
   }
 
-  // Ambiances onboarding → playlists / mix
-  for (const m of prefs.moods.slice(0, 3)) {
-    try {
-      const res = await search(`${m} playlist`, 'playlist');
-      const items = [...(res.playlists || [])].slice(0, 12);
-      if (items.length) shelves.push({ title: `Ambiance · ${m}`, items });
-    } catch {
-      /* ignore */
-    }
+  for (const m of prefs.moods.slice(0, 2)) {
+    const slot = order++;
+    jobs.push(
+      (async () => {
+        try {
+          const res = await search(`${m} playlist`, 'playlist');
+          const items = [...(res.playlists || [])].slice(0, 12);
+          if (items.length) extras.push({ title: `Ambiance · ${m}`, items, order: slot });
+        } catch {
+          /* ignore */
+        }
+      })(),
+    );
   }
+
+  await Promise.all(jobs);
+  extras.sort((a, b) => a.order - b.order);
+  for (const s of extras) shelves.push({ title: s.title, items: s.items });
 
   return {
     shelves,
@@ -324,21 +362,12 @@ export async function homeReco(userId: string) {
   };
 }
 
+/** Métadonnées Explorer (rapide). Les rayons radio se chargent ensuite via radioForUser({ light }). */
 export async function exploreReco(userId: string) {
-  const radios = [];
-  for (const cat of RADIO_CATEGORIES.slice(0, 6)) {
-    try {
-      const r = await radioForUser(userId, cat.id);
-      radios.push({
-        id: cat.id,
-        title: cat.title,
-        items: r.tracks.slice(0, 12),
-      });
-    } catch {
-      radios.push({ id: cat.id, title: cat.title, items: [] });
-    }
-  }
-  return { radios, needsOnboarding: !getPrefs(userId).onboardingDone };
+  return {
+    radios: RADIO_CATEGORIES.map((c) => ({ id: c.id, title: c.title, items: [] as Track[] })),
+    needsOnboarding: !getPrefs(userId).onboardingDone,
+  };
 }
 
 export function suggestSearch(userId: string, q: string, ytSuggestions: string[]) {

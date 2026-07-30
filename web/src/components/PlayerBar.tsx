@@ -67,6 +67,7 @@ export function PlayerBar({
   const isActivePlayer = useSession((s) => s.isActivePlayer);
   const devices = useSession((s) => s.devices);
   const activePlayerId = useSession((s) => s.activePlayerId);
+  const transferHere = useSession((s) => s.transferHere);
   const activeName = devices.find((d) => d.id === activePlayerId)?.name;
 
   const [muted, setMuted] = useState(false);
@@ -135,7 +136,8 @@ export function PlayerBar({
 
   const toggleMute = () => {
     if (muted || volume === 0) {
-      setVolume(prevVol.current || 0.9);
+      const v = prevVol.current > 0 ? prevVol.current : 0.7;
+      setVolume(v);
       setMuted(false);
     } else {
       prevVol.current = volume;
@@ -144,18 +146,22 @@ export function PlayerBar({
     }
   };
 
+  const listenHere = (e: SyntheticEvent) => {
+    stop(e);
+    transferHere();
+    useSession.setState({ isActivePlayer: true });
+    void toggle();
+  };
+
   return (
     <footer
-      className="fixed bottom-0 left-0 right-0 z-50 cursor-pointer border-t border-white/10 bg-black"
-      onClick={() => {
-        if (expanded) return;
-        expand('queue');
-      }}
-      role="presentation"
+      className="fixed bottom-0 left-0 right-0 z-50 border-t border-yt-border bg-[#0a0a0a]/95 backdrop-blur-md"
+      style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+      onClick={() => expand('queue')}
     >
+      {/* Seek */}
       <div
-        className="group relative h-4 w-full cursor-pointer touch-none"
-        onClick={stop}
+        className="group relative h-5 cursor-pointer px-0"
         onPointerDown={onSeekPointer}
         onPointerMove={onSeekMove}
         role="slider"
@@ -183,14 +189,104 @@ export function PlayerBar({
       </div>
 
       {!isActivePlayer && activeName && (
-        <div className="border-b border-yt-border/60 px-3 py-1 text-center text-[11px] text-yt-muted" onClick={stop}>
-          Lecture sur <span className="text-white">{activeName}</span> — contrôle distant actif
+        <div
+          className="flex items-center justify-center gap-2 border-b border-yt-border/60 px-3 py-1 text-[11px] text-yt-muted"
+          onClick={stop}
+        >
+          <span className="truncate">
+            Sur <span className="text-white">{activeName}</span>
+          </span>
+          <button
+            type="button"
+            onClick={listenHere}
+            className="shrink-0 rounded-full bg-yt-red px-2.5 py-0.5 text-[11px] font-medium text-white"
+          >
+            Écouter ici
+          </button>
         </div>
       )}
 
-      {/* Layout : transport+temps | centre (cover+titre+actions) | volume+repeat+shuffle */}
-      <div className="mx-auto flex max-w-[1600px] items-center gap-3 px-3 py-2.5 md:gap-4 md:px-5 md:py-3">
-        {/* Gauche */}
+      {/* —— Mobile (< sm) : 2 lignes lisibles —— */}
+      <div className="px-2 pb-1.5 pt-1 sm:hidden">
+        <div className="flex items-center gap-2">
+          <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md">
+            <CoverImage item={current} size={96} rounded="md" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold leading-tight text-white">{current.title}</div>
+            <div className="truncate text-[11px] text-yt-muted" onClick={stop}>
+              <ArtistLinks track={current} />
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={(e) => {
+              stop(e);
+              void toggleLike(current);
+            }}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-yt-muted"
+            title="J'aime"
+          >
+            <Heart className={`h-5 w-5 ${isLiked(current.id) ? 'fill-yt-red text-yt-red' : ''}`} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              stop(e);
+              openActions(current, { queueIndex });
+            }}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-yt-muted"
+            title="Plus d'options"
+          >
+            <MoreVertical className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="mt-0.5 flex items-center justify-between gap-1" onClick={stop}>
+          <span className="w-10 text-[10px] tabular-nums text-yt-muted">{formatClock(progress)}</span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={(e) => {
+                stop(e);
+                void prev();
+              }}
+              className="flex h-11 w-11 items-center justify-center rounded-full text-white"
+              aria-label="Titre précédent"
+            >
+              <SkipBack className="h-6 w-6 fill-white" />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                stop(e);
+                toggle();
+              }}
+              disabled={isLoading}
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black disabled:opacity-60"
+              aria-label={uiPlaying ? 'Pause' : 'Lecture'}
+            >
+              {uiPlaying ? <Pause className="h-6 w-6 fill-black" /> : <Play className="h-6 w-6 fill-black" />}
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                stop(e);
+                void next();
+              }}
+              className="flex h-11 w-11 items-center justify-center rounded-full text-white"
+              aria-label="Titre suivant"
+            >
+              <SkipForward className="h-6 w-6 fill-white" />
+            </button>
+          </div>
+          <span className="w-10 text-right text-[10px] tabular-nums text-yt-muted">
+            {formatClock(effectiveDuration)}
+          </span>
+        </div>
+      </div>
+
+      {/* —— Desktop / tablette (≥ sm) —— */}
+      <div className="mx-auto hidden max-w-[1600px] items-center gap-3 px-3 py-2.5 sm:flex md:gap-4 md:px-5 md:py-3">
         <div className="flex shrink-0 items-center gap-1 sm:gap-1.5" onClick={stop} onPointerDown={stop}>
           <button
             type="button"
@@ -199,7 +295,6 @@ export function PlayerBar({
               void prev();
             }}
             className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10"
-            title="Précédent — >4s recommence, sinon titre d’avant (B · [ · , · Alt+← · touche média)"
             aria-label="Titre précédent"
           >
             <SkipBack className="h-6 w-6 fill-white" />
@@ -212,7 +307,6 @@ export function PlayerBar({
             }}
             disabled={isLoading}
             className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition hover:scale-105 disabled:opacity-60"
-            title={uiPlaying ? 'Pause (Espace · P · touche média)' : 'Lecture (Espace · P · touche média)'}
             aria-label={uiPlaying ? 'Pause' : 'Lecture'}
           >
             {uiPlaying ? <Pause className="h-6 w-6 fill-black" /> : <Play className="h-6 w-6 fill-black" />}
@@ -224,22 +318,20 @@ export function PlayerBar({
               void next();
             }}
             className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10"
-            title="Suivant (N · ] · . · Alt+→ · touche média)"
             aria-label="Titre suivant"
           >
             <SkipForward className="h-6 w-6 fill-white" />
           </button>
-          <span className="ml-2 hidden whitespace-nowrap text-xs tabular-nums text-yt-muted sm:inline">
+          <span className="ml-2 whitespace-nowrap text-xs tabular-nums text-yt-muted">
             {formatClock(progress)} / {formatClock(effectiveDuration)}
           </span>
         </div>
 
-        {/* Centre */}
         <div className="flex min-w-0 flex-1 items-center justify-center gap-3">
           <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md md:h-14 md:w-14">
             <CoverImage item={current} size={120} rounded="md" />
           </div>
-          <div className="min-w-0 max-w-[min(420px,40vw)]">
+          <div className="min-w-0 max-w-[min(420px,36vw)]">
             <div className="truncate text-sm font-semibold text-white">{current.title}</div>
             <div className="truncate text-xs text-yt-muted" onClick={stop} onKeyDown={stop}>
               <ArtistLinks track={current} />
@@ -291,7 +383,6 @@ export function PlayerBar({
           </button>
         </div>
 
-        {/* Droite */}
         <div className="relative flex shrink-0 items-center justify-end gap-1 sm:gap-1.5" onClick={stop}>
           <div className="flex items-center gap-1.5 sm:gap-2">
             <button
@@ -323,9 +414,8 @@ export function PlayerBar({
                 onClick={stop}
                 className="progress-range h-1.5 w-16 cursor-pointer accent-[#ff0033] sm:w-24 md:w-28"
                 aria-label="Volume"
-                title={`Volume ${Math.round((muted ? 0 : volume) * 100)} %`}
               />
-              <span className="hidden w-8 tabular-nums text-[11px] text-yt-muted sm:inline">
+              <span className="hidden w-8 tabular-nums text-[11px] text-yt-muted md:inline">
                 {Math.round((muted ? 0 : volume) * 100)}
               </span>
             </div>
@@ -356,14 +446,19 @@ export function PlayerBar({
             <button
               type="button"
               onClick={onOpenDevices}
-              className={`hidden h-11 w-11 items-center justify-center rounded-full sm:flex ${!isActivePlayer ? 'text-yt-red' : 'text-yt-muted hover:bg-white/10 hover:text-white'}`}
+              className={`flex h-11 w-11 items-center justify-center rounded-full ${!isActivePlayer ? 'text-yt-red' : 'text-yt-muted hover:bg-white/10 hover:text-white'}`}
               title="Cast"
             >
               <Cast className="h-5 w-5" />
             </button>
           )}
           {onCollapse && expanded && (
-            <button type="button" onClick={onCollapse} className="flex h-11 w-11 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white" title="Réduire">
+            <button
+              type="button"
+              onClick={onCollapse}
+              className="flex h-11 w-11 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white"
+              title="Réduire"
+            >
               ✕
             </button>
           )}

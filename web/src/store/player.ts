@@ -328,6 +328,19 @@ function sendCmd(command: Record<string, unknown>) {
   useSession.getState().sendCommand(command);
 }
 
+/**
+ * Prend la main audio sur CET appareil (style YTM / Android claim).
+ * Évite « contrôle distant » sans son quand l’utilisateur clique Lecture ici.
+ */
+function claimLocalPlayer() {
+  if (isActivePlayer()) return;
+  const s = useSession.getState();
+  const me = s.deviceId;
+  if (me) s.setActive(me);
+  else s.transferHere();
+  useSession.setState({ isActivePlayer: true });
+}
+
 /** Dès qu'un titre démarre (même 1s) → historique + listen_events */
 function recordStarted(track: Track) {
   void useLibrary.getState().recordPlay(track);
@@ -667,27 +680,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
 
   play: async (track, queue, opts) => {
-    if (!isActivePlayer()) {
-      recordStarted(track);
-      sendCmd({
-        action: 'play',
-        track,
-        queue: queue?.length ? queue : [track],
-      });
-      const remoteQueue = queue?.length ? queue : [track];
-      const remoteIdx = Math.max(0, remoteQueue.findIndex((t) => t.id === track.id));
-      set({
-        current: track,
-        queue: remoteQueue,
-        queueIndex: remoteIdx,
-        userQueueEnd: opts?.keepUserBoundary
-          ? Math.min(get().userQueueEnd || remoteQueue.length, remoteQueue.length)
-          : remoteQueue.length,
-        isPlaying: true,
-        isLoading: false,
-      });
-      return;
-    }
+    // Clic Lecture sur cet appareil → son ici (pas seulement remote cmd)
+    claimLocalPlayer();
 
     const filtered = (queue || []).filter(isPlayable);
     // Ne jamais lancer un ID non-vidéo (album/playlist/mood) comme stream
@@ -744,25 +738,14 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     const { queue } = get();
     const track = queue[index];
     if (!track) return;
-    if (!isActivePlayer()) {
-      sendCmd({ action: 'play_at', index });
-      set({ queueIndex: index, current: track, isPlaying: true });
-      return;
-    }
+    claimLocalPlayer();
     await get().play(track, queue, { preserveQueue: true, keepUserBoundary: true });
     set({ queueIndex: index });
     publish();
   },
 
   toggle: () => {
-    if (!isActivePlayer()) {
-      const audio = get().audioEl;
-      const playing = audio ? !audio.paused : get().isPlaying;
-      sendCmd({ action: playing ? 'pause' : 'resume' });
-      set({ isPlaying: !playing });
-      refreshMediaSession();
-      return;
-    }
+    claimLocalPlayer();
     const { audioEl, current, queue, progress } = get();
     if (!audioEl) {
       if (current) {
@@ -827,10 +810,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
 
   next: async (opts) => {
-    if (!isActivePlayer()) {
-      sendCmd({ action: 'next' });
-      return;
-    }
+    claimLocalPlayer();
     const { queue, queueIndex, repeat, shuffle, current, progress } = get();
     if (!queue.length) {
       if (current?.id) {
@@ -890,10 +870,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
 
   prev: async () => {
-    if (!isActivePlayer()) {
-      sendCmd({ action: 'prev' });
-      return;
-    }
+    claimLocalPlayer();
     const { audioEl, progress, queueIndex, queue } = get();
     // Source de vérité = audio (progress Zustand peut être en retard d’1 tick)
     const t = audioEl && Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : progress;

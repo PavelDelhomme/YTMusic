@@ -10,16 +10,22 @@ export function formatClock(totalSeconds: number): string {
   return `${m}:${ss}`;
 }
 
-/** Normalise une durée texte API (`164:16` → `2:44:16`) ou utilise durationSeconds. */
+/** Normalise une durée texte API (`164:16` → `2:44:16`) ou secondes numériques. */
 export function formatTrackDuration(track: {
-  duration?: string;
+  duration?: string | number;
   durationSeconds?: number;
 }): string {
   if (typeof track.durationSeconds === 'number' && Number.isFinite(track.durationSeconds)) {
     return formatClock(track.durationSeconds);
   }
-  const raw = (track.duration || '').trim();
+  // API / clients peuvent envoyer duration en secondes (number) plutôt qu’en "m:ss"
+  if (typeof track.duration === 'number' && Number.isFinite(track.duration)) {
+    return formatClock(track.duration);
+  }
+  const raw = String(track.duration ?? '').trim();
   if (!raw) return '';
+  // Pure digits → secondes
+  if (/^\d+$/.test(raw)) return formatClock(Number(raw));
   const parts = raw.split(':').map((p) => Number(p));
   if (parts.some((n) => !Number.isFinite(n))) return raw;
   if (parts.length === 3) {

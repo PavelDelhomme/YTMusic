@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -30,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -43,6 +45,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.ArtistRef
@@ -55,7 +60,7 @@ import ovh.delhomme.ytmusic.ui.components.AppTopBar
 import ovh.delhomme.ytmusic.ui.components.HistorySheet
 import ovh.delhomme.ytmusic.ui.components.TrackRow
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
     container: AppContainer,
@@ -73,25 +78,43 @@ fun LibraryScreen(
 
     var lib by remember { mutableStateOf<LibraryResponse?>(null) }
     var loading by remember { mutableStateOf(true) }
+    var refreshing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var showAccount by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
     var userPicture by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf(LibraryFilter.defaultSelected) }
+    var lastFetchAt by remember { mutableStateOf(0L) }
 
-    LaunchedEffect(Unit) {
-        loading = true
+    suspend fun reloadLibrary(force: Boolean = false, showSpinner: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastFetchAt < 45_000L && lib != null) return
+        if (showSpinner && lib == null) loading = true
+        if (force && lib != null) refreshing = true
         runCatching {
             container.ensureFreshToken()
             container.api.library()
         }.onSuccess {
             lib = it
+            lastFetchAt = System.currentTimeMillis()
+            error = null
             loading = false
+            refreshing = false
         }.onFailure {
-            error = it.message
+            if (lib == null) error = it.message
             loading = false
+            refreshing = false
         }
-        userPicture = runCatching { container.api.me().user?.picture }.getOrNull()
+        if (userPicture == null) {
+            userPicture = runCatching { container.api.me().user?.picture }.getOrNull()
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            reloadLibrary(force = false, showSpinner = true)
+        }
     }
 
     val visibleFilters = remember(hidden) {
@@ -123,8 +146,14 @@ fun LibraryScreen(
                 Text(error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
             }
             else -> {
+                PullToRefreshBox(
+                    isRefreshing = refreshing,
+                    onRefresh = { scope.launch { reloadLibrary(force = true) } },
+                    modifier = Modifier.fillMaxSize(),
+                ) {
                 val data = lib ?: LibraryResponse()
 
+                Column(Modifier.fillMaxSize()) {
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -227,6 +256,8 @@ fun LibraryScreen(
                             }
                         }
                     }
+                }
+                }
                 }
             }
         }

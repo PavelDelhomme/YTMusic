@@ -1,12 +1,19 @@
 package ovh.delhomme.ytmusic.player
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import okhttp3.Cache
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import ovh.delhomme.ytmusic.YtMusicApp
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -14,14 +21,15 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Prefetch streams :
- * 1) GET /api/stream/:id/url → chauffe le déchiffrement API
- * 2) Range bytes=0–512K du prochain titre → démarrage rapide au skip
+ * 1) POST /api/stream/warm (batch) → chauffe le déchiffrement API
+ * 2) Range bytes=0–512K du prochain titre (Wi‑Fi / non-métré uniquement)
  * Annulé à la pause. Cache disque 150 Mo (complète le SimpleCache ExoPlayer).
  */
 object StreamPrefetcher {
     private const val HEAD_BYTES = 512 * 1024L
     private const val MAX_WARM = 6
     private const val DISK_CACHE_MB = 150L
+    private val JSON = "application/json; charset=utf-8".toMediaType()
 
     private val client: OkHttpClient by lazy {
         val dir = File(YtMusicApp.instance.cacheDir, "stream-prefetch").apply { mkdirs() }
@@ -44,6 +52,19 @@ object StreamPrefetcher {
         client.dispatcher.cancelAll()
         inFlight.clear()
     }
+
+    private fun isUnmetered(): Boolean {
+        val cm = YtMusicApp.instance.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
+        val net = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(net) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+    }
+
+    private fun authHeader(): String? =
+        YtMusicApp.instance.container.tokenStore.peekAccess()?.let { "Bearer $it" }
 
     fun warm(resolveUrl: String) {
         if (resolveUrl.isBlank()) return
@@ -73,12 +94,56 @@ object StreamPrefetcher {
         })
     }
 
+    /** Batch resolve formats côté API (1 requête au lieu de N). */
+    private fun warmBatch(baseApi: String, trackIds: List<String>) {
+        val ids = trackIds.distinct().filter { it.length == 11 }.take(MAX_WARM)
+        if (ids.isEmpty()) return
+        val key = "warm:${ids.sorted().joinToString(",")}"
+        synchronized(recent) {
+            val last = recent[key]
+            if (last != null && System.currentTimeMillis() - last < 90_000L) return
+        }
+        if (!inFlight.add(key)) return
+        val body = JSONObject().put("ids", JSONArray(ids)).toString().toRequestBody(JSON)
+        val builder = Request.Builder()
+            .url("${baseApi.trimEnd('/')}/api/stream/warm")
+            .header("X-YTM-Client", "android")
+            .header("Content-Type", "application/json")
+            .tag("ytm-prefetch")
+            .post(body)
+        authHeader()?.let { builder.header("Authorization", it) }
+        client.newCall(builder.build()).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                inFlight.remove(key)
+                // Fallback : resolve unitaire
+                ids.take(3).forEach { id ->
+                    warm("${baseApi.trimEnd('/')}/api/stream/$id/url")
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.close()
+                inFlight.remove(key)
+                if (!response.isSuccessful) {
+                    ids.take(3).forEach { id ->
+                        warm("${baseApi.trimEnd('/')}/api/stream/$id/url")
+                    }
+                    return
+                }
+                synchronized(recent) {
+                    recent[key] = System.currentTimeMillis()
+                }
+            }
+        })
+    }
+
     /** Chauffe format + début audio (Range) pour un id. */
     fun warmTrack(baseApi: String, trackId: String) {
         if (trackId.length != 11) return
-        val base = baseApi.trimEnd('/')
-        warm("$base/api/stream/$trackId/url")
-        warmHead("$base/api/stream/$trackId")
+        warmBatch(baseApi, listOf(trackId))
+        if (isUnmetered()) {
+            warmHead("${baseApi.trimEnd('/')}/api/stream/$trackId")
+        }
     }
 
     private fun warmHead(streamUrl: String) {
@@ -116,8 +181,12 @@ object StreamPrefetcher {
     }
 
     fun warmTracks(baseApi: String, trackIds: List<String>) {
-        trackIds.distinct().filter { it.length == 11 }.take(MAX_WARM).forEach { id ->
-            warmTrack(baseApi, id)
+        val ids = trackIds.distinct().filter { it.length == 11 }.take(MAX_WARM)
+        if (ids.isEmpty()) return
+        warmBatch(baseApi, ids)
+        if (isUnmetered()) {
+            // Premier suivant seulement en Range (économie data)
+            ids.firstOrNull()?.let { warmHead("${baseApi.trimEnd('/')}/api/stream/$it") }
         }
     }
 
@@ -129,14 +198,17 @@ object StreamPrefetcher {
         behind: Int = 1,
     ) {
         if (queueIds.isEmpty()) return
+        val unmetered = isUnmetered()
+        val aheadN = if (unmetered) ahead else 1
+        val behindN = if (unmetered) behind else 0
         val idx = index.coerceIn(0, queueIds.lastIndex)
         val ids = buildList {
-            for (i in 1..ahead) {
+            for (i in 1..aheadN) {
                 val t = queueIds.getOrNull(idx + i) ?: break
                 add(t)
             }
             add(queueIds[idx])
-            for (i in 1..behind) {
+            for (i in 1..behindN) {
                 val t = queueIds.getOrNull(idx - i) ?: break
                 add(t)
             }

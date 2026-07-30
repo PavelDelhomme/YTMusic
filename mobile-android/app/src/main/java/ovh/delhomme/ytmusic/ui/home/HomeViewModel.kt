@@ -14,11 +14,16 @@ import ovh.delhomme.ytmusic.data.TrackDto
 
 data class HomeUiState(
     val loading: Boolean = true,
+    val refreshing: Boolean = false,
+    val loadingMore: Boolean = false,
     val error: String? = null,
     val shelves: List<ShelfDto> = emptyList(),
     val radios: List<RadioCategoryDto> = emptyList(),
     val needsOnboarding: Boolean = false,
     val radioLoadingId: String? = null,
+    val seeds: List<String> = emptyList(),
+    val hasMore: Boolean = false,
+    val page: Int = 0,
 )
 
 class HomeViewModel(private val container: AppContainer) : ViewModel() {
@@ -27,21 +32,56 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
 
     init { refresh() }
 
-    fun refresh() {
+    fun refresh(fromUser: Boolean = false) {
         viewModelScope.launch {
-            _state.value = _state.value.copy(loading = true, error = null)
+            _state.value = _state.value.copy(
+                loading = !fromUser && _state.value.shelves.isEmpty(),
+                refreshing = fromUser,
+                error = null,
+            )
             try {
                 container.ensureFreshToken()
                 runCatching { container.quickAccess.syncFromApi(container.api) }
                 val home = container.api.home()
                 _state.value = HomeUiState(
                     loading = false,
+                    refreshing = false,
                     shelves = home.shelves.filter { it.items.isNotEmpty() },
                     radios = home.radios,
                     needsOnboarding = home.needsOnboarding == true,
+                    seeds = home.seeds.orEmpty(),
+                    hasMore = home.hasMore == true,
+                    page = 0,
                 )
             } catch (e: Exception) {
-                _state.value = HomeUiState(loading = false, error = e.message ?: "Erreur accueil")
+                _state.value = _state.value.copy(
+                    loading = false,
+                    refreshing = false,
+                    error = e.message ?: "Erreur accueil",
+                )
+            }
+        }
+    }
+
+    fun loadMore() {
+        val cur = _state.value
+        if (!cur.hasMore || cur.loadingMore || cur.loading || cur.seeds.isEmpty()) return
+        viewModelScope.launch {
+            _state.value = cur.copy(loadingMore = true)
+            try {
+                container.ensureFreshToken()
+                val nextPage = cur.page + 1
+                val more = container.api.homeMore(nextPage, cur.seeds.joinToString(","))
+                val extra = more.shelves.filter { it.items.isNotEmpty() }
+                val merged = (cur.shelves + extra).distinctBy { it.title }
+                _state.value = _state.value.copy(
+                    loadingMore = false,
+                    shelves = merged,
+                    page = nextPage,
+                    hasMore = more.hasMore != false && extra.isNotEmpty(),
+                )
+            } catch (_: Exception) {
+                _state.value = _state.value.copy(loadingMore = false, hasMore = false)
             }
         }
     }
