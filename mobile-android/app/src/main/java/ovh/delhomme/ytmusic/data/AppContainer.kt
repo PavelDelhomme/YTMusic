@@ -28,7 +28,9 @@ class AppContainer(context: Context) {
         .build()
 
     private val authInterceptor = Interceptor { chain ->
-        val token = runBlocking { tokenStore.getAccess() }
+        // Cache mémoire d’abord — évite runBlocking DataStore à chaque heartbeat
+        val token = tokenStore.peekAccess()
+            ?: runCatching { runBlocking { tokenStore.getAccess() } }.getOrNull()
         val req = chain.request().newBuilder()
             .header("X-Device-Id", deviceId)
             .header("X-Device-Name", android.os.Build.MODEL ?: "Android")
@@ -40,12 +42,16 @@ class AppContainer(context: Context) {
     }
 
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
         .addInterceptor(authInterceptor)
         .addInterceptor(
             HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BASIC
+                level = if (BuildConfig.DEBUG) {
+                    HttpLoggingInterceptor.Level.BASIC
+                } else {
+                    HttpLoggingInterceptor.Level.NONE
+                }
             },
         )
         .build()

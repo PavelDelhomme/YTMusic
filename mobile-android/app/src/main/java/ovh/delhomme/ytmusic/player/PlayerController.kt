@@ -198,16 +198,28 @@ class PlayerController(
         val p = player() ?: run {
             // Contrôleur pas encore prêt : bascule via ExoPlayer direct
             val exo = PlaybackService.Holder.player ?: return
-            if (exo.isPlaying) exo.pause() else exo.play()
+            if (exo.isPlaying) {
+                exo.pause()
+                StreamPrefetcher.cancelIdle()
+            } else {
+                exo.play()
+            }
             syncFrom(exo)
             return
         }
-        if (p.isPlaying) p.pause() else p.play()
+        if (p.isPlaying) {
+            p.pause()
+            StreamPrefetcher.cancelIdle()
+        } else {
+            p.play()
+        }
+        syncFrom(p)
     }
 
     fun pause() {
         connect()
         player()?.pause() ?: PlaybackService.Holder.player?.pause()
+        StreamPrefetcher.cancelIdle()
     }
 
     fun playResume() {
@@ -522,8 +534,8 @@ class PlayerController(
             base,
             playable.map { it.id },
             idx,
-            ahead = 12,
-            behind = 2,
+            ahead = 2,
+            behind = 0,
         )
     }
 

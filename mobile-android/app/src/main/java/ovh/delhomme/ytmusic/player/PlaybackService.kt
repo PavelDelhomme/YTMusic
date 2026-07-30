@@ -59,18 +59,21 @@ class PlaybackService : MediaSessionService() {
             if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
                 warmUpcoming(player.currentMediaItemIndex)
             }
+            if (events.contains(Player.EVENT_IS_PLAYING_CHANGED) && !player.isPlaying) {
+                StreamPrefetcher.cancelIdle()
+            }
         }
     }
 
     override fun onCreate() {
         super.onCreate()
-        // Buffer généreux : enchaînement file sans trou (précharge prochaine piste)
+        // Buffer raisonnable : continuité sans radio maxée (énergie)
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs */ 15_000,
-                /* maxBufferMs */ 120_000,
-                /* bufferForPlaybackMs */ 900,
-                /* bufferForPlaybackAfterRebufferMs */ 2_000,
+                /* minBufferMs */ 12_000,
+                /* maxBufferMs */ 45_000,
+                /* bufferForPlaybackMs */ 800,
+                /* bufferForPlaybackAfterRebufferMs */ 1_500,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -116,8 +119,9 @@ class PlaybackService : MediaSessionService() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         val p = player
-        // Garder la lecture si un titre tourne encore (notification persistante)
-        if (p == null || !p.isPlaying || p.mediaItemCount == 0) {
+        // Garder le service (notification + reprise) tant qu’une file existe,
+        // même en pause — sinon swipe récents tue le player.
+        if (p == null || p.mediaItemCount == 0) {
             stopSelf()
         }
     }
@@ -246,8 +250,8 @@ class PlaybackService : MediaSessionService() {
             base,
             queue.map { it.id },
             fromIndex,
-            ahead = 12,
-            behind = 2,
+            ahead = 2,
+            behind = 0,
         )
     }
 
@@ -283,8 +287,8 @@ fun ExoPlayer.playTracks(baseStreamUrl: (String) -> String, tracks: List<TrackDt
         base,
         playable.map { it.id },
         idx,
-        ahead = 12,
-        behind = 2,
+        ahead = 2,
+        behind = 0,
     )
     val items = playable.map { t ->
         MediaItem.Builder()

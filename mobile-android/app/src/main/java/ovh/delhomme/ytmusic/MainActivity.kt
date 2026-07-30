@@ -38,6 +38,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -48,10 +49,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.ListenBody
@@ -256,6 +262,7 @@ private fun MainTabs(
     }
 
     LaunchedEffect(Unit) {
+        runCatching { container.tokenStore.warmCache() }
         likedIds = runCatching {
             container.api.library().liked.map { it.id }.toSet()
         }.getOrDefault(emptySet())
@@ -337,62 +344,74 @@ private fun MainTabs(
     }
     LaunchedEffect(playerUi.track?.id, playerUi.playing, playerUi.queueIndex) {
         if (playerUi.track == null) return@LaunchedEffect
-        kotlinx.coroutines.delay(400)
+        delay(400)
         publishPlayback()
     }
+    // Heartbeat progress pendant lecture — rare (énergie)
     LaunchedEffect(playerUi.playing, playerUi.track?.id) {
         if (!playerUi.playing || playerUi.track == null) return@LaunchedEffect
-        while (true) {
-            kotlinx.coroutines.delay(5_000)
+        while (isActive) {
+            delay(25_000)
+            if (!player.state.value.playing) break
             publishPlayback()
         }
     }
 
-    // Heartbeat + pull file si un autre appareil a avancé (HTTP soft sync)
-    LaunchedEffect(Unit) {
-        while (true) {
-            runCatching {
-                container.api.registerSessionDevice(
-                    mapOf(
-                        "deviceId" to container.deviceId,
-                        "name" to (android.os.Build.MODEL ?: "Android"),
-                        "deviceType" to "mobile",
-                        "canPlay" to true,
-                    ),
-                )
-                if (System.currentTimeMillis() >= suppressSessionPublishUntil) {
-                    val snap = container.api.session()
-                    val st = snap.state
-                    val remoteQueue = st?.queue.orEmpty().filter { it.isPlayable() }
-                    val ui = player.state.value
-                    val localIds = ui.queue.map { it.id }
-                    val remoteIds = remoteQueue.map { it.id }
-                    val remoteNewer =
-                        (st?.updatedAt ?: 0L) > (System.currentTimeMillis() - 120_000) &&
-                            remoteIds.isNotEmpty() &&
-                            remoteIds != localIds &&
-                            snap.activePlayerId != null &&
-                            snap.activePlayerId != container.deviceId
-                    if (remoteNewer && !ui.playing) {
-                        val current = st?.current?.takeIf { it.isPlayable() }
-                        val idx = when {
-                            current != null -> remoteQueue.indexOfFirst { it.id == current.id }
-                                .takeIf { it >= 0 } ?: (st?.queueIndex ?: 0)
-                            else -> st?.queueIndex ?: 0
-                        }.coerceIn(0, remoteQueue.lastIndex)
-                        suppressSessionPublishUntil = System.currentTimeMillis() + 8_000L
-                        player.restoreQueue(
-                            tracks = remoteQueue,
-                            startIndex = idx,
-                            positionMs = ((st?.progress ?: 0.0) * 1000.0).toLong().coerceAtLeast(0L),
-                            autoplay = false,
-                            title = "File synchronisée",
-                            userQueueEnd = st?.userQueueEnd,
+    // Sync multi-appareils : lent en idle, pause si app en arrière-plan sans lecture
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var lastDeviceRegisterAt by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(lifecycleOwner, playerUi.playing) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (isActive) {
+                val playing = player.state.value.playing
+                val now = System.currentTimeMillis()
+                runCatching {
+                    if (now - lastDeviceRegisterAt > 5 * 60_000L) {
+                        lastDeviceRegisterAt = now
+                        container.api.registerSessionDevice(
+                            mapOf(
+                                "deviceId" to container.deviceId,
+                                "name" to (android.os.Build.MODEL ?: "Android"),
+                                "deviceType" to "mobile",
+                                "canPlay" to true,
+                            ),
                         )
                     }
+                    // Pendant lecture locale : pas de pull remote (évite radio + restore)
+                    if (!playing && now >= suppressSessionPublishUntil) {
+                        val snap = container.api.session()
+                        val st = snap.state
+                        val remoteQueue = st?.queue.orEmpty().filter { it.isPlayable() }
+                        val ui = player.state.value
+                        val localIds = ui.queue.map { it.id }
+                        val remoteIds = remoteQueue.map { it.id }
+                        val remoteNewer =
+                            (st?.updatedAt ?: 0L) > (now - 120_000) &&
+                                remoteIds.isNotEmpty() &&
+                                remoteIds != localIds &&
+                                snap.activePlayerId != null &&
+                                snap.activePlayerId != container.deviceId
+                        if (remoteNewer) {
+                            val current = st?.current?.takeIf { it.isPlayable() }
+                            val idx = when {
+                                current != null -> remoteQueue.indexOfFirst { it.id == current.id }
+                                    .takeIf { it >= 0 } ?: (st?.queueIndex ?: 0)
+                                else -> st?.queueIndex ?: 0
+                            }.coerceIn(0, remoteQueue.lastIndex)
+                            suppressSessionPublishUntil = System.currentTimeMillis() + 8_000L
+                            player.restoreQueue(
+                                tracks = remoteQueue,
+                                startIndex = idx,
+                                positionMs = ((st?.progress ?: 0.0) * 1000.0).toLong().coerceAtLeast(0L),
+                                autoplay = false,
+                                title = "File synchronisée",
+                                userQueueEnd = st?.userQueueEnd,
+                            )
+                        }
+                    }
                 }
+                delay(if (playing) 45_000 else 30_000)
             }
-            kotlinx.coroutines.delay(4_000)
         }
     }
 
@@ -460,13 +479,13 @@ private fun MainTabs(
 
     LaunchedEffect(playerUi.playing, playerUi.track?.id) {
         if (!playerUi.playing || playerUi.track == null) return@LaunchedEffect
-        while (true) {
-            kotlinx.coroutines.delay(15_000)
+        while (isActive) {
+            delay(25_000)
             val t = player.state.value.track ?: break
             val ui = player.state.value
             if (!ui.playing) break
             val now = System.currentTimeMillis()
-            if (now - lastProgressSentAt < 12_000) continue
+            if (now - lastProgressSentAt < 20_000) continue
             lastProgressSentAt = now
             val pct = if (ui.durationMs > 0) {
                 ui.positionMs.toDouble() / ui.durationMs * 100.0
@@ -490,7 +509,7 @@ private fun MainTabs(
     LaunchedEffect(playerUi.playing, playerUi.track?.id) {
         while (playerUi.playing && playerUi.track != null) {
             player.tick()
-            kotlinx.coroutines.delay(500)
+            delay(500)
         }
     }
 
