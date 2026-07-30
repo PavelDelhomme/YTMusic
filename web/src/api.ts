@@ -517,7 +517,13 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ trackIds }),
     }),
-  import: (payload: { url?: string; query?: string; kind?: string; id?: string }) =>
+  import: (payload: {
+    url?: string;
+    query?: string;
+    kind?: string;
+    id?: string;
+    options?: { likePlaylist?: boolean; createLocalCopy?: boolean };
+  }) =>
     req<{ title: string; kind: string; added: Record<string, unknown>; library: LibraryData }>('/api/import', {
       method: 'POST',
       body: JSON.stringify(payload),

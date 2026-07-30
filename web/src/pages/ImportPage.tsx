@@ -58,7 +58,11 @@ export function ImportPage() {
     setError('');
     setMessage('');
     try {
-      const result = await api.import({ url: input.trim(), query: input.trim() });
+      const result = await api.import({
+        url: input.trim(),
+        query: input.trim(),
+        options: { createLocalCopy: true },
+      });
       applyLibrary(result.library);
       setMessage(
         `Importé : ${result.title} (${result.kind}) — ${JSON.stringify(result.added)}`,

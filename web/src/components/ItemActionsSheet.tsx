@@ -388,10 +388,31 @@ export function ItemActionsSheet() {
                     if (item.type === 'album' && hasAlbum(item.id)) {
                       const r = await api.removeAlbum(item.id);
                       applyLibrary(r.library);
-                    } else {
-                      const kind =
-                        item.type === 'album' ? 'album' : item.type === 'artist' ? 'artist' : 'playlist';
-                      const r = await api.import({ kind, id: item.id });
+                    } else if (item.type === 'album') {
+                      const r = await api.saveAlbum({
+                        id: item.id,
+                        title: item.title,
+                        artists: item.artists,
+                        thumbnails: item.thumbnails,
+                        type: 'album',
+                      });
+                      applyLibrary(r.library);
+                    } else if (item.type === 'playlist') {
+                      const r = await api.likePlaylist({
+                        id: item.id,
+                        title: item.title,
+                        thumbnails: item.thumbnails,
+                        type: 'playlist',
+                      });
+                      applyLibrary(r.library);
+                    } else if (item.type === 'artist') {
+                      const r = await api.saveArtist({
+                        id: item.id,
+                        name: item.title,
+                        title: item.title,
+                        thumbnails: item.thumbnails,
+                        type: 'artist',
+                      });
                       applyLibrary(r.library);
                     }
                   } finally {
@@ -417,7 +438,13 @@ export function ItemActionsSheet() {
                       const r = await api.removeAlbum(albumId);
                       applyLibrary(r.library);
                     } else {
-                      const r = await api.import({ kind: 'album', id: albumId });
+                      const r = await api.saveAlbum({
+                        id: albumId,
+                        title: item.album?.name || item.title,
+                        artists: item.artists,
+                        thumbnails: item.thumbnails,
+                        type: 'album',
+                      });
                       applyLibrary(r.library);
                     }
                   } finally {

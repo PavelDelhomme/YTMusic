@@ -100,6 +100,7 @@ export async function importByKind(
 
   if (kind === 'album') {
     const { album, tracks } = await getAlbum(id);
+    // Métadonnées seulement — pas d’ajout des titres aux aimés / playlists
     saveAlbum(userId, {
       id: album.id,
       title: album.title,
@@ -107,9 +108,8 @@ export async function importByKind(
       artists: album.artists,
       thumbnails: album.thumbnails,
       type: 'album',
-      tracks,
     });
-    // Pas de playlist miroir par défaut : un album reste un album en biblio
+    // Copie locale optionnelle (explicit createLocalCopy) — désactivée par défaut
     let playlistCopy = false;
     if (options?.createLocalCopy === true) {
       const pl = createPlaylist(
@@ -124,8 +124,8 @@ export async function importByKind(
       kind: 'album',
       id: album.id,
       title: album.title,
-      added: { album: true, tracks: tracks.length, playlist: playlistCopy },
-      tracks,
+      added: { album: true, tracks: playlistCopy ? tracks.length : 0, playlist: playlistCopy },
+      tracks: playlistCopy ? tracks : undefined,
     };
   }
 
@@ -139,30 +139,34 @@ export async function importByKind(
       description: artist.description,
       type: 'artist',
     });
-    for (const a of albums.slice(0, 5)) {
-      try {
-        const full = await getAlbum(a.id);
-        saveAlbum(userId, {
-          id: full.album.id,
-          title: full.album.title,
-          year: full.album.year,
-          artists: full.album.artists,
-          thumbnails: full.album.thumbnails,
-          type: 'album',
-          tracks: full.tracks,
-        });
-      } catch {
-        /* ignore album fetch errors */
+    // Pas d’auto-import albums / playlist « Top » : ça remplissait la biblio de titres
+    let copied = 0;
+    if (options?.createLocalCopy === true) {
+      for (const a of albums.slice(0, 5)) {
+        try {
+          const full = await getAlbum(a.id);
+          saveAlbum(userId, {
+            id: full.album.id,
+            title: full.album.title,
+            year: full.album.year,
+            artists: full.album.artists,
+            thumbnails: full.album.thumbnails,
+            type: 'album',
+          });
+        } catch {
+          /* ignore */
+        }
       }
+      const pl = createPlaylist(userId, `${artist.name} — Top`, 'Import artiste');
+      for (const t of songs.slice(0, 25)) addToPlaylist(userId, pl.id, t);
+      copied = Math.min(25, songs.length);
     }
-    const pl = createPlaylist(userId, `${artist.name} — Top`, 'Import artiste');
-    for (const t of songs.slice(0, 25)) addToPlaylist(userId, pl.id, t);
     return {
       kind: 'artist',
       id: artist.id,
       title: artist.name,
-      added: { artist: true, tracks: songs.length, playlist: true },
-      tracks: songs,
+      added: { artist: true, tracks: copied, playlist: copied > 0 },
+      tracks: copied > 0 ? songs.slice(0, 25) : undefined,
     };
   }
 
@@ -176,18 +180,23 @@ export async function importByKind(
     description: playlist.description,
     type: 'playlist',
   };
+  // Enregistrer = aimer la playlist, sans dupliquer tous les titres en « Titres » / playlist locale
   if (options?.likePlaylist !== false) toggleLikePlaylist(userId, meta);
-  const local = createPlaylist(
-    userId,
-    playlist.title,
-    playlist.description || `Import YouTube · ${playlist.author || ''}`,
-  );
-  for (const t of tracks) addToPlaylist(userId, local.id, t);
+  let copied = 0;
+  if (options?.createLocalCopy === true) {
+    const local = createPlaylist(
+      userId,
+      playlist.title,
+      playlist.description || `Import YouTube · ${playlist.author || ''}`,
+    );
+    for (const t of tracks) addToPlaylist(userId, local.id, t);
+    copied = tracks.length;
+  }
   return {
     kind: 'playlist',
     id: playlist.id,
     title: playlist.title,
-    added: { playlist: true, tracks: tracks.length },
-    tracks,
+    added: { playlist: true, tracks: copied },
+    tracks: copied > 0 ? tracks : undefined,
   };
 }

@@ -491,6 +491,11 @@ fun TrackActionsSheet(
                                 }
                             }
                             enriched.isArtist() -> container.api.saveArtist(enriched.copy(type = "artist"))
+                            enriched.isPlaylist() -> {
+                                // Aimer la playlist seulement — ne pas liker comme un titre
+                                container.api.likePlaylist(enriched.copy(type = "playlist"))
+                                inLibrary = true
+                            }
                             else -> container.api.like(enriched)
                         }
                         Toast.makeText(context, "Bibliothèque mise à jour", Toast.LENGTH_SHORT).show()
