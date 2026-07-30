@@ -41,6 +41,14 @@ db.exec(`
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS library_tracks (
+    user_id TEXT NOT NULL,
+    track_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, track_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS liked_playlists (
     user_id TEXT NOT NULL,
     playlist_id TEXT NOT NULL,
@@ -124,9 +132,20 @@ db.exec(`
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_liked_tracks_user ON liked_tracks(user_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_liked_tracks_track ON liked_tracks(track_id);
+  CREATE INDEX IF NOT EXISTS idx_library_tracks_user ON library_tracks(user_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_history_user_played ON history(user_id, played_at DESC);
   CREATE INDEX IF NOT EXISTS idx_playlist_tracks_pl ON playlist_tracks(playlist_id, position);
 `);
+
+// Migration one-shot : anciens « titres biblio » = likes → aussi en library_tracks
+try {
+  db.exec(`
+    INSERT OR IGNORE INTO library_tracks (user_id, track_id, created_at)
+    SELECT user_id, track_id, created_at FROM liked_tracks
+  `);
+} catch {
+  /* ok */
+}
 
 export function upsertTrack(track: Track) {
   db.prepare(

@@ -18,14 +18,15 @@ function shuffleTracks(tracks: Track[]) {
 }
 
 export function LibraryPage() {
-  const { liked, playlists, history, albums, artists, likedPlaylists, createPlaylist, deletePlaylist } =
+  const { songs, liked, playlists, history, albums, artists, likedPlaylists, createPlaylist, deletePlaylist } =
     useLibrary();
   const playQueue = usePlayer((s) => s.playQueue);
-  const [tab, setTab] = useState<'titres' | 'playlists' | 'albums' | 'artists' | 'history'>('titres');
+  const [tab, setTab] = useState<'titres' | 'liked' | 'playlists' | 'albums' | 'artists' | 'history'>('titres');
   const [name, setName] = useState('');
 
   const tabs = [
     ['titres', 'Titres'],
+    ['liked', "J'aime"],
     ['playlists', 'Playlists'],
     ['albums', 'Albums'],
     ['artists', 'Artistes'],
@@ -54,10 +55,45 @@ export function LibraryPage() {
       {tab === 'titres' && (
         <div>
           <p className="mb-4 text-sm text-yt-muted">
-            Tes titres aimés — playlist automatique mise à jour dès que tu likes un morceau.
+            Titres enregistrés dans ta bibliothèque (indépendant des J&apos;aime).
+          </p>
+          {songs.length === 0 ? (
+            <p className="text-yt-muted">
+              Aucun titre. Utilise « Enregistrer dans la bibliothèque » sur un morceau.
+            </p>
+          ) : (
+            <>
+              <div className="mb-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void playQueue(songs, 0)}
+                  className="inline-flex items-center gap-2 rounded-full bg-yt-red px-5 py-2.5 text-sm font-medium"
+                >
+                  <Play className="h-4 w-4 fill-white" /> Tout lire
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void playQueue(shuffleTracks(songs), 0)}
+                  className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-5 py-2.5 text-sm font-medium text-yt-muted hover:text-white"
+                >
+                  <Shuffle className="h-4 w-4" /> Aléatoire
+                </button>
+              </div>
+              {songs.map((t) => (
+                <TrackRow key={t.id} track={t} queue={songs} showAlbum />
+              ))}
+            </>
+          )}
+        </div>
+      )}
+
+      {tab === 'liked' && (
+        <div>
+          <p className="mb-4 text-sm text-yt-muted">
+            Tes titres aimés — le cœur uniquement, sans obligation de les enregistrer.
           </p>
           {liked.length === 0 ? (
-            <p className="text-yt-muted">Aucun titre pour l&apos;instant. Like un morceau pour le retrouver ici.</p>
+            <p className="text-yt-muted">Aucun J&apos;aime pour l&apos;instant.</p>
           ) : (
             <>
               <div className="mb-4 flex flex-wrap gap-2">

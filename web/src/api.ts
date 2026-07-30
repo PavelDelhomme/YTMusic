@@ -27,6 +27,8 @@ export type LibraryPlaylist = {
 };
 
 export type LibraryData = {
+  /** Titres enregistrés dans la bibliothèque (≠ J’aime). */
+  songs: Track[];
   liked: Track[];
   likedPlaylists: any[];
   albums: any[];
@@ -507,6 +509,16 @@ export const api = {
     req<{ liked: boolean; library: LibraryData }>('/api/library/like', {
       method: 'POST',
       body: JSON.stringify(track),
+    }),
+  /** Enregistre / retire un titre de la biblio (sans toucher aux J’aime). */
+  toggleLibrarySong: (track: Track) =>
+    req<{ saved: boolean; library: LibraryData }>('/api/library/songs', {
+      method: 'POST',
+      body: JSON.stringify(track),
+    }),
+  removeLibrarySong: (id: string) =>
+    req<{ ok: boolean; saved: boolean; library: LibraryData }>(`/api/library/songs/${id}`, {
+      method: 'DELETE',
     }),
   likePlaylist: (playlist: Record<string, unknown>) =>
     req<{ liked: boolean; library: LibraryData }>('/api/library/like-playlist', {

@@ -28,6 +28,7 @@ data class PlaylistDto(
 
 @JsonClass(generateAdapter = false)
 data class LibraryResponse(
+    val songs: List<TrackDto> = emptyList(),
     val liked: List<TrackDto> = emptyList(),
     val likedPlaylists: List<TrackDto> = emptyList(),
     val albums: List<TrackDto> = emptyList(),
@@ -39,6 +40,9 @@ data class LibraryResponse(
 
 @JsonClass(generateAdapter = false)
 data class LikeResponse(val liked: Boolean, val library: LibraryResponse? = null)
+
+@JsonClass(generateAdapter = false)
+data class LibrarySongResponse(val saved: Boolean, val library: LibraryResponse? = null)
 
 @JsonClass(generateAdapter = false)
 data class CreatePlaylistBody(val name: String, val description: String? = null)
@@ -293,6 +297,12 @@ interface YtMusicApi {
 
     @POST("api/library/like")
     suspend fun like(@Body track: TrackDto): LikeResponse
+
+    @POST("api/library/songs")
+    suspend fun toggleLibrarySong(@Body track: TrackDto): LibrarySongResponse
+
+    @DELETE("api/library/songs/{id}")
+    suspend fun removeLibrarySong(@Path("id") id: String): LibrarySongResponse
 
     @POST("api/library/like-playlist")
     suspend fun likePlaylist(@Body playlist: TrackDto): LikeResponse

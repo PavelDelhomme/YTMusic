@@ -6,18 +6,21 @@ type LibraryState = LibraryData & {
   refresh: () => Promise<void>;
   applyLibrary: (lib: LibraryData | null | undefined) => void;
   toggleLike: (track: Track) => Promise<boolean>;
+  toggleLibrarySong: (track: Track) => Promise<boolean>;
   createPlaylist: (name: string, description?: string) => Promise<import('../api').LibraryPlaylist | undefined>;
   deletePlaylist: (id: string) => Promise<void>;
   addToPlaylist: (playlistId: string, track: Track) => Promise<void>;
   addTracksToPlaylist: (playlistId: string, tracks: Track[]) => Promise<void>;
   recordPlay: (track: Track) => Promise<void>;
   isLiked: (id: string) => boolean;
+  isInLibrary: (id: string) => boolean;
   hasAlbum: (id: string) => boolean;
   hasArtist: (id: string) => boolean;
   isPlaylistLiked: (id: string) => boolean;
 };
 
 const empty: LibraryData = {
+  songs: [],
   liked: [],
   likedPlaylists: [],
   albums: [],
@@ -28,8 +31,12 @@ const empty: LibraryData = {
 };
 
 function mergeLibrary(lib: LibraryData): LibraryData {
+  const liked = Array.isArray(lib.liked) ? lib.liked : [];
+  // Compat anciennes réponses API sans `songs`
+  const songs = Array.isArray(lib.songs) ? lib.songs : liked;
   return {
-    liked: Array.isArray(lib.liked) ? lib.liked : [],
+    songs,
+    liked,
     likedPlaylists: Array.isArray(lib.likedPlaylists) ? lib.likedPlaylists : [],
     albums: Array.isArray(lib.albums) ? lib.albums : [],
     artists: Array.isArray(lib.artists) ? lib.artists : [],
@@ -59,7 +66,6 @@ export const useLibrary = create<LibraryState>((set, get) => ({
 
   toggleLike: async (track) => {
     const wasLiked = get().isLiked(track.id);
-    // Optimiste : l’UI affiche tout de suite « Dans la bibliothèque » / retrait
     set((s) => ({
       liked: wasLiked
         ? s.liked.filter((t) => t.id !== track.id)
@@ -67,9 +73,8 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     }));
     try {
       const r = await api.like(track);
-      if (r.library) {
-        get().applyLibrary(r.library);
-      } else {
+      if (r.library) get().applyLibrary(r.library);
+      else {
         set((s) => ({
           liked: r.liked
             ? [track, ...s.liked.filter((t) => t.id !== track.id)]
@@ -84,6 +89,34 @@ export const useLibrary = create<LibraryState>((set, get) => ({
           : s.liked.filter((t) => t.id !== track.id),
       }));
       throw new Error('like failed');
+    }
+  },
+
+  toggleLibrarySong: async (track) => {
+    const wasSaved = get().isInLibrary(track.id);
+    set((s) => ({
+      songs: wasSaved
+        ? s.songs.filter((t) => t.id !== track.id)
+        : [track, ...s.songs.filter((t) => t.id !== track.id)],
+    }));
+    try {
+      const r = await api.toggleLibrarySong(track);
+      if (r.library) get().applyLibrary(r.library);
+      else {
+        set((s) => ({
+          songs: r.saved
+            ? [track, ...s.songs.filter((t) => t.id !== track.id)]
+            : s.songs.filter((t) => t.id !== track.id),
+        }));
+      }
+      return r.saved;
+    } catch {
+      set((s) => ({
+        songs: wasSaved
+          ? [track, ...s.songs.filter((t) => t.id !== track.id)]
+          : s.songs.filter((t) => t.id !== track.id),
+      }));
+      throw new Error('library song failed');
     }
   },
 
@@ -126,6 +159,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   },
 
   isLiked: (id) => get().liked.some((t) => t.id === id),
+  isInLibrary: (id) => get().songs.some((t) => t.id === id),
   hasAlbum: (id) => get().albums.some((a) => a.id === id),
   hasArtist: (id) => get().artists.some((a) => a.id === id),
   isPlaylistLiked: (id) => get().likedPlaylists.some((p) => p.id === id),

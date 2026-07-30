@@ -113,12 +113,13 @@ fun TrackActionsSheet(
     var showSleep by remember { mutableStateOf(false) }
     var downloaded by remember { mutableStateOf(false) }
     var albumInLibrary by remember { mutableStateOf(false) }
+    var songInLibrary by remember { mutableStateOf(false) }
     var liked by remember(track.id) { mutableStateOf(track.id in likedIds) }
     val playerUi by player.state.collectAsState()
     val queueIndex = playerUi.queue.indexOfFirst { it.id == enriched.id }
     val inQueue = queueIndex >= 0
     val isCurrent = inQueue && queueIndex == playerUi.queueIndex
-    val inLibrary = liked ||
+    val inLibrary = songInLibrary ||
         (enriched.isAlbum() && albumInLibrary) ||
         (enriched.album?.id != null && albumInLibrary && !enriched.isPlayable())
 
@@ -146,6 +147,8 @@ fun TrackActionsSheet(
             downloaded = track.id in lib.downloaded
             val serverLiked = lib.liked.any { it.id == track.id }
             liked = serverLiked
+            songInLibrary = lib.songs.any { it.id == track.id } ||
+                (lib.songs.isEmpty() && lib.liked.any { it.id == track.id })
             if (serverLiked != (track.id in likedIds)) {
                 onLikedChanged(
                     if (serverLiked) likedIds + track.id else likedIds - track.id,
@@ -423,18 +426,17 @@ fun TrackActionsSheet(
                 }
             }
             SheetAction(
-                if (liked) Icons.Default.LibraryAddCheck else Icons.Default.LibraryAdd,
-                if (liked) "Dans la bibliothèque" else "Enregistrer dans la bibliothèque",
-                if (liked) "Appuyer pour retirer" else "Ajoute aux titres J'aime",
+                if (songInLibrary) Icons.Default.LibraryAddCheck else Icons.Default.LibraryAdd,
+                if (songInLibrary) "Dans la bibliothèque" else "Enregistrer dans la bibliothèque",
+                if (songInLibrary) "Retirer (sans toucher au J'aime)" else "Sans ajouter aux J'aime",
             ) {
                 scope.launch {
                     runCatching {
-                        val r = container.api.like(enriched)
-                        liked = r.liked
-                        onLikedChanged(if (r.liked) likedIds + enriched.id else likedIds - enriched.id)
+                        val r = container.api.toggleLibrarySong(enriched)
+                        songInLibrary = r.saved
                         Toast.makeText(
                             context,
-                            if (r.liked) "Dans la bibliothèque" else "Retiré de la bibliothèque",
+                            if (r.saved) "Dans la bibliothèque" else "Retiré de la bibliothèque",
                             Toast.LENGTH_SHORT,
                         ).show()
                     }
@@ -495,7 +497,7 @@ fun TrackActionsSheet(
                                 // Aimer la playlist seulement — ne pas liker comme un titre
                                 container.api.likePlaylist(enriched.copy(type = "playlist"))
                             }
-                            else -> container.api.like(enriched)
+                            else -> container.api.toggleLibrarySong(enriched)
                         }
                         Toast.makeText(context, "Bibliothèque mise à jour", Toast.LENGTH_SHORT).show()
                     }.onFailure {
