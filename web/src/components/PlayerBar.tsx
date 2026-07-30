@@ -180,20 +180,42 @@ export function PlayerBar({
       {/* Layout : transport+temps | centre (cover+titre+actions) | volume+repeat+shuffle */}
       <div className="mx-auto flex max-w-[1600px] items-center gap-3 px-3 py-2.5 md:gap-4 md:px-5 md:py-3">
         {/* Gauche */}
-        <div className="flex shrink-0 items-center gap-1 sm:gap-1.5" onClick={stop}>
-          <button type="button" onClick={() => void prev()} className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10" title="Précédent">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-1.5" onClick={stop} onPointerDown={stop}>
+          <button
+            type="button"
+            onClick={(e) => {
+              stop(e);
+              void prev();
+            }}
+            className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10"
+            title="Précédent"
+            aria-label="Titre précédent"
+          >
             <SkipBack className="h-6 w-6 fill-white" />
           </button>
           <button
             type="button"
-            onClick={toggle}
+            onClick={(e) => {
+              stop(e);
+              toggle();
+            }}
             disabled={isLoading}
             className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition hover:scale-105 disabled:opacity-60"
             title={isPlaying ? 'Pause' : 'Lecture'}
+            aria-label={isPlaying ? 'Pause' : 'Lecture'}
           >
             {isPlaying ? <Pause className="h-6 w-6 fill-black" /> : <Play className="h-6 w-6 fill-black" />}
           </button>
-          <button type="button" onClick={() => void next()} className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10" title="Suivant">
+          <button
+            type="button"
+            onClick={(e) => {
+              stop(e);
+              void next();
+            }}
+            className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10"
+            title="Suivant"
+            aria-label="Titre suivant"
+          >
             <SkipForward className="h-6 w-6 fill-white" />
           </button>
           <span className="ml-2 hidden whitespace-nowrap text-xs tabular-nums text-yt-muted sm:inline">

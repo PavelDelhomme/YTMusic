@@ -449,6 +449,14 @@ private fun MainTabs(
                                 suppressSessionPublishUntil = 0L
                                 player.toggle()
                             },
+                            onPrev = {
+                                suppressSessionPublishUntil = 0L
+                                player.skipPrev()
+                            },
+                            onNext = {
+                                suppressSessionPublishUntil = 0L
+                                player.skipNext()
+                            },
                             onCast = { showCast = true },
                             onOpen = onOpenPlayer,
                             onSeek = { ratio ->
