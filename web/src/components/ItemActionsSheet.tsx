@@ -14,6 +14,7 @@ import {
   PinOff,
   Share2,
   Smartphone,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
   User,
@@ -58,7 +59,7 @@ async function shareTrack(track: Track) {
   }
 }
 
-export function ItemActionsSheet() {
+export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => void }) {
   const item = useItemActions((s) => s.item);
   const opts = useItemActions((s) => s.opts);
   const close = useItemActions((s) => s.close);
@@ -356,6 +357,18 @@ export function ItemActionsSheet() {
                   })
                 }
               />
+              {onOpenEqualizer && (
+                <Row
+                  icon={<SlidersHorizontal className="h-4 w-4" />}
+                  label="Égaliseur"
+                  sub="Optionnel · désactivé par défaut"
+                  onClick={() =>
+                    after(() => {
+                      onOpenEqualizer();
+                    })
+                  }
+                />
+              )}
               <Row
                 icon={liked ? <Check className="h-5 w-5 text-yt-red" /> : <Library className="h-5 w-5" />}
                 label={liked ? 'Dans la bibliothèque' : 'Enregistrer dans la bibliothèque'}

@@ -1,7 +1,15 @@
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Innertube, UniversalCache, ClientType } from 'youtubei.js';
-import { extractThumbs, mapAny, mapListItem, parseAuthorField, artistsFromHeader, extractYear } from './mappers.js';
+import { Innertube, UniversalCache, ClientType, YTNodes, Parser } from 'youtubei.js';
+import {
+  asText,
+  extractThumbs,
+  mapAny,
+  mapListItem,
+  parseAuthorField,
+  artistsFromHeader,
+  extractYear,
+} from './mappers.js';
 import { getFullLibrary, getHistory } from './library.js';
 import { listFollows, listSearchHistory } from './prefs.js';
 import {
@@ -665,6 +673,155 @@ export async function getArtistRadio(artistId: string): Promise<Track[]> {
   return radio;
 }
 
+function isTopSongsShelfTitle(title: string): boolean {
+  const t = title.toLowerCase();
+  return (
+    t.includes('top song') ||
+    t.includes('titres les plus') ||
+    t.includes('plus écout') ||
+    t.includes('plus ecout') ||
+    t.includes('popular song') ||
+    t.includes('songs') ||
+    t.includes('titre')
+  );
+}
+
+function artistMetaFromHeader(artistId: string, artist: any): ArtistMeta {
+  const header = artist?.header || {};
+  const rawSubscribers =
+    asText(header.subtitle) ||
+    asText(header.subscription_button?.subscriber_count_text) ||
+    asText(header.subscriber_count) ||
+    '';
+  const subscribers = (() => {
+    const s = rawSubscribers.trim();
+    if (!s) return undefined;
+    if (/^(subscribed|subscribe|abonné|s'abonner)$/i.test(s)) return undefined;
+    return s;
+  })();
+  return {
+    id: artistId,
+    name: asText(header.title) || 'Artiste',
+    subscribers,
+    thumbnails: extractThumbs(header, artist),
+    description: asText(header.description) || asText(artist?.description) || undefined,
+  };
+}
+
+function mapSongNodes(nodes: any[]): Track[] {
+  const out: Track[] = [];
+  const seen = new Set<string>();
+  for (const node of nodes || []) {
+    if (!node || node.type === 'ContinuationItem') continue;
+    const t = mapAny(node);
+    if (!t?.id || seen.has(t.id)) continue;
+    seen.add(t.id);
+    out.push(t);
+  }
+  return out;
+}
+
+/**
+ * Liste complète des titres d’un artiste (shelf « Top songs » → browse + continuations).
+ * Distinct des tops affichés sur la fiche artiste.
+ */
+export async function getArtistSongs(
+  artistId: string,
+  opts?: { limit?: number },
+): Promise<{ artist: ArtistMeta; tracks: Track[] }> {
+  const limit = Math.min(Math.max(opts?.limit ?? 500, 1), 800);
+  const innertube = await getYT();
+  const artist = await innertube.music.getArtist(artistId);
+  const meta = artistMetaFromHeader(artistId, artist);
+  const actions = (innertube as any).actions;
+
+  let rawNodes: any[] = [];
+  let continuation: any = null;
+
+  const shelves = ((artist as any).sections || []).filter(
+    (s: any) => s?.type === 'MusicShelf' || s?.endpoint,
+  );
+  const shelf =
+    shelves.find((s: any) => isTopSongsShelfTitle(asText(s.title))) ||
+    shelves.find((s: any) => s?.endpoint) ||
+    null;
+
+  try {
+    if (shelf?.endpoint?.call) {
+      const page = await shelf.endpoint.call(actions, { client: 'YTMUSIC', parse: true });
+      const pl = page?.contents_memo?.getType?.(YTNodes.MusicPlaylistShelf)?.[0] || null;
+      if (pl?.contents) {
+        rawNodes = [...pl.contents];
+        continuation =
+          [...pl.contents].find((c: any) => c?.type === 'ContinuationItem') || pl.continuation || null;
+      }
+    }
+  } catch {
+    /* fallback below */
+  }
+
+  if (!rawNodes.length) {
+    try {
+      const pl = await (artist as any).getAllSongs();
+      rawNodes = [...(pl?.contents || [])];
+      continuation =
+        rawNodes.find((c: any) => c?.type === 'ContinuationItem') || pl?.continuation || null;
+    } catch {
+      /* last resort: tops only */
+    }
+  }
+
+  let tracks = mapSongNodes(rawNodes);
+  let guard = 0;
+  while (continuation && tracks.length < limit && guard < 25) {
+    guard += 1;
+    try {
+      let page: any;
+      if (typeof continuation === 'string') {
+        const response = await actions.execute('/browse', {
+          client: 'YTMUSIC',
+          continuation,
+        });
+        page = Parser.parseResponse(response.data);
+      } else if (continuation?.endpoint?.call) {
+        page = await continuation.endpoint.call(actions, { client: 'YTMUSIC', parse: true });
+      } else {
+        break;
+      }
+
+      const contShelf = page?.continuation_contents;
+      const append = page?.on_response_received_actions?.[0];
+      const moreNodes: any[] = contShelf?.contents
+        ? [...contShelf.contents]
+        : append?.contents
+          ? [...append.contents]
+          : [];
+      const more = mapSongNodes(moreNodes);
+      if (!more.length) break;
+      const seen = new Set(tracks.map((t) => t.id));
+      for (const t of more) {
+        if (seen.has(t.id)) continue;
+        seen.add(t.id);
+        tracks.push(t);
+        if (tracks.length >= limit) break;
+      }
+      continuation =
+        moreNodes.find((c: any) => c?.type === 'ContinuationItem') ||
+        contShelf?.continuation ||
+        null;
+    } catch {
+      break;
+    }
+  }
+
+  if (!tracks.length) {
+    const fallback = await getArtist(artistId);
+    tracks = fallback.songs;
+  }
+
+  return { artist: meta, tracks: tracks.slice(0, limit) };
+}
+
 export async function getLyrics(videoId: string): Promise<{
   lyrics: string | null;
   timed: { startMs: number; text: string }[] | null;
@@ -710,14 +867,7 @@ export async function getArtist(artistId: string): Promise<{
 }> {
   const innertube = await getYT();
   const artist = await innertube.music.getArtist(artistId);
-  const header = (artist as any).header || {};
-  const meta: ArtistMeta = {
-    id: artistId,
-    name: String(header.title?.text || header.title || 'Artiste'),
-    subscribers: header.subscription_button?.subscribed_text || header.subtitle?.text,
-    thumbnails: extractThumbs(header, artist),
-    description: header.description?.text || (artist as any).description,
-  };
+  const meta = artistMetaFromHeader(artistId, artist);
 
   const songs: Track[] = [];
   const albums: Track[] = [];

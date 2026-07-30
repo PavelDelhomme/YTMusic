@@ -71,8 +71,30 @@ export function PlayerBar({
 
   const [volOpen, setVolOpen] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [uiPlaying, setUiPlaying] = useState(isPlaying);
   const prevVol = useRef(volume);
   const volRef = useRef<HTMLDivElement>(null);
+
+  // Icône play/pause = état réel de l’élément <audio> (touches média / MPRIS)
+  useEffect(() => {
+    const el = audioEl;
+    if (!el) {
+      setUiPlaying(isPlaying);
+      return;
+    }
+    const sync = () => setUiPlaying(!el.paused && !el.ended);
+    sync();
+    el.addEventListener('play', sync);
+    el.addEventListener('playing', sync);
+    el.addEventListener('pause', sync);
+    el.addEventListener('ended', sync);
+    return () => {
+      el.removeEventListener('play', sync);
+      el.removeEventListener('playing', sync);
+      el.removeEventListener('pause', sync);
+      el.removeEventListener('ended', sync);
+    };
+  }, [audioEl, isPlaying, queueIndex]);
 
   useEffect(() => {
     if (!volOpen) return;
@@ -188,7 +210,7 @@ export function PlayerBar({
               void prev();
             }}
             className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10"
-            title="Précédent (Ctrl+← · [ · touche média)"
+            title="Précédent — >4s recommence, sinon titre d’avant (B · [ · , · Alt+← · touche média)"
             aria-label="Titre précédent"
           >
             <SkipBack className="h-6 w-6 fill-white" />
@@ -201,10 +223,10 @@ export function PlayerBar({
             }}
             disabled={isLoading}
             className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition hover:scale-105 disabled:opacity-60"
-            title={isPlaying ? 'Pause (Espace · touche média)' : 'Lecture (Espace · touche média)'}
-            aria-label={isPlaying ? 'Pause' : 'Lecture'}
+            title={uiPlaying ? 'Pause (Espace · P · touche média)' : 'Lecture (Espace · P · touche média)'}
+            aria-label={uiPlaying ? 'Pause' : 'Lecture'}
           >
-            {isPlaying ? <Pause className="h-6 w-6 fill-black" /> : <Play className="h-6 w-6 fill-black" />}
+            {uiPlaying ? <Pause className="h-6 w-6 fill-black" /> : <Play className="h-6 w-6 fill-black" />}
           </button>
           <button
             type="button"
@@ -213,7 +235,7 @@ export function PlayerBar({
               void next();
             }}
             className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10"
-            title="Suivant (Ctrl+→ · ] · touche média)"
+            title="Suivant (N · ] · . · Alt+→ · touche média)"
             aria-label="Titre suivant"
           >
             <SkipForward className="h-6 w-6 fill-white" />

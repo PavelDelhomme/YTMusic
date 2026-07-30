@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import { api, artistNames, thumb, type Track } from '../api';
+import { api, artistNames, type Track } from '../api';
 import { resolvePlayUrl } from '../lib/offlineCache';
-import { prefetchAround, resolvePrefetchedPlayUrl, warmFormat, warmHead } from '../lib/streamPrefetch';
+import { prefetchAround, resolvePrefetchedPlayUrl, warmFormat, warmHead, bumpPrefetchGeneration } from '../lib/streamPrefetch';
 import { useSession } from './session';
 import { useLibrary } from './library';
 
@@ -74,15 +74,6 @@ type PlayerState = {
   audioEl: HTMLAudioElement | null;
   bindAudio: (el: HTMLAudioElement | null) => void;
 };
-
-function shuffleArray<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
 
 function isPlayable(t: Track) {
   return /^[a-zA-Z0-9_-]{11}$/.test(t.id);
@@ -415,13 +406,20 @@ function schedulePrefetch(queue: Track[], queueIndex: number) {
   const currentId = queue[queueIndex]?.id;
   let idx = currentId ? ids.indexOf(currentId) : -1;
   if (idx < 0) idx = Math.min(Math.max(0, queueIndex), ids.length - 1);
-  prefetchAround(ids, idx, { ahead: 12, behind: 2, fullAhead: 4 });
+  // Modéré : laisse de la bande passante au titre en cours (surtout Linux / navigateur).
+  prefetchAround(ids, idx, { ahead: 4, behind: 1, fullAhead: 1, delayFullMs: 2000 });
 }
+
+/** Un seul remplissage autoplay à la fois (évite tempête related×N au skip). */
+let autoRadioInflight: { seedId: string; promise: Promise<void> } | null = null;
+let autoRadioSeq = 0;
 
 /** Ajoute des titres en zone autoplay dès qu’un pool arrive (sans attendre les autres APIs). */
 function mergeAutoTracks(seedId: string, pool: Track[], relatedUpdate?: Track[]) {
   const state = usePlayer.getState();
   if (state.autoplay === false) return;
+  // Ignore les réponses obsolètes (titre déjà changé)
+  if (state.current?.id && state.current.id !== seedId) return;
   const boundary = Math.max(state.userQueueEnd || 0, state.queueIndex + 1);
   const autoLen = state.queue.length - boundary;
   if (autoLen >= 40) return;
@@ -447,7 +445,7 @@ function mergeAutoTracks(seedId: string, pool: Track[], relatedUpdate?: Track[])
   publish();
 }
 
-/** Remplit la zone autoplay (après userQueueEnd) — progressive, dès la 1ʳᵉ réponse API. */
+/** Remplit la zone autoplay (après userQueueEnd) — progressive, dédupliquée. */
 async function ensureAutoRadio(seedId: string) {
   const cur = usePlayer.getState();
   if (cur.autoplay === false) return;
@@ -459,32 +457,49 @@ async function ensureAutoRadio(seedId: string) {
   }
   if (!isPlayable({ id: seedId } as Track)) return;
 
-  // Déjà des related en mémoire → injecte immédiatement
-  if (cur.related?.length) {
-    mergeAutoTracks(seedId, cur.related);
+  if (autoRadioInflight?.seedId === seedId) {
+    return autoRadioInflight.promise;
   }
 
-  const relatedP = api
-    .related(seedId)
-    .then((r) => {
-      const pool = [...(r.radio || []), ...(r.related || [])];
-      mergeAutoTracks(seedId, pool, pool.length ? pool : undefined);
-      return r;
-    })
-    .catch((err) => {
-      console.warn('auto-radio related', err);
-      return null;
-    });
+  const seq = ++autoRadioSeq;
+  const promise = (async () => {
+    // Déjà des related en mémoire pour ce titre → injecte immédiatement
+    const snap = usePlayer.getState();
+    if (snap.related?.length && snap.current?.id === seedId) {
+      mergeAutoTracks(seedId, snap.related);
+    }
 
-  const upNextP = api
-    .upNext(seedId)
-    .then((r) => {
-      mergeAutoTracks(seedId, r.tracks || []);
-      return r;
-    })
-    .catch(() => ({ tracks: [] as Track[] }));
+    const relatedP = api
+      .related(seedId)
+      .then((r) => {
+        if (seq !== autoRadioSeq) return r;
+        const pool = [...(r.radio || []), ...(r.related || [])];
+        mergeAutoTracks(seedId, pool, pool.length ? pool : undefined);
+        return r;
+      })
+      .catch((err) => {
+        console.warn('auto-radio related', err);
+        return null;
+      });
 
-  await Promise.all([relatedP, upNextP]);
+    const upNextP = api
+      .upNext(seedId)
+      .then((r) => {
+        if (seq !== autoRadioSeq) return r;
+        mergeAutoTracks(seedId, r.tracks || []);
+        return r;
+      })
+      .catch(() => ({ tracks: [] as Track[] }));
+
+    await Promise.all([relatedP, upNextP]);
+  })();
+
+  autoRadioInflight = { seedId, promise };
+  try {
+    await promise;
+  } finally {
+    if (autoRadioInflight?.seedId === seedId) autoRadioInflight = null;
+  }
 }
 
 async function playLocal(track: Track, state: PlayerState, gen: number) {
@@ -517,7 +532,7 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   const src = await srcPromise;
   if (gen !== playGeneration) return;
 
-  if (audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
+  // Ne pas révoquer les blob: gérés par streamPrefetch (réutilisés au skip suivant).
   audio.src = src;
   audio.dataset.trackId = track.id;
   audio.volume = state.volume;
@@ -572,11 +587,9 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   if (gen !== playGeneration) return;
 
   // Prefetch agressif de la suite pendant que le titre courant joue
-  schedulePrefetch(usePlayer.getState().queue, usePlayer.getState().queueIndex);
-
-  // Media Session unique via mediaKeys (touches clavier OS + Chrome)
-  refreshMediaSession();
+  // (déjà déclenché après play() — évite un 2ᵉ full-download concurrent)
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+  refreshMediaSession();
 }
 
 export const usePlayer = create<PlayerState>((set, get) => ({
@@ -692,12 +705,13 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     });
 
     const gen = ++playGeneration;
-    schedulePrefetch(nextQueue, idx >= 0 ? idx : 0);
+    bumpPrefetchGeneration();
 
-    // Suggestions dès le démarrage (ne pas attendre le stream)
-    void get().loadRelated(track.id);
+    // Un seul pipeline suggestions (évite related×2 + upNext en parallèle parasite)
     if (!opts?.noAutoRadio && get().autoplay !== false) {
       void ensureAutoRadio(track.id);
+    } else {
+      void get().loadRelated(track.id);
     }
 
     try {
@@ -706,10 +720,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       recordStarted(get().current || track);
       set({ isPlaying: true, isLoading: false });
       publish();
-      // Top-up si la zone auto est encore courte
-      if (!opts?.noAutoRadio && get().autoplay !== false) {
-        void ensureAutoRadio(track.id);
-      }
+      // Prefetch léger une fois le titre lancé (pas pendant le démarrage)
+      schedulePrefetch(get().queue, get().queueIndex);
     } catch (err) {
       console.error(err);
       set({ isLoading: false, isPlaying: false });
@@ -845,8 +857,6 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         const idx = get().queueIndex;
         if (idx + 1 < q.length) {
           await get().playAt(idx + 1);
-          const played = get().current;
-          if (played?.id) void ensureAutoRadio(played.id);
         }
         return;
       } else {
@@ -860,14 +870,11 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       const pick = candidates[Math.floor(Math.random() * candidates.length)];
       if (pick) {
         await get().playAt(pick.i);
-        const played = get().current;
-        if (played?.id) void ensureAutoRadio(played.id);
         return;
       }
     }
     await get().playAt(nextIndex);
-    const played = get().current;
-    if (played?.id) void ensureAutoRadio(played.id);
+    // ensureAutoRadio déjà lancé dans play() — pas de 2ᵉ tempête ici
     schedulePrefetch(get().queue, get().queueIndex);
   },
 
@@ -877,8 +884,17 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       return;
     }
     const { audioEl, progress, queueIndex, queue } = get();
-    if (progress > 3 && audioEl) {
-      audioEl.currentTime = 0;
+    // Source de vérité = audio (progress Zustand peut être en retard d’1 tick)
+    const t = audioEl && Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : progress;
+    // Style YouTube Music / Google Music : > 4 s → recommence le titre ; sinon titre précédent
+    if (t > 4) {
+      if (audioEl) {
+        try {
+          audioEl.currentTime = 0;
+        } catch {
+          /* ignore */
+        }
+      }
       set({ progress: 0 });
       publish();
       return;
@@ -890,7 +906,11 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     }
     // Début de file : restart le titre courant
     if (audioEl) {
-      audioEl.currentTime = 0;
+      try {
+        audioEl.currentTime = 0;
+      } catch {
+        /* ignore */
+      }
       set({ progress: 0 });
       if (audioEl.paused) void get().toggle();
       publish();
@@ -1216,13 +1236,17 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   loadRelated: async (trackId) => {
     try {
       const { related, radio } = await api.related(trackId);
+      // Ne pas écraser avec [] / pool d’un ancien titre si on a déjà sauté
+      if (usePlayer.getState().current?.id && usePlayer.getState().current?.id !== trackId) return;
       const pool = related.length ? related : radio;
       set({ related: pool });
       if (get().autoplay !== false && pool.length) {
         mergeAutoTracks(trackId, pool);
       }
     } catch {
-      set({ related: [] });
+      if (usePlayer.getState().current?.id === trackId) {
+        // Garde les anciennes suggestions plutôt que flash « Chargement… »
+      }
     }
   },
 

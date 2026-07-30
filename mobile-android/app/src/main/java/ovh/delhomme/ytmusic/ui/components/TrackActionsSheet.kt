@@ -494,7 +494,6 @@ fun TrackActionsSheet(
                             enriched.isPlaylist() -> {
                                 // Aimer la playlist seulement — ne pas liker comme un titre
                                 container.api.likePlaylist(enriched.copy(type = "playlist"))
-                                inLibrary = true
                             }
                             else -> container.api.like(enriched)
                         }
