@@ -13,15 +13,15 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /**
- * Prefetch léger des streams (énergie) :
+ * Prefetch streams :
  * 1) GET /api/stream/:id/url → chauffe le déchiffrement API
- * 2) Range bytes=0–384K du prochain titre → démarrage rapide au skip
- * Annulé automatiquement à la pause / idle.
+ * 2) Range bytes=0–512K du prochain titre → démarrage rapide au skip
+ * Annulé à la pause. Cache disque 150 Mo (complète le SimpleCache ExoPlayer).
  */
 object StreamPrefetcher {
-    private const val HEAD_BYTES = 384 * 1024L
-    private const val MAX_WARM = 4
-    private const val DISK_CACHE_MB = 80L
+    private const val HEAD_BYTES = 512 * 1024L
+    private const val MAX_WARM = 6
+    private const val DISK_CACHE_MB = 150L
 
     private val client: OkHttpClient by lazy {
         val dir = File(YtMusicApp.instance.cacheDir, "stream-prefetch").apply { mkdirs() }
@@ -34,9 +34,9 @@ object StreamPrefetcher {
     }
 
     private val inFlight = ConcurrentHashMap.newKeySet<String>()
-    private val recent = object : LinkedHashMap<String, Long>(32, 0.75f, true) {
+    private val recent = object : LinkedHashMap<String, Long>(48, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean =
-            size > 32
+            size > 48
     }
 
     /** Coupe les téléchargements prefetch en cours (pause / idle). */
@@ -125,12 +125,11 @@ object StreamPrefetcher {
         baseApi: String,
         queueIds: List<String>,
         index: Int,
-        ahead: Int = 2,
-        behind: Int = 0,
+        ahead: Int = 3,
+        behind: Int = 1,
     ) {
         if (queueIds.isEmpty()) return
         val idx = index.coerceIn(0, queueIds.lastIndex)
-        // Priorité : prochain titre d’abord
         val ids = buildList {
             for (i in 1..ahead) {
                 val t = queueIds.getOrNull(idx + i) ?: break
