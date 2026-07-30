@@ -157,9 +157,21 @@ async function runLive() {
       }
 
       // Cas critique
-      if (q === 'tenebro rossi' && top && /keny|vérité|verite/i.test(`${top.title} ${(top.artists || []).map((a) => a.name).join(' ')}`)) {
-        failed += 1;
-        console.log('  ❌ CRITICAL: Keny Arkana en top pour tenebro rossi');
+      if (q === 'tenebro rossi') {
+        const hay = (t) =>
+          `${t?.title || ''} ${(t?.artists || []).map((a) => a.name).join(' ')}`;
+        const polluted = [top, ...songs.slice(0, 12)].filter(
+          (t) => t && /keny\s*arkana|v pour v[eé]rit/i.test(hay(t)),
+        );
+        if (polluted.length) {
+          failed += 1;
+          console.log(
+            '  ❌ CRITICAL: Keny/V pour vérité dans les résultats tenebro →',
+            polluted.map((t) => t.title).join(' | '),
+          );
+        } else {
+          console.log('  ✅ aucun Keny dans les résultats tenebro');
+        }
       }
     } catch (e) {
       failed += 1;
