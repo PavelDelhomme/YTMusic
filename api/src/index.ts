@@ -53,7 +53,7 @@ import {
   markDownloaded,
   listPlaylists,
 } from './library.js';
-import { handleStream, handleStreamUrl, downloadTrack, cachePath } from './stream.js';
+import { handleStream, handleStreamUrl, handleStreamWarm, downloadTrack, cachePath } from './stream.js';
 import { importByKind, importByQueryOrUrl } from './import.js';
 import { handleOfflineStatus, startOfflineCollection } from './offline.js';
 import { handleImageProxy } from './img.js';
@@ -1094,6 +1094,10 @@ app.get('/api/playlist/:id', async (req, res) => {
 
 app.get('/api/stream/:id/url', (req, res) => {
   void handleStreamUrl(req, res);
+});
+
+app.post('/api/stream/warm', accountRequired, (req, res) => {
+  void handleStreamWarm(req, res);
 });
 
 app.get('/api/stream/:id', (req, res) => {

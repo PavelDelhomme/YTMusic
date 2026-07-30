@@ -64,13 +64,13 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        // Buffer court pour audio : démarrage ~0,6–1 s au lieu du défaut ~2,5 s
+        // Buffer généreux : enchaînement file sans trou (précharge prochaine piste)
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs */ 6_000,
-                /* maxBufferMs */ 36_000,
-                /* bufferForPlaybackMs */ 600,
-                /* bufferForPlaybackAfterRebufferMs */ 1_500,
+                /* minBufferMs */ 15_000,
+                /* maxBufferMs */ 120_000,
+                /* bufferForPlaybackMs */ 900,
+                /* bufferForPlaybackAfterRebufferMs */ 2_000,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -242,12 +242,13 @@ class PlaybackService : MediaSessionService() {
         val queue = Holder.queue
         if (queue.isEmpty()) return
         val base = BuildConfig.API_BASE_URL.trimEnd('/')
-        val ids = listOfNotNull(
-            queue.getOrNull(fromIndex)?.id,
-            queue.getOrNull(fromIndex + 1)?.id,
-            queue.getOrNull(fromIndex + 2)?.id,
+        StreamPrefetcher.warmAround(
+            base,
+            queue.map { it.id },
+            fromIndex,
+            ahead = 12,
+            behind = 2,
         )
-        StreamPrefetcher.warmMany(ids.map { "$base/api/stream/$it/url" })
     }
 
     object Holder {
@@ -278,12 +279,12 @@ fun ExoPlayer.playTracks(baseStreamUrl: (String) -> String, tracks: List<TrackDt
     PlaybackService.Holder.queue = playable
     PlaybackService.Holder.index = idx
     val base = BuildConfig.API_BASE_URL.trimEnd('/')
-    StreamPrefetcher.warmMany(
-        listOfNotNull(
-            playable.getOrNull(idx)?.id,
-            playable.getOrNull(idx + 1)?.id,
-            playable.getOrNull(idx + 2)?.id,
-        ).map { "$base/api/stream/$it/url" },
+    StreamPrefetcher.warmAround(
+        base,
+        playable.map { it.id },
+        idx,
+        ahead = 12,
+        behind = 2,
     )
     val items = playable.map { t ->
         MediaItem.Builder()

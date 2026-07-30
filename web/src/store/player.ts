@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { api, artistNames, thumb, type Track } from '../api';
 import { resolvePlayUrl } from '../lib/offlineCache';
+import { prefetchAround, resolvePrefetchedPlayUrl, warmFormat, warmHead } from '../lib/streamPrefetch';
 import { useSession } from './session';
 import { useLibrary } from './library';
 
@@ -364,29 +365,26 @@ export function reportSkipIfEarly(progress: number) {
 
 /** Génération pour ignorer les play() obsolètes si l’utilisateur saute vite */
 let playGeneration = 0;
-const prefetchCache = new Map<string, string>();
 
 async function resolveCachedUrl(trackId: string) {
-  const hit = prefetchCache.get(trackId);
-  if (hit) return hit;
-  const src = await resolvePlayUrl(trackId);
-  prefetchCache.set(trackId, src);
-  // garder un cache petit
-  if (prefetchCache.size > 12) {
-    const first = prefetchCache.keys().next().value;
-    if (first) prefetchCache.delete(first);
-  }
-  return src;
+  // 1) Cache offline IndexedDB
+  // 2) Prefetch full (Cache Storage) → play instantané
+  // 3) Stream API (tête déjà préchauffée en parallèle)
+  const prefetched = await resolvePrefetchedPlayUrl(trackId);
+  if (prefetched) return prefetched;
+  void warmFormat(trackId);
+  void warmHead(trackId);
+  return resolvePlayUrl(trackId);
 }
 
-function prefetchTrack(trackId: string | undefined) {
-  if (!trackId || !isPlayable({ id: trackId } as Track)) return;
-  if (prefetchCache.has(trackId)) return;
-  void resolvePlayUrl(trackId)
-    .then((src) => {
-      prefetchCache.set(trackId, src);
-    })
-    .catch(() => undefined);
+function schedulePrefetch(queue: Track[], queueIndex: number) {
+  const playable = queue.filter(isPlayable);
+  const ids = playable.map((t) => t.id);
+  if (!ids.length) return;
+  const currentId = queue[queueIndex]?.id;
+  let idx = currentId ? ids.indexOf(currentId) : -1;
+  if (idx < 0) idx = Math.min(Math.max(0, queueIndex), ids.length - 1);
+  prefetchAround(ids, idx, { ahead: 12, behind: 2, fullAhead: 4 });
 }
 
 /** Remplit la file avec un radio / similaires si plus rien à suivre (style YTM). */
@@ -395,7 +393,7 @@ async function ensureAutoRadio(seedId: string) {
   const upcoming = cur.queue.slice(cur.queueIndex + 1).filter(isPlayable);
   // Vise une file longue (scroll jusqu’à ~100 dans l’UI)
   if (upcoming.length >= 40) {
-    prefetchTrack(upcoming[0]?.id);
+    schedulePrefetch(cur.queue, cur.queueIndex);
     return;
   }
   if (!isPlayable({ id: seedId } as Track)) return;
@@ -425,7 +423,7 @@ async function ensureAutoRadio(seedId: string) {
       queue,
       related: related.length ? related : radio,
     });
-    prefetchTrack(extra[0]?.id);
+    schedulePrefetch(queue, state.queueIndex);
     publish();
   } catch (err) {
     console.warn('auto-radio', err);
@@ -498,6 +496,9 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
     throw new Error('Lecture bloquée ou interrompue');
   }
   if (gen !== playGeneration) return;
+
+  // Prefetch agressif de la suite pendant que le titre courant joue
+  schedulePrefetch(usePlayer.getState().queue, usePlayer.getState().queueIndex);
 
   // Media Session unique via mediaKeys (touches clavier OS + Chrome)
   refreshMediaSession();
@@ -600,8 +601,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     });
 
     const gen = ++playGeneration;
-    const nextIdx = (idx >= 0 ? idx : 0) + 1;
-    if (nextQueue[nextIdx]) prefetchTrack(nextQueue[nextIdx].id);
+    schedulePrefetch(nextQueue, idx >= 0 ? idx : 0);
 
     try {
       await playLocal(track, get(), gen);
@@ -762,6 +762,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     await get().playAt(nextIndex);
     const played = get().current;
     if (played?.id) void ensureAutoRadio(played.id);
+    schedulePrefetch(get().queue, get().queueIndex);
   },
 
   prev: async () => {
@@ -778,6 +779,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     }
     if (queueIndex > 0) {
       await get().playAt(queueIndex - 1);
+      schedulePrefetch(get().queue, get().queueIndex);
       return;
     }
     // Début de file : restart le titre courant

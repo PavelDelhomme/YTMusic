@@ -374,7 +374,7 @@ class PlayerController(
         queue.add(insertAt, track)
         PlaybackService.Holder.queue = queue
         c.addMediaItem(insertAt, mediaItem(track))
-        StreamPrefetcher.warm(warmUrl(track.id))
+        StreamPrefetcher.warmTrack(ovh.delhomme.ytmusic.BuildConfig.API_BASE_URL, track.id)
         syncFrom(c)
     }
 
@@ -388,7 +388,7 @@ class PlayerController(
         queue.add(track)
         PlaybackService.Holder.queue = queue
         c.addMediaItem(mediaItem(track))
-        StreamPrefetcher.warm(warmUrl(track.id))
+        StreamPrefetcher.warmTrack(ovh.delhomme.ytmusic.BuildConfig.API_BASE_URL, track.id)
         syncFrom(c)
     }
 
@@ -433,12 +433,13 @@ class PlayerController(
         val playable = tracks.filter { it.isPlayable() }
         if (playable.isEmpty()) return
         val idx = startIndex.coerceIn(0, playable.lastIndex)
-        StreamPrefetcher.warmMany(
-            listOfNotNull(
-                playable.getOrNull(idx)?.id,
-                playable.getOrNull(idx + 1)?.id,
-                playable.getOrNull(idx + 2)?.id,
-            ).map(warmUrl),
+        val base = ovh.delhomme.ytmusic.BuildConfig.API_BASE_URL.trimEnd('/')
+        StreamPrefetcher.warmAround(
+            base,
+            playable.map { it.id },
+            idx,
+            ahead = 12,
+            behind = 2,
         )
     }
 

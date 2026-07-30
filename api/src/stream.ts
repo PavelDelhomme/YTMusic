@@ -205,6 +205,22 @@ export async function handleStreamUrl(req: Request, res: Response) {
   }
 }
 
+/** Warm batch : déchiffre plusieurs formats en parallèle (prefetch file d’attente). */
+export async function handleStreamWarm(req: Request, res: Response) {
+  const raw = Array.isArray(req.body?.ids) ? req.body.ids : [];
+  const ids = [...new Set(raw.map((x: unknown) => String(x || '')).filter((id: string) => /^[a-zA-Z0-9_-]{11}$/.test(id)))].slice(
+    0,
+    32,
+  );
+  if (!ids.length) {
+    res.status(400).json({ error: 'ids requis' });
+    return;
+  }
+  const results = await Promise.allSettled(ids.map((id) => getAudioFormat(id)));
+  const ok = results.filter((r) => r.status === 'fulfilled').length;
+  res.json({ ok: true, requested: ids.length, warmed: ok });
+}
+
 /** Redirect 302 pour ExoPlayer / clients qui passent ?redirect=1. */
 function wantsDirectRedirect(req: Request): boolean {
   if (String(req.query.redirect || '') === '1') return true;
