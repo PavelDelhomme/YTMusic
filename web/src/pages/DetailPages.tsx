@@ -151,7 +151,15 @@ export function ArtistPage() {
                 void (async () => {
                   setBusy(true);
                   try {
-                    const r = await api.import({ kind: 'artist', id: data.artist.id });
+                    const r = await api.saveArtist({
+                      id: data.artist.id,
+                      name: data.artist.name,
+                      title: data.artist.name,
+                      subscribers: data.artist.subscribers,
+                      thumbnails: data.artist.thumbnails,
+                      description: data.artist.description,
+                      type: 'artist',
+                    });
                     applyLibrary(r.library);
                   } finally {
                     setBusy(false);
@@ -294,7 +302,14 @@ export function AlbumPage() {
             const r = await api.removeAlbum(data.album.id);
             applyLibrary(r.library);
           } else {
-            const r = await api.import({ kind: 'album', id: data.album.id });
+            const r = await api.saveAlbum({
+              id: data.album.id,
+              title: data.album.title,
+              year: data.album.year,
+              artists: data.album.artists,
+              thumbnails: data.album.thumbnails,
+              type: 'album',
+            });
             applyLibrary(r.library);
           }
         }}
@@ -356,7 +371,14 @@ export function PlaylistPage() {
         applyLibrary(r.library);
       }}
       onAddLibrary={async () => {
-        const r = await api.import({ kind: 'playlist', id: data.playlist.id });
+        // Aimer la playlist seulement — ne pas copier tous les titres en biblio
+        const r = await api.likePlaylist({
+          id: data.playlist.id,
+          title: data.playlist.title,
+          author: data.playlist.author,
+          thumbnails: data.playlist.thumbnails,
+          type: 'playlist',
+        });
         applyLibrary(r.library);
       }}
       onOffline={() => void api.offlineStart('playlist', data.playlist.id)}

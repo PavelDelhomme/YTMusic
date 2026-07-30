@@ -75,19 +75,37 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
     setBusy(true);
     try {
       if (item.type === 'playlist') {
-        const r = await api.import({ kind: 'playlist', id: item.id });
+        // Aimer la playlist seulement — pas de copie de tous les titres
+        const r = await api.likePlaylist({
+          id: item.id,
+          title: item.title,
+          thumbnails: item.thumbnails,
+          type: 'playlist',
+        });
         applyLibrary(r.library);
         setSaved(true);
       } else if (item.type === 'album') {
-        const r = await api.import({ kind: 'album', id: item.id });
+        const r = await api.saveAlbum({
+          id: item.id,
+          title: item.title,
+          artists: item.artists,
+          thumbnails: item.thumbnails,
+          type: 'album',
+        });
         applyLibrary(r.library);
         setSaved(true);
       } else if (item.type === 'artist') {
-        const r = await api.import({ kind: 'artist', id: item.id });
+        const r = await api.saveArtist({
+          id: item.id,
+          name: item.title,
+          title: item.title,
+          thumbnails: item.thumbnails,
+          type: 'artist',
+        });
         applyLibrary(r.library);
         setSaved(true);
       } else if (/^[a-zA-Z0-9_-]{11}$/.test(item.id)) {
-        const r = await api.import({ kind: 'track', id: item.id });
+        const r = await api.like(item);
         applyLibrary(r.library);
         setSaved(true);
       }

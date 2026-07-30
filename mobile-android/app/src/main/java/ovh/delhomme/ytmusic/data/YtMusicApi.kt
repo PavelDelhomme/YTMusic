@@ -286,6 +286,9 @@ interface YtMusicApi {
     @POST("api/library/like")
     suspend fun like(@Body track: TrackDto): LikeResponse
 
+    @POST("api/library/like-playlist")
+    suspend fun likePlaylist(@Body playlist: TrackDto): LikeResponse
+
     @POST("api/library/albums")
     suspend fun saveAlbum(@Body album: TrackDto): Map<String, Any>
 
