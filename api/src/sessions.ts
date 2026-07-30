@@ -44,7 +44,7 @@ type UserHub = {
 };
 
 const hubs = new Map<string, UserHub>();
-const SOFT_TTL_MS = 45_000;
+const SOFT_TTL_MS = 120_000;
 
 function emptyState(): PlaybackState {
   return {

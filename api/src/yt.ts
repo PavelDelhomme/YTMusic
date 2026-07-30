@@ -1265,3 +1265,125 @@ export async function getAudioFormat(videoId: string): Promise<AudioFormat> {
   audioFormatInflight.set(videoId, job);
   return job;
 }
+
+const videoFormatCache = new Map<string, AudioFormat>();
+const videoFormatInflight = new Map<string, Promise<AudioFormat>>();
+
+async function videoFormatViaYtDlp(videoId: string): Promise<AudioFormat> {
+  const { spawn } = await import('node:child_process');
+  const { existsSync } = await import('node:fs');
+  const ytdlp = join(ROOT, 'bin', 'yt-dlp');
+  if (!existsSync(ytdlp)) throw new Error('yt-dlp introuvable');
+  const url = await new Promise<string>((resolve, reject) => {
+    const proc = spawn(
+      ytdlp,
+      [
+        '-f',
+        '18/22/best[height<=720][acodec!=none][vcodec!=none]/best[height<=480][acodec!=none]/best',
+        '-g',
+        '--no-playlist',
+        '--no-warnings',
+        `https://www.youtube.com/watch?v=${videoId}`,
+      ],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    let out = '';
+    let err = '';
+    proc.stdout.on('data', (d) => {
+      out += String(d);
+    });
+    proc.stderr.on('data', (d) => {
+      err += String(d);
+    });
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      const line = out
+        .split('\n')
+        .map((l) => l.trim())
+        .find((l) => /^https?:\/\//.test(l));
+      if (code === 0 && line) resolve(line);
+      else reject(new Error(err.trim() || `yt-dlp -g video exit ${code}`));
+    });
+  });
+  return {
+    url,
+    mimeType: 'video/mp4',
+    expiresAt: parseExpireMs(url) ?? Date.now() + 3 * 60 * 60 * 1000,
+  };
+}
+
+/** Stream progressif vidéo+audio (onglet Vidéo / sync image+son). */
+export async function getVideoFormat(videoId: string): Promise<AudioFormat> {
+  const cached = videoFormatCache.get(videoId);
+  if (cached && cached.expiresAt > Date.now() + 90_000) return cached;
+
+  const pending = videoFormatInflight.get(videoId);
+  if (pending) return pending;
+
+  const looksLikeVideo = (url: string, mime?: string) => {
+    const u = url.toLowerCase();
+    const m = (mime || '').toLowerCase();
+    if (m.includes('video/')) return true;
+    // itags progressifs courants : 18, 22, 59…
+    if (/[?&]itag=(18|22|59|78|83|85|93|94|95|96|132|151)\b/.test(u)) return true;
+    if (u.includes('mime=video')) return true;
+    // Refuser les itags audio purs
+    if (/[?&]itag=(139|140|141|249|250|251|256|258)\b/.test(u)) return false;
+    if (m.includes('audio/')) return false;
+    return false;
+  };
+
+  const job = (async (): Promise<AudioFormat> => {
+    // yt-dlp d’abord : formats progressifs fiables (18/22)
+    try {
+      const entry = await videoFormatViaYtDlp(videoId);
+      if (looksLikeVideo(entry.url, entry.mimeType)) {
+        videoFormatCache.set(videoId, entry);
+        return entry;
+      }
+    } catch {
+      /* try innertube */
+    }
+
+    const innertube = await getYT();
+    const clients = ['IOS', 'ANDROID', 'WEB'] as const;
+    let lastErr: unknown;
+    for (const client of clients) {
+      try {
+        const format = await innertube.getStreamingData(videoId, {
+          type: 'video+audio',
+          quality: '360p',
+          client,
+        } as any);
+        const url = await format.decipher(innertube.session.player);
+        if (!url) throw new Error('empty video url');
+        const entry: AudioFormat = {
+          url,
+          mimeType: format.mime_type || 'video/mp4',
+          bitrate: format.bitrate,
+          contentLength: format.content_length,
+          expiresAt: parseExpireMs(url) ?? Date.now() + 3 * 60 * 60 * 1000,
+        };
+        if (!looksLikeVideo(entry.url, entry.mimeType)) {
+          throw new Error(`not a progressive video format (${entry.mimeType})`);
+        }
+        videoFormatCache.set(videoId, entry);
+        if (videoFormatCache.size > 120) {
+          const stale = [...videoFormatCache.entries()]
+            .sort((a, b) => a[1].expiresAt - b[1].expiresAt)
+            .slice(0, 40);
+          for (const [id] of stale) videoFormatCache.delete(id);
+        }
+        return entry;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error('Aucun format vidéo progressif');
+  })().finally(() => {
+    videoFormatInflight.delete(videoId);
+  });
+
+  videoFormatInflight.set(videoId, job);
+  return job;
+}

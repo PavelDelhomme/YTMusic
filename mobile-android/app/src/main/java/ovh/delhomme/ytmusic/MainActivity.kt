@@ -199,6 +199,11 @@ fun YtMusicAppContent(
                 onOpenPlayer = { showNowPlaying = true },
                 onClosePlayer = { showNowPlaying = false },
                 onPlayTracks = { tracks, idx ->
+                    scope.launch {
+                        runCatching {
+                            container.api.setSessionActive(mapOf("targetId" to container.deviceId))
+                        }
+                    }
                     player.play(tracks, idx)
                     showNowPlaying = false
                 },
@@ -207,6 +212,11 @@ fun YtMusicAppContent(
                         title.contains("radio", ignoreCase = true) ||
                             title.equals("Mix", ignoreCase = true) ||
                             title.contains("rapport", ignoreCase = true)
+                    scope.launch {
+                        runCatching {
+                            container.api.setSessionActive(mapOf("targetId" to container.deviceId))
+                        }
+                    }
                     player.play(
                         tracks,
                         idx,
@@ -328,8 +338,9 @@ private fun MainTabs(
                         else -> st?.queueIndex ?: 0
                     }.coerceIn(0, tracks.lastIndex)
                     val posMs = ((st?.progress ?: 0.0) * 1000.0).toLong().coerceAtLeast(0L)
-                    // Ne reprend la lecture auto que si l’autre appareil jouait vraiment
-                    val autoplay = st?.isPlaying == true
+                    // Ne jamais voler la lecture au démarrage : sync file en pause.
+                    // L’utilisateur appuie play → claim actif (évite conflit web/mobile).
+                    val autoplay = false
                     suppressSessionPublishUntil = System.currentTimeMillis() + 12_000L
                     player.restoreQueue(
                         tracks = tracks,
@@ -339,7 +350,11 @@ private fun MainTabs(
                         title = "File synchronisée",
                         userQueueEnd = st?.userQueueEnd,
                     )
-                    pendingRemoteLabel = null
+                    pendingRemoteLabel = if (st?.isPlaying == true) {
+                        "En pause — lecture active ailleurs"
+                    } else {
+                        null
+                    }
                 } else if (st?.current != null) {
                     pendingRemoteLabel = st.current.title ?: "Titre en attente"
                 }
@@ -401,7 +416,7 @@ private fun MainTabs(
                 val playing = player.state.value.playing
                 val now = System.currentTimeMillis()
                 runCatching {
-                    if (now - lastDeviceRegisterAt > 5 * 60_000L) {
+                    if (now - lastDeviceRegisterAt > 60_000L) {
                         lastDeviceRegisterAt = now
                         container.api.registerSessionDevice(
                             mapOf(
@@ -411,6 +426,11 @@ private fun MainTabs(
                                 "canPlay" to true,
                             ),
                         )
+                        if (playing) {
+                            runCatching {
+                                container.api.setSessionActive(mapOf("targetId" to container.deviceId))
+                            }
+                        }
                     }
                     // Pendant lecture locale : pas de pull remote (évite radio + restore)
                     if (!playing && now >= suppressSessionPublishUntil) {

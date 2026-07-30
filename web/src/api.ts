@@ -470,6 +470,10 @@ export const api = {
     req<{ lyrics: string | null; timed?: { startMs: number; text: string }[] | null }>(
       `/api/track/${id}/lyrics`,
     ),
+  streamUrl: (id: string, type: 'audio' | 'video' = 'audio') =>
+    req<{ url: string; expiresAt: number; mimeType: string | null; kind?: string }>(
+      `/api/stream/${id}/url${type === 'video' ? '?type=video' : ''}`,
+    ),
   artist: (id: string) =>
     req<{
       artist: { id: string; name: string; subscribers?: string; thumbnails: Track['thumbnails']; description?: string };

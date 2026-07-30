@@ -283,14 +283,10 @@ fun NowPlayingScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(ui.playing) {
         while (isActive) {
-            if (ui.playing) {
-                player.tick()
-                delay(500)
-            } else {
-                delay(1_200)
-            }
+            player.tick()
+            delay(if (ui.playing) 200 else 800)
         }
     }
 
@@ -1256,7 +1252,18 @@ private fun LyricsSheet(
             loading -> Text("Chargement…", color = PlayerMuted, modifier = Modifier.padding(20.dp))
             timed.isNotEmpty() -> {
                 val active = timed.indexOfLast { it.startMs <= positionMs }.coerceAtLeast(0)
-                LazyColumn(Modifier.padding(horizontal = 20.dp).height(420.dp)) {
+                val listState = rememberLazyListState()
+                LaunchedEffect(active) {
+                    runCatching {
+                        listState.animateScrollToItem(active.coerceIn(0, timed.lastIndex))
+                    }
+                }
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .padding(horizontal = 20.dp)
+                        .height(420.dp),
+                ) {
                     itemsIndexed(timed) { i, line ->
                         Text(
                             line.text,
