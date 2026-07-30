@@ -28,6 +28,8 @@ export function DevicePicker({ open, onClose }: { open: boolean; onClose: () => 
     current: player.current,
     queue: player.queue,
     queueIndex: player.queueIndex,
+    userQueueEnd: player.userQueueEnd,
+    autoplay: player.autoplay,
     isPlaying: player.isPlaying,
     progress: player.progress,
     duration: player.duration,

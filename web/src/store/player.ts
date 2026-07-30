@@ -250,6 +250,8 @@ function publish() {
     current: s.current,
     queue: s.queue,
     queueIndex: s.queueIndex,
+    userQueueEnd: s.userQueueEnd,
+    autoplay: s.autoplay,
     isPlaying: s.isPlaying,
     progress: s.progress,
     duration: s.duration,

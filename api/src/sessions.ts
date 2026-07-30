@@ -9,6 +9,10 @@ export type PlaybackState = {
   current: Track | null;
   queue: Track[];
   queueIndex: number;
+  /** Fin exclusive de la file « utilisateur » (style YTM). */
+  userQueueEnd?: number;
+  /** Suggestions auto après la file. */
+  autoplay?: boolean;
   isPlaying: boolean;
   progress: number;
   duration: number;
@@ -33,17 +37,22 @@ type ConnectedDevice = DeviceInfo & {
 
 type UserHub = {
   devices: Map<string, ConnectedDevice>;
+  /** Appareils HTTP (Android) sans WebSocket — heartbeat. */
+  softDevices: Map<string, DeviceInfo>;
   activePlayerId: string | null;
   state: PlaybackState;
 };
 
 const hubs = new Map<string, UserHub>();
+const SOFT_TTL_MS = 45_000;
 
 function emptyState(): PlaybackState {
   return {
     current: null,
     queue: [],
     queueIndex: 0,
+    userQueueEnd: 0,
+    autoplay: true,
     isPlaying: false,
     progress: 0,
     duration: 0,
@@ -90,32 +99,61 @@ function getHub(userId: string): UserHub {
   if (!hub) {
     hub = {
       devices: new Map(),
+      softDevices: new Map(),
       activePlayerId: null,
       state: loadPersistedState(userId) || emptyState(),
     };
     hubs.set(userId, hub);
+  } else if (!hub.softDevices) {
+    hub.softDevices = new Map();
   }
+  pruneSoftDevices(hub);
   return hub;
 }
 
+function pruneSoftDevices(hub: UserHub) {
+  const now = Date.now();
+  for (const [id, d] of hub.softDevices) {
+    if (now - d.lastSeen > SOFT_TTL_MS) hub.softDevices.delete(id);
+  }
+}
+
 function setHubState(userId: string, hub: UserHub, patch: Partial<PlaybackState>) {
+  const nextQueue = Array.isArray(patch.queue) ? patch.queue : hub.state.queue;
+  let userQueueEnd =
+    typeof patch.userQueueEnd === 'number' ? patch.userQueueEnd : hub.state.userQueueEnd;
+  if (typeof userQueueEnd !== 'number') userQueueEnd = nextQueue.length;
+  userQueueEnd = Math.max(0, Math.min(userQueueEnd, nextQueue.length));
+
   hub.state = {
     ...hub.state,
     ...patch,
-    updatedAt: Date.now(),
+    queue: nextQueue,
+    userQueueEnd,
+    updatedAt: typeof patch.updatedAt === 'number' ? patch.updatedAt : Date.now(),
   };
   persistState(userId, hub.state);
 }
 
 function publicDevices(hub: UserHub) {
-  return [...hub.devices.values()].map((d) => ({
+  pruneSoftDevices(hub);
+  const out = new Map<string, ReturnType<typeof mapPublicDevice>>();
+  for (const d of hub.devices.values()) out.set(d.id, mapPublicDevice(d, hub.activePlayerId));
+  for (const d of hub.softDevices.values()) {
+    if (!out.has(d.id)) out.set(d.id, mapPublicDevice(d, hub.activePlayerId));
+  }
+  return [...out.values()];
+}
+
+function mapPublicDevice(d: DeviceInfo, activePlayerId: string | null) {
+  return {
     id: d.id,
     name: d.name,
     type: d.type,
     canPlay: d.canPlay,
-    isActive: d.id === hub.activePlayerId,
+    isActive: d.id === activePlayerId,
     lastSeen: d.lastSeen,
-  }));
+  };
 }
 
 function send(ws: WebSocket, payload: unknown) {
@@ -287,15 +325,17 @@ export function detachSocket(ws: WebSocket) {
       if (device.ws === ws) {
         hub.devices.delete(id);
         if (hub.activePlayerId === id) {
-          const next = [...hub.devices.values()].find((d) => d.canPlay);
+          const next =
+            [...hub.devices.values()].find((d) => d.canPlay) ||
+            [...hub.softDevices.values()].find((d) => d.canPlay);
           hub.activePlayerId = next?.id || null;
-          if (next) {
-            send(next.ws, { type: 'become_player', state: hub.state });
+          if (next && 'ws' in next && (next as ConnectedDevice).ws) {
+            send((next as ConnectedDevice).ws, { type: 'become_player', state: hub.state });
           }
         }
         persistState(userId, hub.state);
         pushSnapshot(hub);
-        if (hub.devices.size === 0) hubs.delete(userId);
+        if (hub.devices.size === 0 && hub.softDevices.size === 0) hubs.delete(userId);
         return;
       }
     }
@@ -311,10 +351,110 @@ export function getHubPublic(userId: string) {
   };
 }
 
-/** HTTP : publier l’état de lecture (mobile sans WS). */
-export function publishPlaybackState(userId: string, patch: Partial<PlaybackState>) {
+/** Enregistre / heartbeat un appareil HTTP (Android) pour qu’il apparaisse dans la liste. */
+export function touchHttpDevice(
+  userId: string,
+  info: { id: string; name?: string; type?: DeviceType; canPlay?: boolean },
+) {
   const hub = getHub(userId);
-  setHubState(userId, hub, patch);
+  const id = String(info.id || '').trim();
+  if (!id) return getHubPublic(userId);
+  // Si déjà en WS, juste rafraîchir lastSeen
+  const wsDev = hub.devices.get(id);
+  if (wsDev) {
+    wsDev.lastSeen = Date.now();
+    if (info.name) wsDev.name = String(info.name);
+    return getHubPublic(userId);
+  }
+  hub.softDevices.set(id, {
+    id,
+    name: String(info.name || 'Android'),
+    type: (info.type || 'mobile') as DeviceType,
+    canPlay: info.canPlay !== false,
+    lastSeen: Date.now(),
+  });
+  if (!hub.activePlayerId && info.canPlay !== false) {
+    // Soft device peut être actif (Android joue) même sans WS
+    hub.activePlayerId = id;
+    broadcast(hub, { type: 'active_changed', activePlayerId: id, state: hub.state });
+  }
+  pushSnapshot(hub);
+  return getHubPublic(userId);
+}
+
+export function setActiveDeviceHttp(userId: string, targetId: string) {
+  const hub = getHub(userId);
+  const id = String(targetId || '');
+  const wsTarget = hub.devices.get(id);
+  const soft = hub.softDevices.get(id);
+  if (!wsTarget && !soft) return getHubPublic(userId);
+  if ((wsTarget && !wsTarget.canPlay) || (soft && !soft.canPlay)) return getHubPublic(userId);
+  hub.activePlayerId = id;
+  if (wsTarget) {
+    send(wsTarget.ws, { type: 'become_player', state: hub.state });
+  }
+  broadcast(hub, { type: 'active_changed', activePlayerId: id, state: hub.state });
+  pushSnapshot(hub);
+  return getHubPublic(userId);
+}
+
+export function transferPlaybackHttp(
+  userId: string,
+  targetId: string,
+  state?: Partial<PlaybackState>,
+) {
+  const hub = getHub(userId);
+  const id = String(targetId || '');
+  const wsTarget = hub.devices.get(id);
+  const soft = hub.softDevices.get(id);
+  if (!wsTarget?.canPlay && !soft?.canPlay) return getHubPublic(userId);
+  if (state) setHubState(userId, hub, state);
+  hub.activePlayerId = id;
+  if (wsTarget) {
+    send(wsTarget.ws, { type: 'become_player', state: hub.state, autoplay: true });
+  }
+  broadcast(hub, { type: 'active_changed', activePlayerId: id, state: hub.state });
+  pushSnapshot(hub);
+  return getHubPublic(userId);
+}
+
+/**
+ * HTTP : publier l’état de lecture (mobile sans WS).
+ * - LWW via updatedAt
+ * - Si un autre appareil WS est actif, n’accepte que si force=true ou deviceId = actif
+ */
+export function publishPlaybackState(
+  userId: string,
+  patch: Partial<PlaybackState> & { force?: boolean },
+  opts?: { deviceId?: string; force?: boolean },
+) {
+  const hub = getHub(userId);
+  const deviceId = opts?.deviceId || '';
+  const force = Boolean(opts?.force || patch.force);
+
+  const incomingAt = typeof patch.updatedAt === 'number' ? patch.updatedAt : Date.now();
+  if (incomingAt + 2000 < (hub.state.updatedAt || 0) && !force) {
+    // Patch plus vieux → ignorer (évite écrasement file)
+    return getHubPublic(userId);
+  }
+
+  const active = hub.activePlayerId;
+  if (active && deviceId && active !== deviceId && !force) {
+    // Autre appareil actif : n’écrase pas la file entière ; accepte seulement progress léger
+    // si le publisher n’est pas le lecteur — refuse les gros patchs queue
+    if (Array.isArray(patch.queue) && patch.queue.length) {
+      return getHubPublic(userId);
+    }
+  }
+
+  // Soft heartbeat si deviceId fourni
+  if (deviceId && !hub.devices.has(deviceId)) {
+    const soft = hub.softDevices.get(deviceId);
+    if (soft) soft.lastSeen = Date.now();
+  }
+
+  const { force: _f, ...clean } = patch as Partial<PlaybackState> & { force?: boolean };
+  setHubState(userId, hub, clean);
   broadcast(hub, { type: 'state', state: hub.state, activePlayerId: hub.activePlayerId });
   return getHubPublic(userId);
 }

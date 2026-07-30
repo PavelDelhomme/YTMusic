@@ -26,32 +26,90 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.DeviceDto
+import ovh.delhomme.ytmusic.player.PlayerController
+import ovh.delhomme.ytmusic.player.RepeatMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CastSheet(
     container: AppContainer,
+    player: PlayerController? = null,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var devices by remember { mutableStateOf<List<DeviceDto>>(emptyList()) }
     var activeId by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        runCatching { container.api.session() }
-            .onSuccess {
-                devices = it.devices
+        runCatching {
+            container.api.registerSessionDevice(
+                mapOf(
+                    "deviceId" to container.deviceId,
+                    "name" to (android.os.Build.MODEL ?: "Android"),
+                    "deviceType" to "mobile",
+                    "canPlay" to true,
+                ),
+            )
+            container.api.session()
+        }.onSuccess {
+            devices = it.devices
+            activeId = it.activePlayerId
+        }
+    }
+
+    fun transferTo(targetId: String, label: String) {
+        if (busy) return
+        busy = true
+        scope.launch {
+            runCatching {
+                val ui = player?.state?.value
+                val state = if (ui?.track != null) {
+                    mapOf(
+                        "current" to ui.track,
+                        "queue" to ui.queue,
+                        "queueIndex" to ui.queueIndex,
+                        "userQueueEnd" to ui.userQueueEnd,
+                        "autoplay" to ui.autoplaySuggestions,
+                        "isPlaying" to true,
+                        "progress" to (ui.positionMs / 1000.0),
+                        "duration" to (ui.durationMs / 1000.0).coerceAtLeast(0.0),
+                        "shuffle" to ui.shuffle,
+                        "repeat" to when (ui.repeat) {
+                            RepeatMode.Off -> "off"
+                            RepeatMode.All -> "all"
+                            RepeatMode.One -> "one"
+                        },
+                        "updatedAt" to System.currentTimeMillis(),
+                    )
+                } else null
+                container.api.transferSession(
+                    buildMap {
+                        put("targetId", targetId)
+                        if (state != null) put("state", state)
+                    },
+                )
+            }.onSuccess {
                 activeId = it.activePlayerId
+                Toast.makeText(context, "Lecture sur « $label »", Toast.LENGTH_SHORT).show()
+                onDismiss()
+            }.onFailure {
+                Toast.makeText(context, "Cast impossible : ${it.message}", Toast.LENGTH_LONG).show()
             }
+            busy = false
+        }
     }
 
     ModalBottomSheet(
@@ -66,7 +124,7 @@ fun CastSheet(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
         )
         Text(
-            "Choisir où lire la musique",
+            "Choisir où lire la musique — file d’attente synchronisée",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 20.dp),
@@ -77,9 +135,20 @@ fun CastSheet(
         Row(
             Modifier
                 .fillMaxWidth()
-                .clickable {
-                    Toast.makeText(context, "Lecture sur cet appareil", Toast.LENGTH_SHORT).show()
-                    onDismiss()
+                .clickable(enabled = !busy) {
+                    busy = true
+                    scope.launch {
+                        runCatching {
+                            container.api.setSessionActive(mapOf("targetId" to container.deviceId))
+                        }.onSuccess {
+                            activeId = it.activePlayerId
+                            Toast.makeText(context, "Lecture sur cet appareil", Toast.LENGTH_SHORT).show()
+                            onDismiss()
+                        }.onFailure {
+                            Toast.makeText(context, "Impossible : ${it.message}", Toast.LENGTH_SHORT).show()
+                        }
+                        busy = false
+                    }
                 }
                 .padding(horizontal = 20.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -94,12 +163,14 @@ fun CastSheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
+            if (activeId == null || activeId == container.deviceId) {
+                Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
+            }
         }
 
-        if (devices.isEmpty()) {
+        if (devices.none { it.id != container.deviceId }) {
             Text(
-                "Aucun autre appareil connecté pour le moment. Ouvre YTMusic sur le web ou un autre client pour caster.",
+                "Aucun autre appareil connecté. Ouvre YTMusic sur le web (même compte) pour caster.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(20.dp),
@@ -109,14 +180,7 @@ fun CastSheet(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            Toast.makeText(
-                                context,
-                                "Cast vers « ${d.name} » — ouvre la session sur cet appareil",
-                                Toast.LENGTH_LONG,
-                            ).show()
-                            onDismiss()
-                        }
+                        .clickable(enabled = !busy) { transferTo(d.id, d.name) }
                         .padding(horizontal = 20.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

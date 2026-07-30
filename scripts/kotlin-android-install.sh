@@ -67,11 +67,19 @@ if [[ "$MODE" == "build" ]]; then
   exit 0
 fi
 
-if ! adb devices | awk 'NR>1 && $2=="device"{print $1}' | grep -qx "$DEVICE"; then
-  echo "Device $DEVICE non connecté. Devices:" >&2
-  adb devices -l >&2
+# Attente / recovery ADB unauthorized (ne plus échouer en « non connecté »)
+chmod +x "$ROOT/scripts/adb-ensure-device.sh"
+RESOLVED="$(bash "$ROOT/scripts/adb-ensure-device.sh" "$DEVICE")" || {
+  echo "" >&2
+  echo "Build APK OK, mais install impossible sans device autorisé." >&2
+  echo "APK prêt : $APK" >&2
+  echo "Une fois la popup USB acceptée : make android" >&2
   exit 1
+}
+if [[ "$RESOLVED" != "$DEVICE" ]]; then
+  echo "==> DEVICE résolu : $DEVICE → $RESOLVED"
 fi
+DEVICE="$RESOLVED"
 
 echo "==> adb reverse tcp:8787 + tcp:5173…"
 adb -s "$DEVICE" reverse tcp:8787 tcp:8787 || true

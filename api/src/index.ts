@@ -140,7 +140,7 @@ import {
   syncYtmLibrary,
 } from './ytm-sync.js';
 import { findUserByEmail, createUser, publicUser, updateUserProfile, findUserById, isAdminUser } from './db.js';
-import { detachSocket, getHubPublic, handleSessionMessage, publishPlaybackState } from './sessions.js';
+import { detachSocket, getHubPublic, handleSessionMessage, publishPlaybackState, touchHttpDevice, setActiveDeviceHttp, transferPlaybackHttp } from './sessions.js';
 import type { Track } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1344,12 +1344,57 @@ app.post('/api/offline/start', accountRequired, async (req, res) => {
 });
 
 app.get('/api/session', accountRequired, (req, res) => {
+  const deviceId = String(req.headers['x-device-id'] || '');
+  if (deviceId) {
+    touchHttpDevice(req.userId!, {
+      id: deviceId,
+      name: String(req.headers['x-device-name'] || 'Android'),
+      type: 'mobile',
+      canPlay: true,
+    });
+  }
   res.json(getHubPublic(req.userId!));
+});
+
+app.post('/api/session/device', accountRequired, (req, res) => {
+  const id = String(req.body?.deviceId || req.headers['x-device-id'] || '');
+  res.json(
+    touchHttpDevice(req.userId!, {
+      id,
+      name: String(req.body?.name || req.headers['x-device-name'] || 'Appareil'),
+      type: (req.body?.deviceType || 'mobile') as 'web' | 'mobile' | 'desktop' | 'tv',
+      canPlay: req.body?.canPlay !== false,
+    }),
+  );
+});
+
+app.post('/api/session/active', accountRequired, (req, res) => {
+  const targetId = String(req.body?.targetId || '');
+  res.json(setActiveDeviceHttp(req.userId!, targetId));
+});
+
+app.post('/api/session/transfer', accountRequired, (req, res) => {
+  const targetId = String(req.body?.targetId || '');
+  res.json(transferPlaybackHttp(req.userId!, targetId, req.body?.state || undefined));
 });
 
 app.put('/api/session/state', accountRequired, (req, res) => {
   try {
-    res.json(publishPlaybackState(req.userId!, req.body || {}));
+    const deviceId = String(req.headers['x-device-id'] || req.body?.deviceId || '');
+    if (deviceId) {
+      touchHttpDevice(req.userId!, {
+        id: deviceId,
+        name: String(req.headers['x-device-name'] || req.body?.deviceName || 'Appareil'),
+        type: 'mobile',
+        canPlay: true,
+      });
+    }
+    res.json(
+      publishPlaybackState(req.userId!, req.body || {}, {
+        deviceId,
+        force: Boolean(req.body?.force || req.query.force),
+      }),
+    );
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
