@@ -37,6 +37,9 @@ import {
 import {
   getFullLibrary,
   toggleLikeTrack,
+  toggleLibraryTrack,
+  removeLibraryTrack,
+  isTrackInLibrary,
   toggleLikePlaylist,
   saveAlbum,
   removeAlbum,
@@ -880,7 +883,18 @@ app.post('/api/listen', accountRequired, (req, res) => {
     });
     if (event === 'start' || event === 'complete') {
       const track = req.body?.track as Track | undefined;
-      if (track?.id) addHistory(req.userId!, track);
+      if (track?.id) {
+        addHistory(req.userId!, track);
+      } else {
+        // Même sans payload complet : garantit « Écouté récemment » synchro web/mobile
+        addHistory(req.userId!, {
+          id: trackId,
+          title: trackId,
+          artists: [],
+          thumbnails: [],
+          type: 'song',
+        });
+      }
     }
     res.json({ ok: true });
   } catch (err) {
@@ -1153,6 +1167,26 @@ app.post('/api/library/like', accountRequired, (req, res) => {
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
+});
+
+/** Enregistrer / retirer un titre de la biblio (sans toucher aux J’aime). */
+app.post('/api/library/songs', accountRequired, (req, res) => {
+  try {
+    const track = req.body as Track;
+    if (!track?.id) {
+      res.status(400).json({ error: 'track requis' });
+      return;
+    }
+    const result = toggleLibraryTrack(req.userId!, track);
+    res.json({ ...result, library: getFullLibrary(req.userId!) });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.delete('/api/library/songs/:id', accountRequired, (req, res) => {
+  removeLibraryTrack(req.userId!, p(req.params.id));
+  res.json({ ok: true, saved: false, library: getFullLibrary(req.userId!) });
 });
 
 app.post('/api/library/like-playlist', accountRequired, (req, res) => {

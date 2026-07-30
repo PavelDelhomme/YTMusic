@@ -24,7 +24,7 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
   const playQueue = usePlayer((s) => s.playQueue);
   const navigate = useNavigate();
   const openActions = useItemActions((s) => s.open);
-  const { applyLibrary, isPlaylistLiked, hasAlbum, hasArtist } = useLibrary();
+  const { applyLibrary, isPlaylistLiked, hasAlbum, hasArtist, isInLibrary } = useLibrary();
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [playBusy, setPlayBusy] = useState(false);
@@ -47,7 +47,8 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
     saved ||
     (item.type === 'playlist' && !local && isPlaylistLiked(item.id)) ||
     (item.type === 'album' && hasAlbum(item.id)) ||
-    (item.type === 'artist' && hasArtist(item.id));
+    (item.type === 'artist' && hasArtist(item.id)) ||
+    ((item.type === 'song' || item.type === 'video' || item.type === 'unknown') && isInLibrary(item.id));
 
   const openItem = () => {
     if (href) {
@@ -156,9 +157,9 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
         applyLibrary(r.library);
         setSaved(true);
       } else if (/^[a-zA-Z0-9_-]{11}$/.test(item.id)) {
-        const r = await api.like(item);
+        const r = await api.toggleLibrarySong(item);
         applyLibrary(r.library);
-        setSaved(true);
+        setSaved(r.saved);
       }
     } catch (err) {
       console.error(err);

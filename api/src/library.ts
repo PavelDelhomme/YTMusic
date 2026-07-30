@@ -18,12 +18,39 @@ function parseTrack(row: { payload?: string; track_id?: string }): Track | null 
   return null;
 }
 
+function trackFromRow(r: { track_id: string; payload: string | null }): Track {
+  if (r.payload) {
+    try {
+      return JSON.parse(r.payload) as Track;
+    } catch {
+      /* fallthrough */
+    }
+  }
+  return {
+    id: r.track_id,
+    title: r.track_id,
+    artists: [],
+    thumbnails: [],
+    type: 'song',
+  };
+}
+
 export function getFullLibrary(userId: string) {
-  // LEFT JOIN : un like sans cache ne disparaît plus (placeholder minimal)
+  // LEFT JOIN : un like/save sans cache ne disparaît plus (placeholder minimal)
   const likedRows = db
     .prepare(
       `SELECT l.track_id AS track_id, t.payload AS payload
        FROM liked_tracks l
+       LEFT JOIN tracks_cache t ON t.id = l.track_id
+       WHERE l.user_id = ?
+       ORDER BY l.created_at DESC`,
+    )
+    .all(userId) as { track_id: string; payload: string | null }[];
+
+  const songRows = db
+    .prepare(
+      `SELECT l.track_id AS track_id, t.payload AS payload
+       FROM library_tracks l
        LEFT JOIN tracks_cache t ON t.id = l.track_id
        WHERE l.user_id = ?
        ORDER BY l.created_at DESC`,
@@ -60,26 +87,11 @@ export function getFullLibrary(userId: string) {
       .all(userId) as { track_id: string }[]
   ).map((r) => r.track_id);
 
-  const liked = likedRows
-    .map((r) => {
-      if (r.payload) {
-        try {
-          return JSON.parse(r.payload) as Track;
-        } catch {
-          /* fallthrough */
-        }
-      }
-      return {
-        id: r.track_id,
-        title: r.track_id,
-        artists: [],
-        thumbnails: [],
-        type: 'song' as const,
-      } satisfies Track;
-    })
-    .filter(Boolean);
+  const liked = likedRows.map(trackFromRow);
+  const songs = songRows.map(trackFromRow);
 
   return {
+    songs,
     liked,
     likedPlaylists,
     albums,
@@ -111,6 +123,36 @@ export function isTrackLiked(userId: string, trackId: string) {
   return Boolean(
     db.prepare('SELECT 1 FROM liked_tracks WHERE user_id = ? AND track_id = ?').get(userId, trackId),
   );
+}
+
+/** Ajoute / retire un titre de la bibliothèque (indépendant du J’aime). */
+export function toggleLibraryTrack(userId: string, track: Track) {
+  upsertTrack(track);
+  const existing = db
+    .prepare('SELECT 1 FROM library_tracks WHERE user_id = ? AND track_id = ?')
+    .get(userId, track.id);
+  if (existing) {
+    db.prepare('DELETE FROM library_tracks WHERE user_id = ? AND track_id = ?').run(userId, track.id);
+    return { saved: false };
+  }
+  db.prepare('INSERT INTO library_tracks (user_id, track_id, created_at) VALUES (?, ?, ?)').run(
+    userId,
+    track.id,
+    Date.now(),
+  );
+  return { saved: true };
+}
+
+export function isTrackInLibrary(userId: string, trackId: string) {
+  return Boolean(
+    db
+      .prepare('SELECT 1 FROM library_tracks WHERE user_id = ? AND track_id = ?')
+      .get(userId, trackId),
+  );
+}
+
+export function removeLibraryTrack(userId: string, trackId: string) {
+  db.prepare('DELETE FROM library_tracks WHERE user_id = ? AND track_id = ?').run(userId, trackId);
 }
 
 export function toggleLikePlaylist(userId: string, playlist: Record<string, unknown>) {
@@ -189,27 +231,26 @@ export function getTopListened(userId: string, limit = 30): Track[] {
   return (
     db
       .prepare(
-        `SELECT t.payload, COALESCE(h.play_count, 1) as play_count FROM history h
-         JOIN tracks_cache t ON t.id = h.track_id
+        `SELECT h.track_id AS track_id, t.payload AS payload, COALESCE(h.play_count, 1) as play_count FROM history h
+         LEFT JOIN tracks_cache t ON t.id = h.track_id
          WHERE h.user_id = ?
          ORDER BY COALESCE(h.play_count, 1) DESC, h.played_at DESC
          LIMIT ?`,
       )
-      .all(userId, limit) as { payload: string }[]
-  ).map((r) => JSON.parse(r.payload) as Track);
+      .all(userId, limit) as { track_id: string; payload: string | null }[]
+  ).map(trackFromRow);
 }
 
 export function getHistory(userId: string, limit = 500): Track[] {
-  return (
-    db
-      .prepare(
-        `SELECT t.payload FROM history h
-         JOIN tracks_cache t ON t.id = h.track_id
-         WHERE h.user_id = ?
-         ORDER BY h.played_at DESC LIMIT ?`,
-      )
-      .all(userId, limit) as { payload: string }[]
-  ).map((r) => JSON.parse(r.payload) as Track);
+  const rows = db
+    .prepare(
+      `SELECT h.track_id AS track_id, t.payload AS payload FROM history h
+       LEFT JOIN tracks_cache t ON t.id = h.track_id
+       WHERE h.user_id = ?
+       ORDER BY h.played_at DESC LIMIT ?`,
+    )
+    .all(userId, limit) as { track_id: string; payload: string | null }[];
+  return rows.map(trackFromRow);
 }
 
 /**

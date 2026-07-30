@@ -71,7 +71,7 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
   const startMix = usePlayer((s) => s.startMix);
   const queue = usePlayer((s) => s.queue);
   const queueIndex = usePlayer((s) => s.queueIndex);
-  const { isLiked, toggleLike, playlists, addToPlaylist, hasAlbum, hasArtist, isPlaylistLiked, applyLibrary, downloaded, refresh } =
+  const { isLiked, isInLibrary, toggleLike, toggleLibrarySong, playlists, addToPlaylist, hasAlbum, hasArtist, isPlaylistLiked, applyLibrary, downloaded, refresh } =
     useLibrary();
   const [busy, setBusy] = useState(false);
   const [showPlaylists, setShowPlaylists] = useState(false);
@@ -111,6 +111,7 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
   if (!item) return null;
 
   const liked = isLiked(item.id);
+  const inLibrary = isInLibrary(item.id);
   const playable = isPlayable(item);
   const absQueueIndex =
     typeof opts.queueIndex === 'number'
@@ -370,12 +371,12 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
                 />
               )}
               <Row
-                icon={liked ? <Check className="h-5 w-5 text-yt-red" /> : <Library className="h-5 w-5" />}
-                label={liked ? 'Dans la bibliothèque' : 'Enregistrer dans la bibliothèque'}
-                sub={liked ? 'Appuyer pour retirer' : 'Ajoute aux titres J’aime'}
+                icon={inLibrary ? <Check className="h-5 w-5 text-yt-red" /> : <Library className="h-5 w-5" />}
+                label={inLibrary ? 'Dans la bibliothèque' : 'Enregistrer dans la bibliothèque'}
+                sub={inLibrary ? 'Appuyer pour retirer (ne retire pas le J’aime)' : 'Sans ajouter aux J’aime'}
                 disabled={busy}
                 onClick={() => {
-                  void toggleLike(item);
+                  void toggleLibrarySong(item);
                 }}
               />
             </>

@@ -14,6 +14,7 @@ enum class LibraryFilter(val label: String) {
     Downloads("Téléchargés"),
     Playlists("Playlists"),
     Tracks("Titres"),
+    Liked("J'aime"),
     Albums("Albums"),
     Artists("Artistes"),
     Profiles("Profils"),

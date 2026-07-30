@@ -329,8 +329,9 @@ private fun buildLibraryContent(data: LibraryResponse, filter: LibraryFilter): L
 
     return when (filter) {
         LibraryFilter.Additions -> {
+            val libSongs = data.songs.ifEmpty { data.liked }
             val recent = buildList {
-                addAll(data.liked.take(40))
+                addAll(libSongs.take(40))
                 addAll(data.albums.take(20).map { it.copy(type = it.type ?: "album") })
                 addAll(data.playlists.take(20).map { playlistAsTrack(it) })
                 addAll(data.likedPlaylists.take(10).map { likedPlaylistAsTrack(it) })
@@ -340,19 +341,31 @@ private fun buildLibraryContent(data: LibraryResponse, filter: LibraryFilter): L
                 headline = "Enregistré récemment",
                 rows = recent,
                 playableQueue = playable,
-                emptyMessage = "Rien d'enregistré pour l'instant. Like un titre ou ajoute un album.",
+                emptyMessage = "Rien d'enregistré. Ajoute un titre ou un album à la bibliothèque.",
                 showPlayAll = playable.isNotEmpty(),
                 playLabel = "Tout lire",
                 shuffleLabel = "Aléatoire",
             )
         }
         LibraryFilter.Tracks -> {
-            val tracks = az(data.liked.filter { it.isPlayable() })
+            val tracks = az((data.songs.ifEmpty { data.liked }).filter { it.isPlayable() })
             LibraryContent(
                 headline = "Titres · A–Z",
                 rows = tracks,
                 playableQueue = tracks,
-                emptyMessage = "Aucun titre dans ta bibliothèque. Like un morceau pour l'y ajouter.",
+                emptyMessage = "Aucun titre. Utilise « Enregistrer dans la bibliothèque » (≠ J'aime).",
+                showPlayAll = tracks.isNotEmpty(),
+                playLabel = "Tout lire",
+                shuffleLabel = "Aléatoire",
+            )
+        }
+        LibraryFilter.Liked -> {
+            val tracks = az(data.liked.filter { it.isPlayable() })
+            LibraryContent(
+                headline = "J'aime · A–Z",
+                rows = tracks,
+                playableQueue = tracks,
+                emptyMessage = "Aucun J'aime. Appuie sur le cœur d'un titre.",
                 showPlayAll = tracks.isNotEmpty(),
                 playLabel = "Tout lire",
                 shuffleLabel = "Aléatoire",
@@ -411,7 +424,7 @@ private fun buildLibraryContent(data: LibraryResponse, filter: LibraryFilter): L
             )
         }
         LibraryFilter.Downloads -> {
-            val byId = (data.liked + data.history).associateBy { it.id }
+            val byId = (data.songs + data.liked + data.history).associateBy { it.id }
             val rows = az(
                 data.downloaded.mapNotNull { id ->
                     byId[id] ?: TrackDto(id = id, title = id, type = "song")
