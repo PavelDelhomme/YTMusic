@@ -24,30 +24,46 @@ function audioEl() {
   return usePlayer.getState().audioEl;
 }
 
-/** Play explicite (Media Session / MPRIS envoie « play », pas un toggle). */
+/** Sync isPlaying depuis l’élément audio (source de vérité UI). */
+function syncPlayingFromAudio() {
+  const audio = audioEl();
+  const p = usePlayer.getState();
+  if (!audio) return;
+  const playing = !audio.paused && !audio.ended;
+  if (p.isPlaying !== playing) {
+    usePlayer.setState({ isPlaying: playing });
+  }
+}
+
+/** Play/pause unifié — passe toujours par toggle() (local + remote + UI). */
+function doPlayPause() {
+  usePlayer.getState().toggle();
+  // Sync différé au cas où les events audio arrivent en retard
+  requestAnimationFrame(() => {
+    syncPlayingFromAudio();
+    updateMediaSessionMetadata();
+  });
+}
+
 function ensurePlaying() {
   const p = usePlayer.getState();
   if (!p.current) return;
   const audio = p.audioEl;
+  // Déjà en lecture → force l’icône play
   if (audio && !audio.paused && !audio.ended) {
     usePlayer.setState({ isPlaying: true });
     updateMediaSessionMetadata();
     return;
   }
-  if (audio && audio.src && audio.dataset.trackId === p.current.id) {
-    void audio
-      .play()
-      .then(() => {
-        usePlayer.setState({ isPlaying: true });
-        updateMediaSessionMetadata();
-      })
-      .catch(() => {
-        p.toggle();
-      });
-    return;
+  if (p.isPlaying && audio && audio.paused) {
+    // État store désynchronisé
+    usePlayer.setState({ isPlaying: false });
   }
-  // Pas de source prête → laisse toggle/play reconstruire
   p.toggle();
+  requestAnimationFrame(() => {
+    syncPlayingFromAudio();
+    updateMediaSessionMetadata();
+  });
 }
 
 function ensurePaused() {
@@ -59,8 +75,12 @@ function ensurePaused() {
     updateMediaSessionMetadata();
     return;
   }
-  if (p.isPlaying) p.toggle();
-  else updateMediaSessionMetadata();
+  if (p.isPlaying) {
+    // Remote ou store désync : toggle pour envoyer pause
+    p.toggle();
+  }
+  usePlayer.setState({ isPlaying: false });
+  updateMediaSessionMetadata();
 }
 
 function doNext() {
@@ -145,47 +165,53 @@ export function updateMediaSessionMetadata() {
     /* ignore */
   }
 
-  // Chromium/Linux droppe parfois les handlers après un update metadata
   wireMediaSession();
 }
 
 type MediaAction = 'playpause' | 'play' | 'pause' | 'stop' | 'next' | 'prev';
 
-/** Détecte touches média hardware (Linux/Logitech souvent via keyCode legacy). */
 function mediaActionFromEvent(e: KeyboardEvent): MediaAction | null {
   const k = e.key;
   const c = e.code;
-  // keyCode legacy (toujours renvoyé par beaucoup de claviers Logitech sous X11/Wayland)
   const code = e.keyCode || (e as KeyboardEvent & { which?: number }).which || 0;
 
   if (
     k === 'MediaPlayPause' ||
     c === 'MediaPlayPause' ||
     k === 'AudioPlay' ||
+    c === 'AudioPlay' ||
     code === 179
   ) {
     return 'playpause';
   }
-  if (k === 'MediaPlay' || c === 'MediaPlay' || code === 250 /* XF86AudioPlay rare */) {
-    return 'play';
-  }
+  if (k === 'MediaPlay' || c === 'MediaPlay' || code === 250) return 'play';
   if (k === 'MediaPause' || c === 'MediaPause') return 'pause';
   if (k === 'MediaStop' || c === 'MediaStop' || code === 178) return 'stop';
   if (k === 'MediaTrackNext' || c === 'MediaTrackNext' || code === 176) return 'next';
   if (k === 'MediaTrackPrevious' || c === 'MediaTrackPrevious' || code === 177) return 'prev';
+
+  if ((k === 'Unidentified' || k === '' || !k) && code) {
+    if (code === 179) return 'playpause';
+    if (code === 176) return 'next';
+    if (code === 177) return 'prev';
+    if (code === 178) return 'stop';
+  }
   return null;
 }
 
+let lastMediaAction: MediaAction | null = null;
+let lastMediaAt = 0;
+
 function handleMediaAction(action: MediaAction) {
+  const now = Date.now();
+  if (action === lastMediaAction && now - lastMediaAt < 280) return;
+  lastMediaAction = action;
+  lastMediaAt = now;
+
   const p = usePlayer.getState();
   if (!p.current && action !== 'stop') return;
-  if (action === 'playpause') {
-    const audio = p.audioEl;
-    if (audio ? audio.paused || audio.ended : !p.isPlaying) ensurePlaying();
-    else ensurePaused();
-    return;
-  }
-  if (action === 'play') ensurePlaying();
+  if (action === 'playpause') doPlayPause();
+  else if (action === 'play') ensurePlaying();
   else if (action === 'pause' || action === 'stop') ensurePaused();
   else if (action === 'next') doNext();
   else if (action === 'prev') doPrev();
@@ -193,8 +219,7 @@ function handleMediaAction(action: MediaAction) {
 
 /**
  * Raccourcis clavier app-wide + Media Session (MPRIS).
- * Sur Linux les touches Logitech passent surtout par Media Session ;
- * on garde aussi keydown/keyup + raccourcis secours.
+ * Bindings multiples : Ctrl souvent capturé par le DE Linux (workspaces).
  */
 export function installMediaKeys(): () => void {
   wireMediaSession();
@@ -205,81 +230,98 @@ export function installMediaKeys(): () => void {
     if (media) {
       e.preventDefault();
       e.stopPropagation();
-      // keydown + keyup → une seule action (ignore keyup dupliqué immédiat)
-      if (e.type === 'keyup') return;
       handleMediaAction(media);
       return;
     }
 
+    if (e.type === 'keyup') return;
     if (isTypingTarget(e.target)) return;
-    if (e.altKey || e.metaKey) return;
+    if (e.metaKey) return;
     if (!usePlayer.getState().current) return;
 
-    // Ctrl+← / Ctrl+→ = précédent / suivant (fiable sur tous claviers Linux)
-    if (e.ctrlKey && !e.shiftKey && e.key === 'ArrowRight') {
+    const key = e.key;
+    const code = e.code;
+
+    // —— Play / Pause ——
+    // Espace, K, P (sans modificateur)
+    if (
+      (!e.ctrlKey && !e.altKey && !e.shiftKey && (code === 'Space' || key === ' ' || key === 'k' || key === 'K' || key === 'p' || key === 'P')) ||
+      (e.ctrlKey && !e.altKey && !e.shiftKey && (key === 'p' || key === 'P' || code === 'Space'))
+    ) {
       e.preventDefault();
-      doNext();
+      e.stopPropagation();
+      doPlayPause();
       return;
     }
-    if (e.ctrlKey && !e.shiftKey && e.key === 'ArrowLeft') {
+
+    // —— Suivant ——
+    // Ctrl/Alt/Shift+→ , ] , . , Shift+N , N
+    if (
+      ((e.ctrlKey || e.altKey || e.shiftKey) && (key === 'ArrowRight' || code === 'ArrowRight')) ||
+      (!e.ctrlKey && !e.altKey && (key === ']' || code === 'BracketRight' || key === '.' || code === 'Period')) ||
+      (e.shiftKey && (key === 'N' || key === 'n')) ||
+      (!e.ctrlKey && !e.altKey && !e.shiftKey && (key === 'n' || key === 'N') && code === 'KeyN')
+    ) {
+      // N seul = next (YouTube) ; Shift+N aussi
+      if ((key === 'n' || key === 'N') && !e.shiftKey && (e.ctrlKey || e.altKey)) {
+        /* ignore Ctrl+N = nouvel onglet */
+      } else if ((key === 'n' || key === 'N') && e.ctrlKey) {
+        return;
+      } else {
+        e.preventDefault();
+        e.stopPropagation();
+        doNext();
+        return;
+      }
+    }
+
+    // —— Précédent ——
+    // Ctrl/Alt/Shift+← , [ , , , Shift+P already used for play — use Shift+, or B
+    if (
+      ((e.ctrlKey || e.altKey || e.shiftKey) && (key === 'ArrowLeft' || code === 'ArrowLeft')) ||
+      (!e.ctrlKey && !e.altKey && (key === '[' || code === 'BracketLeft' || key === ',' || code === 'Comma')) ||
+      (!e.ctrlKey && !e.altKey && !e.shiftKey && (key === 'b' || key === 'B'))
+    ) {
       e.preventDefault();
+      e.stopPropagation();
       doPrev();
       return;
     }
-    if (e.ctrlKey) return;
 
-    // Espace / K = play-pause
-    if (e.code === 'Space' || e.key === ' ' || e.key === 'k' || e.key === 'K') {
-      e.preventDefault();
-      const p = usePlayer.getState();
-      const audio = p.audioEl;
-      if (audio ? audio.paused || audio.ended : !p.isPlaying) ensurePlaying();
-      else ensurePaused();
-      return;
-    }
-
-    // Shift+N / Shift+P — piste suivante / précédente
-    if (e.shiftKey && (e.key === 'N' || e.key === 'n')) {
-      e.preventDefault();
-      doNext();
-      return;
-    }
-    if (e.shiftKey && (e.key === 'P' || e.key === 'p')) {
-      e.preventDefault();
-      doPrev();
-      return;
-    }
-
-    // [ ] = prev / next (secours sans modificateur)
-    if (e.key === ']' || e.code === 'BracketRight') {
-      e.preventDefault();
-      doNext();
-      return;
-    }
-    if (e.key === '[' || e.code === 'BracketLeft') {
-      e.preventDefault();
-      doPrev();
-      return;
-    }
-
-    // J / L ou flèches — seek ±10s
-    if (e.key === 'ArrowLeft' || e.key === 'j' || e.key === 'J') {
-      e.preventDefault();
-      const p = usePlayer.getState();
-      p.seek(Math.max(0, p.progress - 10));
-      return;
-    }
-    if (e.key === 'ArrowRight' || e.key === 'l' || e.key === 'L') {
-      e.preventDefault();
-      const p = usePlayer.getState();
-      const max = p.duration > 0 ? p.duration : p.progress + 10;
-      p.seek(Math.min(max, p.progress + 10));
+    // Seek J / L (sans flèches seules — flèches seules = seek aussi style YT)
+    if (!e.ctrlKey && !e.altKey && !e.shiftKey) {
+      if (key === 'j' || key === 'J') {
+        e.preventDefault();
+        const p = usePlayer.getState();
+        p.seek(Math.max(0, p.progress - 10));
+        return;
+      }
+      if (key === 'l' || key === 'L') {
+        e.preventDefault();
+        const p = usePlayer.getState();
+        const max = p.duration > 0 ? p.duration : p.progress + 10;
+        p.seek(Math.min(max, p.progress + 10));
+        return;
+      }
+      if (key === 'ArrowLeft' || code === 'ArrowLeft') {
+        e.preventDefault();
+        const p = usePlayer.getState();
+        p.seek(Math.max(0, p.progress - 5));
+        return;
+      }
+      if (key === 'ArrowRight' || code === 'ArrowRight') {
+        e.preventDefault();
+        const p = usePlayer.getState();
+        const max = p.duration > 0 ? p.duration : p.progress + 5;
+        p.seek(Math.min(max, p.progress + 5));
+      }
     }
   };
 
   window.addEventListener('keydown', onKey, true);
   window.addEventListener('keyup', onKey, true);
   document.addEventListener('keydown', onKey, true);
+  document.addEventListener('keyup', onKey, true);
 
   const unsub = usePlayer.subscribe((state, prev) => {
     if (
@@ -305,20 +347,26 @@ export function installMediaKeys(): () => void {
   const onVis = () => {
     if (document.visibilityState === 'visible') {
       wireMediaSession();
+      syncPlayingFromAudio();
       updateMediaSessionMetadata();
     }
   };
   const onFocus = () => {
     wireMediaSession();
+    syncPlayingFromAudio();
     updateMediaSessionMetadata();
+  };
+  const onPointer = () => {
+    wireMediaSession();
   };
   document.addEventListener('visibilitychange', onVis);
   window.addEventListener('focus', onFocus);
+  window.addEventListener('pointerdown', onPointer, { passive: true });
 
-  // Keepalive MPRIS : Chromium Linux perd parfois la session
   const keepAlive = window.setInterval(() => {
     if (!usePlayer.getState().current) return;
     wireMediaSession();
+    syncPlayingFromAudio();
     try {
       const audio = audioEl();
       const playing = audio ? !audio.paused && !audio.ended : usePlayer.getState().isPlaying;
@@ -326,9 +374,8 @@ export function installMediaKeys(): () => void {
     } catch {
       /* ignore */
     }
-  }, 8000);
+  }, 5000);
 
-  // Branche play/pause audio dès qu’un élément est lié
   let attached: HTMLAudioElement | null = null;
   const audioListeners: Array<[string, EventListener]> = [];
   const attachAudio = (el: HTMLAudioElement | null) => {
@@ -340,11 +387,11 @@ export function installMediaKeys(): () => void {
     attached = el;
     if (!el) return;
     const bump = () => {
+      syncPlayingFromAudio();
       wireMediaSession();
       updateMediaSessionMetadata();
     };
     for (const ev of ['play', 'playing', 'pause', 'ended', 'loadedmetadata', 'timeupdate'] as const) {
-      // timeupdate : throttle via updateMediaSessionMetadata (déjà soft)
       const fn: EventListener =
         ev === 'timeupdate'
           ? () => {
@@ -375,8 +422,10 @@ export function installMediaKeys(): () => void {
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('keyup', onKey, true);
     document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('keyup', onKey, true);
     document.removeEventListener('visibilitychange', onVis);
     window.removeEventListener('focus', onFocus);
+    window.removeEventListener('pointerdown', onPointer);
     window.clearInterval(keepAlive);
     unsub();
     unsubAudio();

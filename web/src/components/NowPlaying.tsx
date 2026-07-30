@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ListMusic, Mic2, Radio, Save, Sparkles } from 'lucide-react';
 import { api, thumb, type Track } from '../api';
 import { usePlayer } from '../store/player';

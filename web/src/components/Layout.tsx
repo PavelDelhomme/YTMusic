@@ -5,6 +5,8 @@ import {
   Home,
   Library,
   ListMusic,
+  Menu,
+  PanelLeftClose,
   Plus,
   Search,
   Settings2,
@@ -28,6 +30,8 @@ import { useAuth } from '../store/auth';
 import { useSession } from '../store/session';
 import { api } from '../api';
 import { installMediaKeys } from '../lib/mediaKeys';
+import { wireEqualizer, resumeEqContext } from '../lib/equalizer';
+import { EqualizerPanel } from './EqualizerPanel';
 
 const links = [
   { to: '/', label: 'Accueil', icon: Home },
@@ -57,6 +61,22 @@ export function Layout() {
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
   const [nowPlayingTab, setNowPlayingTab] = useState<NowPlayingTab>('queue');
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
+  const [eqOpen, setEqOpen] = useState(false);
+  // Menu gauche en drawer rétractable (persisté — desktop seulement pour l’état ouvert)
+  const [navOpen, setNavOpen] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    const isLg = window.matchMedia('(min-width: 1024px)').matches;
+    // Mobile : toujours fermé au démarrage (évite de masquer la page)
+    if (!isLg) return false;
+    try {
+      const v = localStorage.getItem('ytm_nav_open');
+      if (v === '0') return false;
+      if (v === '1') return true;
+    } catch {
+      /* ignore */
+    }
+    return true;
+  });
   const playlists = useLibrary((s) => s.playlists);
   const likedPlaylists = useLibrary((s) => s.likedPlaylists);
   const createPlaylist = useLibrary((s) => s.createPlaylist);
@@ -79,11 +99,16 @@ export function Layout() {
     setQ(urlQ);
   }, [location.pathname, location.search]);
 
-  // Échap : file latérale (le Now Playing gère son propre Escape, y compris feuille « Enregistrer »)
+  // Échap : ferme d’abord le drawer, sinon file latérale
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (nowPlayingOpen) return;
+      if (navOpen && window.matchMedia('(max-width: 1023px)').matches) {
+        e.preventDefault();
+        setNavOpen(false);
+        return;
+      }
       const p = usePlayer.getState();
       if (p.showQueue || p.showLyrics) {
         e.preventDefault();
@@ -93,7 +118,22 @@ export function Layout() {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [nowPlayingOpen]);
+  }, [nowPlayingOpen, navOpen]);
+
+  useEffect(() => {
+    // Ne persiste l’état ouvert que sur desktop (mobile = drawer ponctuel)
+    if (!window.matchMedia('(min-width: 1024px)').matches) return;
+    try {
+      localStorage.setItem('ytm_nav_open', navOpen ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [navOpen]);
+
+  // Ferme le drawer mobile après navigation
+  useEffect(() => {
+    if (window.matchMedia('(max-width: 1023px)').matches) setNavOpen(false);
+  }, [location.pathname]);
 
   useEffect(() => {
     wireRemotePlayer();
@@ -168,10 +208,20 @@ export function Layout() {
 
   useEffect(() => {
     bindAudio(audioRef.current);
+    if (audioRef.current) {
+      void wireEqualizer(audioRef.current);
+    }
   }, [bindAudio]);
 
   // Play/pause, suivant, précédent : clavier + touches média OS, toutes pages
   useEffect(() => installMediaKeys(), []);
+
+  // Reprend AudioContext EQ après geste utilisateur (autoplay policy)
+  useEffect(() => {
+    const resume = () => void resumeEqContext();
+    window.addEventListener('pointerdown', resume, { passive: true });
+    return () => window.removeEventListener('pointerdown', resume);
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => void hydrate(), 50);
@@ -203,143 +253,210 @@ export function Layout() {
 
   const isGuest = !user || user.isGuest || user.email.includes('@local.ytmusic');
   const allowGuestPage = isVerifyRoute;
+  /** Hauteur barre lecteur (+ nav bas mobile) — pour ne pas masquer Compte / Admin */
+  const playerPad = hasPlayback ? 'pb-40' : 'pb-24';
+
+  const closeNavIfMobile = () => {
+    if (window.matchMedia('(max-width: 1023px)').matches) setNavOpen(false);
+  };
+
+  const sideNav = (
+    <>
+      <div className="mb-4 flex shrink-0 items-center justify-between gap-2 px-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <BrandLogo className="h-8 w-8 shrink-0" />
+          <span className="font-display text-lg font-semibold tracking-tight">YTMusic</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setNavOpen(false)}
+          className="rounded-lg p-2 text-yt-muted hover:bg-yt-hover hover:text-white"
+          title="Replier le menu"
+          aria-label="Replier le menu"
+        >
+          <PanelLeftClose className="h-5 w-5" />
+        </button>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <nav className="flex flex-col gap-1">
+          {links.map(({ to, label, icon: Icon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === '/'}
+              onClick={closeNavIfMobile}
+              className={({ isActive }) =>
+                `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+                  isActive ? 'bg-yt-elevated text-white' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
+                }`
+              }
+            >
+              <Icon className="h-5 w-5" />
+              {label}
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="mt-4 border-t border-yt-border pt-4">
+          <button
+            type="button"
+            onClick={() => {
+              const name = window.prompt('Nom de la playlist');
+              if (!name?.trim()) return;
+              void createPlaylist(name.trim()).then((pl) => {
+                if (pl?.id) {
+                  closeNavIfMobile();
+                  navigate(`/local-playlist/${pl.id}`);
+                }
+              });
+            }}
+            className="mb-2 flex w-full items-center justify-center gap-2 rounded-full border border-yt-border bg-yt-elevated px-3 py-2 text-sm font-medium text-white hover:bg-yt-hover"
+          >
+            <Plus className="h-4 w-4" /> Nouvelle playlist
+          </button>
+          <NavLink
+            to="/library"
+            onClick={closeNavIfMobile}
+            className="mb-0.5 flex items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-yt-muted hover:bg-yt-hover hover:text-white"
+          >
+            <ListMusic className="h-4 w-4 shrink-0 text-yt-red" />
+            <div className="min-w-0">
+              <div className="truncate font-medium text-white">Musique « J&apos;aime »</div>
+              <div className="truncate text-[11px] text-yt-muted">Titres aimés</div>
+            </div>
+          </NavLink>
+          {playlists.map((p) => (
+            <NavLink
+              key={p.id}
+              to={`/local-playlist/${p.id}`}
+              onClick={closeNavIfMobile}
+              className={({ isActive }) =>
+                `mb-0.5 block rounded-lg px-2 py-2 text-left text-sm transition ${
+                  isActive ? 'bg-yt-elevated text-white' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
+                }`
+              }
+            >
+              <div className="truncate font-medium text-white">{p.name}</div>
+              <div className="truncate text-[11px] text-yt-muted">
+                {p.tracks.length} titres · {user?.name || 'Toi'}
+              </div>
+            </NavLink>
+          ))}
+          {likedPlaylists.slice(0, 20).map((p: any) => (
+            <NavLink
+              key={`liked-pl-${p.id}`}
+              to={`/playlist/${p.id}`}
+              onClick={closeNavIfMobile}
+              className={({ isActive }) =>
+                `mb-0.5 block rounded-lg px-2 py-2 text-left text-sm transition ${
+                  isActive ? 'bg-yt-elevated text-white' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
+                }`
+              }
+            >
+              <div className="truncate font-medium text-white">{p.title || p.name}</div>
+              <div className="truncate text-[11px] text-yt-muted">Playlist sauvegardée</div>
+            </NavLink>
+          ))}
+        </div>
+      </div>
+
+      {/* Pied fixe : Compte / Admin toujours au-dessus de la barre lecteur */}
+      <div className={`mt-2 shrink-0 border-t border-yt-border bg-yt-bg pt-3 ${playerPad}`}>
+        <NavLink
+          to="/profile"
+          onClick={closeNavIfMobile}
+          className={({ isActive }) =>
+            `mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${
+              isActive ? 'bg-yt-elevated text-white' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
+            }`
+          }
+          title={user?.email || 'Profil'}
+        >
+          <UserRound className="h-5 w-5 shrink-0" />
+          <span className="min-w-0 truncate" title={user?.email || 'Profil'}>
+            {isGuest ? 'Profil' : user?.email || user?.name || 'Compte'}
+          </span>
+        </NavLink>
+        {user?.isAdmin && (
+          <NavLink
+            to="/admin"
+            onClick={closeNavIfMobile}
+            className={({ isActive }) =>
+              `mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${
+                isActive ? 'bg-yt-elevated text-white' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
+              }`
+            }
+          >
+            <Settings2 className="h-5 w-5" />
+            Admin / Paramètres
+          </NavLink>
+        )}
+        <button
+          type="button"
+          onClick={() => {
+            closeNavIfMobile();
+            setDevicesOpen(true);
+          }}
+          className="mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-yt-muted hover:bg-yt-hover hover:text-white"
+        >
+          Appareils / Cast
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            closeNavIfMobile();
+            if (isGuest) setAuthOpen(true);
+            else void logout().then(() => refresh());
+          }}
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-yt-muted hover:bg-yt-hover hover:text-white"
+        >
+          {user?.picture ? (
+            <img src={user.picture} alt="" className="h-6 w-6 rounded-full" referrerPolicy="no-referrer" />
+          ) : (
+            <UserRound className="h-5 w-5" />
+          )}
+          <span className="truncate">{isGuest ? 'Se connecter' : 'Déconnexion'}</span>
+        </button>
+      </div>
+    </>
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-yt-bg">
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-60 shrink-0 flex-col border-r border-yt-border bg-yt-bg px-3 py-4 lg:flex">
-          <div className="mb-6 flex items-center gap-2 px-2">
-            <BrandLogo className="h-8 w-8 shrink-0" />
-            <span className="font-display text-lg font-semibold tracking-tight">YTMusic</span>
-          </div>
-          <nav className="flex flex-col gap-1">
-            {links.map(({ to, label, icon: Icon }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={to === '/'}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
-                    isActive ? 'bg-yt-elevated text-white' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
-                  }`
-                }
-              >
-                <Icon className="h-5 w-5" />
-                {label}
-              </NavLink>
-            ))}
-          </nav>
+        {/* Overlay drawer (mobile + quand on ouvre par-dessus) */}
+        {navOpen && (
+          <button
+            type="button"
+            aria-label="Fermer le menu"
+            className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+            onClick={() => setNavOpen(false)}
+          />
+        )}
 
-          <div className="mt-4 flex min-h-0 flex-1 flex-col border-t border-yt-border pt-4">
-            <button
-              type="button"
-              onClick={() => {
-                const name = window.prompt('Nom de la playlist');
-                if (!name?.trim()) return;
-                void createPlaylist(name.trim()).then((pl) => {
-                  if (pl?.id) navigate(`/local-playlist/${pl.id}`);
-                });
-              }}
-              className="mb-2 flex w-full items-center justify-center gap-2 rounded-full border border-yt-border bg-yt-elevated px-3 py-2 text-sm font-medium text-white hover:bg-yt-hover"
-            >
-              <Plus className="h-4 w-4" /> Nouvelle playlist
-            </button>
-            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-              <NavLink
-                to="/library"
-                className="mb-0.5 flex items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-yt-muted hover:bg-yt-hover hover:text-white"
-              >
-                <ListMusic className="h-4 w-4 shrink-0 text-yt-red" />
-                <div className="min-w-0">
-                  <div className="truncate font-medium text-white">Musique « J&apos;aime »</div>
-                  <div className="truncate text-[11px] text-yt-muted">Titres aimés</div>
-                </div>
-              </NavLink>
-              {playlists.map((p) => (
-                <NavLink
-                  key={p.id}
-                  to={`/local-playlist/${p.id}`}
-                  className={({ isActive }) =>
-                    `mb-0.5 block rounded-lg px-2 py-2 text-left text-sm transition ${
-                      isActive ? 'bg-yt-elevated text-white' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
-                    }`
-                  }
-                >
-                  <div className="truncate font-medium text-white">{p.name}</div>
-                  <div className="truncate text-[11px] text-yt-muted">
-                    {p.tracks.length} titres · {user?.name || 'Toi'}
-                  </div>
-                </NavLink>
-              ))}
-              {likedPlaylists.slice(0, 20).map((p: any) => (
-                <NavLink
-                  key={`liked-pl-${p.id}`}
-                  to={`/playlist/${p.id}`}
-                  className={({ isActive }) =>
-                    `mb-0.5 block rounded-lg px-2 py-2 text-left text-sm transition ${
-                      isActive ? 'bg-yt-elevated text-white' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
-                    }`
-                  }
-                >
-                  <div className="truncate font-medium text-white">{p.title || p.name}</div>
-                  <div className="truncate text-[11px] text-yt-muted">Playlist sauvegardée</div>
-                </NavLink>
-              ))}
-            </div>
-          </div>
-
-          <div className="mt-2 border-t border-yt-border pt-3">
-            <NavLink
-              to="/profile"
-              className={({ isActive }) =>
-                `mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${
-                  isActive ? 'bg-yt-elevated text-white' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
-                }`
-              }
-              title={user?.email || 'Profil'}
-            >
-              <UserRound className="h-5 w-5 shrink-0" />
-              <span className="min-w-0 truncate" title={user?.email || 'Profil'}>
-                {isGuest ? 'Profil' : user?.email || user?.name || 'Compte'}
-              </span>
-            </NavLink>
-            {user?.isAdmin && (
-              <NavLink
-                to="/admin"
-                className={({ isActive }) =>
-                  `mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${
-                    isActive ? 'bg-yt-elevated text-white' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
-                  }`
-                }
-              >
-                <Settings2 className="h-5 w-5" />
-                Admin
-              </NavLink>
-            )}
-            <button
-              type="button"
-              onClick={() => setDevicesOpen(true)}
-              className="mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-yt-muted hover:bg-yt-hover hover:text-white"
-            >
-              Appareils / Cast
-            </button>
-            <button
-              type="button"
-              onClick={() => (isGuest ? setAuthOpen(true) : void logout().then(() => refresh()))}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-yt-muted hover:bg-yt-hover hover:text-white"
-            >
-              {user?.picture ? (
-                <img src={user.picture} alt="" className="h-6 w-6 rounded-full" referrerPolicy="no-referrer" />
-              ) : (
-                <UserRound className="h-5 w-5" />
-              )}
-              <span className="truncate">{isGuest ? 'Se connecter' : 'Déconnexion'}</span>
-            </button>
-          </div>
+        {/* Drawer / sidebar */}
+        <aside
+          className={`fixed inset-y-0 left-0 z-[60] flex w-[min(18rem,88vw)] flex-col overflow-hidden border-r border-yt-border bg-yt-bg px-3 py-4 transition-transform duration-200 ease-out lg:static lg:z-20 lg:w-60 lg:shrink-0 lg:transition-none ${
+            navOpen ? 'translate-x-0' : '-translate-x-full lg:hidden'
+          }`}
+          aria-hidden={!navOpen}
+        >
+          {sideNav}
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-yt-border/60 bg-yt-bg/90 px-4 py-3 backdrop-blur-md">
+          <header className="sticky top-0 z-20 flex items-center gap-2 border-b border-yt-border/60 bg-yt-bg/90 px-3 py-3 backdrop-blur-md sm:gap-3 sm:px-4">
+            <button
+              type="button"
+              onClick={() => setNavOpen((v) => !v)}
+              className="shrink-0 rounded-lg p-2 text-yt-muted hover:bg-yt-hover hover:text-white"
+              title={navOpen ? 'Replier le menu' : 'Ouvrir le menu'}
+              aria-label={navOpen ? 'Replier le menu' : 'Ouvrir le menu'}
+              aria-expanded={navOpen}
+            >
+              {navOpen ? <PanelLeftClose className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+            </button>
             <form
               className="relative mx-auto w-full max-w-xl"
               onSubmit={(e) => {
@@ -366,7 +483,6 @@ export function Layout() {
                   if (q) setQ('');
                 }}
                 onBlur={() => {
-                  // Laisse le temps au clic sur une suggestion
                   window.setTimeout(() => setOpenSug(false), 120);
                 }}
                 placeholder="Rechercher titres, albums, artistes…"
@@ -422,7 +538,7 @@ export function Layout() {
             </button>
             <button
               type="button"
-              onClick={() => setAuthOpen(true)}
+              onClick={() => (isGuest ? setAuthOpen(true) : navigate('/profile'))}
               className="hidden max-w-[9rem] shrink-0 truncate rounded-full bg-yt-elevated px-3 py-2 text-xs text-yt-muted hover:text-white sm:inline-flex"
               title={user?.email || 'Compte'}
             >
@@ -432,7 +548,7 @@ export function Layout() {
 
           <main
             className={`min-h-0 flex-1 overflow-y-auto px-4 pt-4 md:px-8 ${
-              hasPlayback ? 'pb-40' : 'pb-24 lg:pb-28'
+              hasPlayback ? 'pb-48' : 'pb-24 lg:pb-28'
             }`}
           >
             {!authLoaded && <p className="text-yt-muted">Chargement…</p>}
@@ -468,10 +584,11 @@ export function Layout() {
         {!nowPlayingOpen && <QueuePanel />}
       </div>
 
-      {!nowPlayingOpen && (
+      {!nowPlayingOpen && !navOpen && (
         <nav
           className={`fixed left-0 right-0 z-30 flex overflow-x-auto border-t border-yt-border bg-yt-surface lg:hidden ${
-            hasPlayback ? 'bottom-[72px] sm:bottom-[76px]' : 'bottom-0'
+            // Barre lecteur ~72–88 px + bandeau « contrôle distant » éventuel
+            hasPlayback ? 'bottom-[100px] sm:bottom-[108px]' : 'bottom-0'
           }`}
           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
         >
@@ -532,18 +649,29 @@ export function Layout() {
         />
       )}
       <DevicePicker open={devicesOpen} onClose={() => setDevicesOpen(false)} />
-      <ItemActionsSheet />
+      <ItemActionsSheet onOpenEqualizer={() => setEqOpen(true)} />
+      <EqualizerPanel open={eqOpen} onClose={() => setEqOpen(false)} />
 
       <audio
         ref={audioRef}
         preload="metadata"
         playsInline
+        // crossOrigin nécessaire pour Web Audio EQ sur streams proxifiés
+        crossOrigin="anonymous"
         // Requis pour Media Session / touches média OS
         onPlay={() => {
+          usePlayer.setState({ isPlaying: true });
+          void resumeEqContext();
+        }}
+        onPlaying={() => {
           usePlayer.setState({ isPlaying: true });
         }}
         onPause={() => {
           usePlayer.setState({ isPlaying: false });
+        }}
+        onEnded={() => {
+          usePlayer.setState({ isPlaying: false });
+          void next({ fromEnded: true });
         }}
         onTimeUpdate={(e) => {
           const t = e.currentTarget.currentTime;
@@ -552,7 +680,6 @@ export function Layout() {
           reportListenProgress(t, d);
         }}
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
-        onEnded={() => void next({ fromEnded: true })}
       />
     </div>
   );

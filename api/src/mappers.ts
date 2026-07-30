@@ -2,12 +2,18 @@ import type { Track } from './types.js';
 
 export type Thumb = { url: string; width?: number; height?: number };
 
-function asText(value: unknown): string {
+/** Normalise un TextRuns / string Innertube en string affichable. */
+export function asText(value: unknown): string {
   if (value == null) return '';
   if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (typeof value === 'object') {
-    const v = value as { text?: string; toString?: () => string };
+    const v = value as { text?: unknown; runs?: Array<{ text?: string }>; toString?: () => string };
     if (typeof v.text === 'string') return v.text;
+    if (Array.isArray(v.runs)) {
+      const joined = v.runs.map((r) => (typeof r?.text === 'string' ? r.text : '')).join('');
+      if (joined) return joined;
+    }
     if (typeof v.toString === 'function') {
       const s = v.toString();
       if (s && s !== '[object Object]') return s;

@@ -443,6 +443,11 @@ export const api = {
     req<{ related: Track[]; radio: Track[] }>(`/api/track/${id}/related`),
   albumRadio: (id: string) => req<{ tracks: Track[] }>(`/api/album/${id}/radio`),
   artistRadio: (id: string) => req<{ tracks: Track[] }>(`/api/artist/${id}/radio`),
+  artistSongs: (id: string, limit?: number) =>
+    req<{
+      artist: { id: string; name: string; subscribers?: string; thumbnails: Track['thumbnails']; description?: string };
+      tracks: Track[];
+    }>(`/api/artist/${id}/songs${limit ? `?limit=${limit}` : ''}`),
   lyrics: (id: string) =>
     req<{ lyrics: string | null; timed?: { startMs: number; text: string }[] | null }>(
       `/api/track/${id}/lyrics`,

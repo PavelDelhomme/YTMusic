@@ -4,7 +4,7 @@ import { HomePage } from './pages/HomePage';
 import { ExplorePage } from './pages/ExplorePage';
 import { SearchPage } from './pages/SearchPage';
 import { LibraryPage } from './pages/LibraryPage';
-import { ArtistPage, AlbumPage, PlaylistPage } from './pages/DetailPages';
+import { ArtistPage, ArtistSongsPage, AlbumPage, PlaylistPage } from './pages/DetailPages';
 import { LocalPlaylistPage } from './pages/LocalPlaylistPage';
 import { ImportPage } from './pages/ImportPage';
 import { OfflinePage } from './pages/OfflinePage';
@@ -28,6 +28,7 @@ export default function App() {
           <Route path="profile" element={<ProfilePage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="verify-email" element={<VerifyEmailPage />} />
+          <Route path="artist/:id/songs" element={<ArtistSongsPage />} />
           <Route path="artist/:id" element={<ArtistPage />} />
           <Route path="album/:id" element={<AlbumPage />} />
           <Route path="playlist/:id" element={<PlaylistPage />} />

@@ -40,6 +40,7 @@ export function CoverImage({ item, size = 200, className = '', rounded = 'md', a
   }, [candidates.join('|')]);
 
   const src = candidates[idx] || '';
+  const advance = () => setIdx((i) => (i + 1 < candidates.length ? i + 1 : i));
 
   return (
     <div className={`relative h-full w-full overflow-hidden bg-yt-elevated ${r} ${className}`}>
@@ -59,7 +60,12 @@ export function CoverImage({ item, size = 200, className = '', rounded = 'md', a
           loading={eager ? 'eager' : 'lazy'}
           fetchPriority={eager ? 'high' : 'auto'}
           decoding="async"
-          onError={() => setIdx((i) => (i + 1 < candidates.length ? i + 1 : i))}
+          onError={advance}
+          onLoad={(e) => {
+            // maxresdefault YouTube renvoie parfois un placeholder 120×90 (pas une vraie erreur HTTP)
+            const img = e.currentTarget;
+            if (img.naturalWidth > 0 && img.naturalWidth < 200) advance();
+          }}
         />
       ) : null}
     </div>

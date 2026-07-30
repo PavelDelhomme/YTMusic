@@ -66,6 +66,7 @@ import ovh.delhomme.ytmusic.ui.components.CastSheet
 import ovh.delhomme.ytmusic.ui.components.MiniPlayerBar
 import ovh.delhomme.ytmusic.ui.components.TrackActionsSheet
 import ovh.delhomme.ytmusic.ui.detail.ArtistDetailScreen
+import ovh.delhomme.ytmusic.ui.detail.ArtistSongsScreen
 import ovh.delhomme.ytmusic.ui.detail.CollectionDetailScreen
 import ovh.delhomme.ytmusic.ui.detail.DetailKind
 import ovh.delhomme.ytmusic.ui.home.HomeScreen
@@ -581,6 +582,9 @@ private fun MainTabs(
                             menuPlaylistId = null
                         },
                         onOpenDetail = ::openDetail,
+                        onOpenAllSongs = {
+                            nav.navigate("artist_songs/${Uri.encode(id)}")
+                        },
                     )
                 } else {
                     CollectionDetailScreen(
@@ -597,6 +601,26 @@ private fun MainTabs(
                         },
                     )
                 }
+            }
+            composable(
+                route = "artist_songs/{id}",
+                arguments = listOf(
+                    navArgument("id") { type = NavType.StringType },
+                ),
+            ) { entry ->
+                val id = entry.arguments?.getString("id") ?: return@composable
+                ArtistSongsScreen(
+                    container = container,
+                    artistId = id,
+                    reloadToken = detailReloadToken,
+                    onBack = { nav.popBackStack() },
+                    onPlay = onPlayTracks,
+                    onMore = { track ->
+                        menuTrack = track
+                        menuPlaylistId = null
+                    },
+                    onOpenDetail = ::openDetail,
+                )
             }
         }
     }

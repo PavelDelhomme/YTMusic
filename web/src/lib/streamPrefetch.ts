@@ -1,20 +1,19 @@
 import { apiUrl } from '../api';
 
-const WARM_CACHE = 'ytm-stream-warm-v1';
 const FULL_CACHE = 'ytm-stream-full-v1';
 
 /** Nombre max de pistes dont on garde le début en mémoire */
-const MAX_HEAD = 48;
-/** Taille du début préchargé (~768 Ko ≈ plusieurs secondes d’audio) */
-const HEAD_BYTES = 768 * 1024;
-/** Pistes complètes en Cache Storage (instant play) */
-const MAX_FULL = 24;
+const MAX_HEAD = 24;
+/** Taille du début préchargé (~384 Ko ≈ quelques secondes d’audio) */
+const HEAD_BYTES = 384 * 1024;
+/** Pistes complètes en Cache Storage (instant play) — rester léger sur navigateur */
+const MAX_FULL = 8;
 /** Warm format API en parallèle */
-const WARM_CONCURRENCY = 4;
+const WARM_CONCURRENCY = 3;
 /** Prefetch tête en parallèle */
-const HEAD_CONCURRENCY = 3;
-/** Prefetch full (lourd) en parallèle */
-const FULL_CONCURRENCY = 2;
+const HEAD_CONCURRENCY = 2;
+/** Prefetch full (lourd) — 1 seul à la fois pour ne pas étouffer le titre courant */
+const FULL_CONCURRENCY = 1;
 
 type HeadEntry = { buf: ArrayBuffer; at: number };
 
@@ -26,6 +25,8 @@ const inflightFull = new Set<string>();
 const blobUrls = new Map<string, string>();
 
 let fullOrder: string[] = [];
+/** Invalide les préchargements d’arrière-plan quand on change de titre trop vite. */
+let prefetchGeneration = 0;
 
 function isVideoId(id: string) {
   return /^[a-zA-Z0-9_-]{11}$/.test(id);
@@ -52,6 +53,12 @@ async function authHeaders(): Promise<HeadersInit> {
     /* ignore */
   }
   return h;
+}
+
+/** Annule / ignore les préchargements full/head en cours (changement de titre). */
+export function bumpPrefetchGeneration() {
+  prefetchGeneration += 1;
+  return prefetchGeneration;
 }
 
 /** Chauffe le déchiffrement googlevideo côté API (latence principale). */
@@ -93,23 +100,23 @@ export async function warmFormats(ids: string[]): Promise<void> {
         'Content-Type': 'application/json',
         ...(await authHeaders()),
       },
-      body: JSON.stringify({ ids: need.slice(0, 32) }),
+      body: JSON.stringify({ ids: need.slice(0, 16) }),
     });
     if (res.ok) {
       const now = Date.now();
-      for (const id of need.slice(0, 32)) warmDone.set(id, now);
+      for (const id of need.slice(0, 16)) warmDone.set(id, now);
     } else {
-      // fallback parallèle
-      await runPool(need.slice(0, 12), WARM_CONCURRENCY, warmFormat);
+      await runPool(need.slice(0, 8), WARM_CONCURRENCY, warmFormat);
     }
   } catch {
-    await runPool(need.slice(0, 8), WARM_CONCURRENCY, warmFormat);
+    await runPool(need.slice(0, 6), WARM_CONCURRENCY, warmFormat);
   }
 }
 
 /** Précharge le début du flux (Range) en RAM — démarrage quasi immédiat. */
-export async function warmHead(id: string): Promise<void> {
+export async function warmHead(id: string, gen?: number): Promise<void> {
   if (!isVideoId(id)) return;
+  if (gen !== undefined && gen !== prefetchGeneration) return;
   if (headCache.has(id)) {
     touchLru(headCache, id, MAX_HEAD);
     return;
@@ -117,7 +124,9 @@ export async function warmHead(id: string): Promise<void> {
   if (inflightHead.has(id)) return;
   inflightHead.add(id);
   try {
+    if (gen !== undefined && gen !== prefetchGeneration) return;
     await warmFormat(id);
+    if (gen !== undefined && gen !== prefetchGeneration) return;
     const res = await fetch(apiUrl(`/api/stream/${id}`), {
       credentials: 'include',
       headers: {
@@ -125,9 +134,11 @@ export async function warmHead(id: string): Promise<void> {
         Range: `bytes=0-${HEAD_BYTES - 1}`,
       },
     });
+    if (gen !== undefined && gen !== prefetchGeneration) return;
     if (!res.ok && res.status !== 206) return;
     const buf = await res.arrayBuffer();
     if (buf.byteLength < 2048) return;
+    if (gen !== undefined && gen !== prefetchGeneration) return;
     headCache.set(id, { buf, at: Date.now() });
     while (headCache.size > MAX_HEAD) {
       const first = headCache.keys().next().value;
@@ -142,11 +153,13 @@ export async function warmHead(id: string): Promise<void> {
 }
 
 /** Met toute la piste en Cache Storage (play instantané au skip). */
-export async function warmFull(id: string): Promise<void> {
+export async function warmFull(id: string, gen?: number): Promise<void> {
   if (!isVideoId(id) || typeof caches === 'undefined') return;
+  if (gen !== undefined && gen !== prefetchGeneration) return;
   if (inflightFull.has(id)) return;
   inflightFull.add(id);
   try {
+    if (gen !== undefined && gen !== prefetchGeneration) return;
     const cache = await caches.open(FULL_CACHE);
     const url = apiUrl(`/api/stream/${id}`);
     const existing = await cache.match(url);
@@ -155,10 +168,12 @@ export async function warmFull(id: string): Promise<void> {
       return;
     }
     await warmFormat(id);
+    if (gen !== undefined && gen !== prefetchGeneration) return;
     const res = await fetch(url, {
       credentials: 'include',
       headers: await authHeaders(),
     });
+    if (gen !== undefined && gen !== prefetchGeneration) return;
     if (!res.ok) return;
     await cache.put(url, res.clone());
     bumpFull(id);
@@ -189,10 +204,16 @@ async function evictFull(cache: Cache) {
   }
 }
 
-async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
+async function runPool<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+  gen?: number,
+) {
   const q = [...items];
   const workers = Array.from({ length: Math.min(limit, q.length) }, async () => {
     while (q.length) {
+      if (gen !== undefined && gen !== prefetchGeneration) return;
       const item = q.shift();
       if (item === undefined) break;
       await fn(item);
@@ -202,39 +223,57 @@ async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<vo
 }
 
 /**
- * Précharge autour de l’index courant :
- * - warm format : jusqu’à 16 titres
- * - tête (Range) : 8 suivants + 2 précédents
- * - full cache : 3 suivants (play instantané)
+ * Précharge autour de l’index courant — volontairement modéré pour ne pas
+ * saturer le navigateur Linux (sinon le titre courant charge « dégueulasse »).
+ * - warm format : fenêtre courte
+ * - tête (Range) : 1 précédent + quelques suivants
+ * - full cache : 1 suivant seulement, après un court délai
  */
 export function prefetchAround(
   trackIds: string[],
   currentIndex: number,
-  opts?: { ahead?: number; behind?: number; fullAhead?: number },
+  opts?: { ahead?: number; behind?: number; fullAhead?: number; delayFullMs?: number },
 ) {
-  const ahead = opts?.ahead ?? 10;
-  const behind = opts?.behind ?? 2;
-  const fullAhead = opts?.fullAhead ?? 3;
+  const ahead = opts?.ahead ?? 4;
+  const behind = opts?.behind ?? 1;
+  const fullAhead = opts?.fullAhead ?? 1;
+  const delayFullMs = opts?.delayFullMs ?? 1800;
   const ids = trackIds.filter(isVideoId);
   if (!ids.length) return;
 
+  const gen = bumpPrefetchGeneration();
   const idx = Math.max(0, Math.min(currentIndex, ids.length - 1));
-  const window: string[] = [];
+  const around: string[] = [];
   for (let i = Math.max(0, idx - behind); i < ids.length && i <= idx + ahead; i++) {
-    window.push(ids[i]);
+    around.push(ids[i]);
   }
-  const unique = [...new Set(window)];
+  const unique = [...new Set(around)];
 
-  void warmFormats(unique).then(() =>
-    runPool([...new Set([ids[idx], ...unique])], HEAD_CONCURRENCY, warmHead),
-  );
+  void warmFormats(unique).then(() => {
+    if (gen !== prefetchGeneration) return;
+    // Priorité : prochain titre d’abord
+    const ordered = [
+      ids[idx + 1],
+      ids[idx],
+      ids[idx + 2],
+      ids[idx + 3],
+      ids[idx + 4],
+      ids[idx - 1],
+    ].filter((id): id is string => Boolean(id) && unique.includes(id));
+    return runPool([...new Set(ordered)], HEAD_CONCURRENCY, (id) => warmHead(id, gen), gen);
+  });
 
   const fullIds: string[] = [];
   for (let i = 1; i <= fullAhead; i++) {
     const t = ids[idx + i];
     if (t) fullIds.push(t);
   }
-  void runPool(fullIds, FULL_CONCURRENCY, warmFull);
+  if (fullIds.length) {
+    globalThis.setTimeout(() => {
+      if (gen !== prefetchGeneration) return;
+      void runPool(fullIds, FULL_CONCURRENCY, (id) => warmFull(id, gen), gen);
+    }, delayFullMs);
+  }
 }
 
 /** URL de lecture : blob cache full > stream (tête déjà chaude côté navigateur/API). */
@@ -264,5 +303,6 @@ export function prefetchStats() {
     heads: headCache.size,
     warmed: warmDone.size,
     full: fullOrder.length,
+    gen: prefetchGeneration,
   };
 }

@@ -134,6 +134,12 @@ data class ArtistDetailResponse(
 )
 
 @JsonClass(generateAdapter = false)
+data class ArtistSongsResponse(
+    val artist: ArtistMetaDto? = null,
+    val tracks: List<TrackDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = false)
 data class SimilarResponse(
     val tracks: List<TrackDto> = emptyList(),
     val related: List<TrackDto> = emptyList(),
@@ -321,6 +327,12 @@ interface YtMusicApi {
 
     @GET("api/artist/{id}")
     suspend fun artist(@Path("id") id: String): ArtistDetailResponse
+
+    @GET("api/artist/{id}/songs")
+    suspend fun artistSongs(
+        @Path("id") id: String,
+        @Query("limit") limit: Int? = null,
+    ): ArtistSongsResponse
 
     @GET("api/artist/{id}/radio")
     suspend fun artistRadio(@Path("id") id: String): TracksResponse

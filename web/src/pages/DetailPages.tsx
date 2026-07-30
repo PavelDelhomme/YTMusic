@@ -1,12 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { api, type Track } from '../api';
 import { TrackRow } from '../components/TrackRow';
 import { ShelfRow } from '../components/MediaCard';
 import { CoverImage } from '../components/CoverImage';
 import { usePlayer } from '../store/player';
 import { useLibrary } from '../store/library';
-import { Play, Download, Library, Heart, Radio, Check, UserPlus, UserMinus, Shuffle } from 'lucide-react';
+import { Play, Download, Library, Heart, Radio, Check, UserPlus, UserMinus, Shuffle, ChevronRight } from 'lucide-react';
 import { ArtistLinks } from '../components/ArtistLinks';
 import { BackButton } from '../components/BackButton';
 
@@ -59,7 +59,17 @@ export function ArtistPage() {
     );
   const libTracks = liked.filter((t) => matchesArtist(t)).slice(0, 12);
   const libAlbums = albums.filter((t) => matchesArtist(t) || t.id === data.artist.id).slice(0, 12);
-  const bio = data.artist.description?.trim();
+  const bio = typeof data.artist.description === 'string' ? data.artist.description.trim() : '';
+  // API may still return TextRuns objects if a mapper regresses — never render objects as React children.
+  const subscribersLabel =
+    typeof data.artist.subscribers === 'string'
+      ? data.artist.subscribers
+      : data.artist.subscribers &&
+          typeof data.artist.subscribers === 'object' &&
+          'text' in (data.artist.subscribers as object)
+        ? String((data.artist.subscribers as { text?: string }).text || '')
+        : '';
+  const topSongs = data.songs.slice(0, 10);
 
   return (
     <div className="animate-fade-up">
@@ -71,7 +81,7 @@ export function ArtistPage() {
         <div>
           <p className="text-xs uppercase tracking-widest text-yt-muted">Artiste</p>
           <h1 className="font-display text-4xl font-semibold tracking-tight sm:text-5xl">{data.artist.name}</h1>
-          {data.artist.subscribers && <p className="mt-2 text-sm text-yt-muted">{data.artist.subscribers}</p>}
+          {subscribersLabel ? <p className="mt-2 text-sm text-yt-muted">{subscribersLabel}</p> : null}
           {bio && (
             <div className="mt-3 max-w-2xl">
               <p className="text-sm leading-relaxed text-yt-muted">
@@ -155,9 +165,9 @@ export function ArtistPage() {
                       id: data.artist.id,
                       name: data.artist.name,
                       title: data.artist.name,
-                      subscribers: data.artist.subscribers,
+                      subscribers: subscribersLabel || undefined,
                       thumbnails: data.artist.thumbnails,
-                      description: data.artist.description,
+                      description: bio || undefined,
                       type: 'artist',
                     });
                     applyLibrary(r.library);
@@ -182,10 +192,19 @@ export function ArtistPage() {
         </div>
       </div>
 
-      {data.songs.length > 0 && (
+      {topSongs.length > 0 && (
         <section className="mb-8">
-          <h2 className="mb-3 font-display text-xl font-semibold">Titres les plus écoutés</h2>
-          {data.songs.slice(0, 10).map((t, i) => (
+          <div className="mb-3 flex items-end justify-between gap-3">
+            <h2 className="font-display text-xl font-semibold">Titres les plus écoutés</h2>
+            <Link
+              to={`/artist/${data.artist.id}/songs`}
+              className="inline-flex items-center gap-1 text-sm font-medium text-yt-muted transition hover:text-white"
+            >
+              Plus
+              <ChevronRight className="h-4 w-4" />
+            </Link>
+          </div>
+          {topSongs.map((t, i) => (
             <TrackRow key={t.id} track={t} index={i} queue={data.songs} />
           ))}
         </section>
@@ -233,6 +252,90 @@ export function ArtistPage() {
           ))}
         </section>
       )}
+    </div>
+  );
+}
+
+/** Page dédiée : tous les titres de l’artiste (pas seulement le top 10). */
+export function ArtistSongsPage() {
+  const { id = '' } = useParams();
+  const [artistName, setArtistName] = useState('Artiste');
+  const [cover, setCover] = useState<{ thumbnails?: Track['thumbnails']; name?: string; title?: string } | null>(
+    null,
+  );
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const playQueue = usePlayer((s) => s.playQueue);
+
+  useEffect(() => {
+    if (!id) return;
+    setLoading(true);
+    setError(null);
+    setTracks([]);
+    api
+      .artistSongs(id)
+      .then((r) => {
+        setArtistName(r.artist?.name || 'Artiste');
+        setCover(r.artist || null);
+        setTracks(r.tracks || []);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }, [id]);
+
+  return (
+    <div className="animate-fade-up">
+      <BackButton fallback={id ? `/artist/${id}` : '/'} />
+      <div className="mb-8 flex flex-col gap-6 sm:flex-row sm:items-end">
+        {cover && (
+          <div className="h-36 w-36 shrink-0 shadow-2xl sm:h-44 sm:w-44">
+            <CoverImage item={{ ...cover, title: artistName }} size={800} rounded="full" />
+          </div>
+        )}
+        <div>
+          <p className="text-xs uppercase tracking-widest text-yt-muted">Discographie</p>
+          <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+            Tous les titres
+          </h1>
+          <p className="mt-2 text-sm text-yt-muted">
+            <Link to={`/artist/${id}`} className="hover:text-white hover:underline">
+              {artistName}
+            </Link>
+            {tracks.length > 0 ? ` · ${tracks.length} titre${tracks.length > 1 ? 's' : ''}` : null}
+          </p>
+          {tracks.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void playQueue(tracks, 0)}
+                className="inline-flex items-center gap-2 rounded-full bg-yt-red px-5 py-2.5 text-sm font-medium"
+              >
+                <Play className="h-4 w-4 fill-white" /> Lecture
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const shuffled = [...tracks].sort(() => Math.random() - 0.5);
+                  void playQueue(shuffled, 0);
+                }}
+                className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-4 py-2.5 text-sm text-yt-muted hover:text-white"
+              >
+                <Shuffle className="h-4 w-4" /> Aléatoire
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {loading && <p className="text-yt-muted">Chargement des titres…</p>}
+      {error && <p className="text-sm text-red-400">{error}</p>}
+      {!loading && !error && tracks.length === 0 && (
+        <p className="text-yt-muted">Aucun titre trouvé pour cet artiste.</p>
+      )}
+      {tracks.map((t, i) => (
+        <TrackRow key={`${t.id}-${i}`} track={t} index={i} queue={tracks} showAlbum />
+      ))}
     </div>
   );
 }

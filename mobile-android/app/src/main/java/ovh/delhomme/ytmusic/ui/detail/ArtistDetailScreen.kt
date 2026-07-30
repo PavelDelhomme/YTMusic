@@ -65,6 +65,7 @@ fun ArtistDetailScreen(
     onPlayNamed: (List<TrackDto>, Int, String) -> Unit = { tracks, idx, _ -> onPlay(tracks, idx) },
     onMore: (TrackDto) -> Unit,
     onOpenDetail: (TrackDto) -> Unit,
+    onOpenAllSongs: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -314,7 +315,22 @@ fun ArtistDetailScreen(
 
                     if (songs.isNotEmpty()) {
                         item {
-                            SectionTitle("Titres les plus écoutés")
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "Titres les plus écoutés",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = onOpenAllSongs) {
+                                    Text("Plus")
+                                }
+                            }
                         }
                         itemsIndexed(songs.take(10), key = { i, t -> "song-${t.id}-$i" }) { index, track ->
                             TrackRow(

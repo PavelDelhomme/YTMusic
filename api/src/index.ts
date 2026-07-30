@@ -31,6 +31,7 @@ import {
   getArtist,
   getAlbum,
   getPlaylist,
+  getArtistSongs,
 } from './yt.js';
 import {
   getFullLibrary,
@@ -1063,6 +1064,16 @@ app.get('/api/artist/:id', async (req, res) => {
 app.get('/api/artist/:id/radio', async (req, res) => {
   try {
     res.json({ tracks: await getArtistRadio(p(req.params.id)) });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get('/api/artist/:id/songs', async (req, res) => {
+  try {
+    const limitRaw = Number(req.query.limit);
+    const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
+    res.json(await getArtistSongs(p(req.params.id), { limit }));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
