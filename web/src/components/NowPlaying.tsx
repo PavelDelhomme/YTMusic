@@ -126,6 +126,7 @@ export function NowPlaying({
   const appendRelated = usePlayer((s) => s.appendRelated);
   const loadRelated = usePlayer((s) => s.loadRelated);
   const toggleAutoplay = usePlayer((s) => s.toggleAutoplay);
+  const topUpAutoplay = usePlayer((s) => s.topUpAutoplay);
   const progress = usePlayer((s) => s.progress);
   const duration = usePlayer((s) => s.duration);
   const [tab, setTab] = useState<NowPlayingTab>(initialTab);
@@ -146,20 +147,23 @@ export function NowPlaying({
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.preventDefault();
+      e.stopPropagation();
       if (saveOpen) {
         setSaveOpen(false);
         return;
       }
       onClose();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // Capture : prioritaire sur les raccourcis média / recherche
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [open, onClose, saveOpen]);
 
   useEffect(() => {
     if (!open || !current?.id) return;
     void loadRelated(current.id);
-  }, [open, current?.id, loadRelated]);
+    if (autoplay) topUpAutoplay();
+  }, [open, current?.id, loadRelated, autoplay, topUpAutoplay]);
 
   useEffect(() => {
     setQueueVisible(QUEUE_PAGE);
@@ -216,8 +220,8 @@ export function NowPlaying({
             <span className="rounded-full bg-white/15 px-5 py-1.5 text-white">Titre</span>
             <span className="rounded-full px-5 py-1.5 text-yt-muted">Vidéo</span>
           </div>
-          <div className="relative aspect-square w-full max-w-[min(88vw,520px)] overflow-hidden rounded-md shadow-[0_20px_60px_rgba(0,0,0,0.65)] lg:max-w-[min(42vw,560px)]">
-            <CoverImage item={current} size={800} rounded="md" />
+          <div className="relative aspect-square w-full max-w-[min(88vw,520px)] overflow-hidden rounded-md bg-yt-elevated shadow-[0_20px_60px_rgba(0,0,0,0.65)] lg:max-w-[min(42vw,560px)]">
+            <CoverImage item={current} size={800} rounded="md" alt={current.title} />
           </div>
         </div>
 
@@ -368,7 +372,7 @@ export function NowPlaying({
                     </button>
                   )}
 
-                  {autoplay && autoList.length === 0 && (
+                  {autoplay && autoList.length === 0 && relatedForQueue.length === 0 && (
                     <p className="px-2 py-4 text-center text-sm text-yt-muted">
                       Chargement des suggestions…
                     </p>

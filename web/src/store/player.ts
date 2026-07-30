@@ -51,6 +51,8 @@ type PlayerState = {
   toggleLyrics: () => void;
   toggleAutoplay: () => void;
   setAutoplay: (on: boolean) => void;
+  /** Relance le remplissage de la zone « À suivre ». */
+  topUpAutoplay: () => void;
   addNext: (track: Track) => void;
   addToQueue: (track: Track) => void;
   moveInQueue: (fromIndex: number, toIndex: number) => void;
@@ -416,7 +418,36 @@ function schedulePrefetch(queue: Track[], queueIndex: number) {
   prefetchAround(ids, idx, { ahead: 12, behind: 2, fullAhead: 4 });
 }
 
-/** Remplit la zone autoplay (après userQueueEnd) — ne touche pas à la file utilisateur. */
+/** Ajoute des titres en zone autoplay dès qu’un pool arrive (sans attendre les autres APIs). */
+function mergeAutoTracks(seedId: string, pool: Track[], relatedUpdate?: Track[]) {
+  const state = usePlayer.getState();
+  if (state.autoplay === false) return;
+  const boundary = Math.max(state.userQueueEnd || 0, state.queueIndex + 1);
+  const autoLen = state.queue.length - boundary;
+  if (autoLen >= 40) return;
+  const existing = new Set(state.queue.map((t) => t.id));
+  const extra: Track[] = [];
+  for (const t of pool) {
+    if (!t?.id || t.id === seedId || existing.has(t.id) || !isPlayable(t)) continue;
+    existing.add(t.id);
+    extra.push(t);
+    if (extra.length >= 80) break;
+  }
+  if (!extra.length && !relatedUpdate?.length) return;
+  const patch: Partial<PlayerState> = {};
+  if (extra.length) {
+    patch.queue = [...state.queue, ...extra];
+  }
+  if (relatedUpdate?.length) {
+    patch.related = relatedUpdate;
+  }
+  if (!Object.keys(patch).length) return;
+  usePlayer.setState(patch);
+  if (patch.queue) schedulePrefetch(patch.queue, state.queueIndex);
+  publish();
+}
+
+/** Remplit la zone autoplay (après userQueueEnd) — progressive, dès la 1ʳᵉ réponse API. */
 async function ensureAutoRadio(seedId: string) {
   const cur = usePlayer.getState();
   if (cur.autoplay === false) return;
@@ -427,40 +458,33 @@ async function ensureAutoRadio(seedId: string) {
     return;
   }
   if (!isPlayable({ id: seedId } as Track)) return;
-  try {
-    const [{ radio, related }, upNext] = await Promise.all([
-      api.related(seedId),
-      api.upNext(seedId).catch(() => ({ tracks: [] as Track[] })),
-    ]);
-    const pool = [...(upNext.tracks || []), ...(radio.length ? radio : related)].filter(
-      (t) => t.id !== seedId && isPlayable(t),
-    );
-    if (!pool.length) return;
-    const state = usePlayer.getState();
-    if (state.autoplay === false) return;
-    const boundary = Math.max(state.userQueueEnd || 0, state.queueIndex + 1);
-    const autoLen = state.queue.length - boundary;
-    if (autoLen >= 40) return;
-    const existing = new Set(state.queue.map((t) => t.id));
-    const extra: Track[] = [];
-    for (const t of pool) {
-      if (existing.has(t.id)) continue;
-      existing.add(t.id);
-      extra.push(t);
-      if (extra.length >= 80) break;
-    }
-    if (!extra.length) return;
-    // Garde la file user intacte ; n’ajoute qu’en zone autoplay
-    const queue = [...state.queue, ...extra];
-    usePlayer.setState({
-      queue,
-      related: related.length ? related : radio,
-    });
-    schedulePrefetch(queue, state.queueIndex);
-    publish();
-  } catch (err) {
-    console.warn('auto-radio', err);
+
+  // Déjà des related en mémoire → injecte immédiatement
+  if (cur.related?.length) {
+    mergeAutoTracks(seedId, cur.related);
   }
+
+  const relatedP = api
+    .related(seedId)
+    .then((r) => {
+      const pool = [...(r.radio || []), ...(r.related || [])];
+      mergeAutoTracks(seedId, pool, pool.length ? pool : undefined);
+      return r;
+    })
+    .catch((err) => {
+      console.warn('auto-radio related', err);
+      return null;
+    });
+
+  const upNextP = api
+    .upNext(seedId)
+    .then((r) => {
+      mergeAutoTracks(seedId, r.tracks || []);
+      return r;
+    })
+    .catch(() => ({ tracks: [] as Track[] }));
+
+  await Promise.all([relatedP, upNextP]);
 }
 
 async function playLocal(track: Track, state: PlayerState, gen: number) {
@@ -473,14 +497,21 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
 
   // Enrichissement rapide local (thumbs) pendant le fetch stream
   let enriched = track;
-  if (!track.thumbnails?.length && /^[a-zA-Z0-9_-]{11}$/.test(track.id)) {
-    enriched = {
-      ...track,
-      thumbnails: [
-        { url: `https://i.ytimg.com/vi/${track.id}/hq720.jpg`, width: 1280, height: 720 },
-      ],
-    };
-    if (gen === playGeneration) usePlayer.setState({ current: enriched });
+  if (/^[a-zA-Z0-9_-]{11}$/.test(track.id)) {
+    const ytimg = [
+      { url: `https://i.ytimg.com/vi/${track.id}/maxresdefault.jpg`, width: 1280, height: 720 },
+      { url: `https://i.ytimg.com/vi/${track.id}/hq720.jpg`, width: 1280, height: 720 },
+      ...(track.thumbnails || []),
+    ];
+    enriched = { ...track, thumbnails: ytimg };
+    if (gen === playGeneration) {
+      usePlayer.setState((s) => ({
+        current: enriched,
+        queue: s.queue.map((t, i) =>
+          i === s.queueIndex || t.id === track.id ? { ...t, thumbnails: t.thumbnails?.length ? t.thumbnails : ytimg } : t,
+        ),
+      }));
+    }
   }
 
   const src = await srcPromise;
@@ -508,18 +539,28 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
     return;
   }
   if (meta?.track) {
+    const thumbs =
+      meta.track.thumbnails?.length
+        ? meta.track.thumbnails
+        : enriched.thumbnails?.length
+          ? enriched.thumbnails
+          : track.thumbnails;
     enriched = {
       ...meta.track,
       ...enriched,
+      title: meta.track.title || enriched.title,
       artists: mergeArtists(enriched.artists, meta.track.artists),
-      thumbnails:
-        enriched.thumbnails?.length
-          ? enriched.thumbnails
-          : meta.track.thumbnails?.length
-            ? meta.track.thumbnails
-            : enriched.thumbnails,
+      thumbnails: thumbs,
+      album: meta.track.album || enriched.album,
     };
-    usePlayer.setState({ current: enriched });
+    usePlayer.setState((s) => ({
+      current: enriched,
+      queue: s.queue.map((t, i) =>
+        i === s.queueIndex || t.id === enriched.id
+          ? { ...t, ...enriched, thumbnails: enriched.thumbnails?.length ? enriched.thumbnails : t.thumbnails }
+          : t,
+      ),
+    }));
   }
 
   try {
@@ -653,14 +694,19 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     const gen = ++playGeneration;
     schedulePrefetch(nextQueue, idx >= 0 ? idx : 0);
 
+    // Suggestions dès le démarrage (ne pas attendre le stream)
+    void get().loadRelated(track.id);
+    if (!opts?.noAutoRadio && get().autoplay !== false) {
+      void ensureAutoRadio(track.id);
+    }
+
     try {
       await playLocal(track, get(), gen);
       if (gen !== playGeneration) return;
       recordStarted(get().current || track);
       set({ isPlaying: true, isLoading: false });
       publish();
-      void get().loadRelated(track.id);
-      // Suite autoplay (zone après userQueueEnd) si activée
+      // Top-up si la zone auto est encore courte
       if (!opts?.noAutoRadio && get().autoplay !== false) {
         void ensureAutoRadio(track.id);
       }
@@ -962,6 +1008,11 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     if (cur?.id) void ensureAutoRadio(cur.id);
   },
 
+  topUpAutoplay: () => {
+    const cur = get().current;
+    if (cur?.id && get().autoplay !== false) void ensureAutoRadio(cur.id);
+  },
+
   addNext: (track) => {
     const state = get();
     const empty = !state.current || state.queue.length === 0;
@@ -1165,7 +1216,11 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   loadRelated: async (trackId) => {
     try {
       const { related, radio } = await api.related(trackId);
-      set({ related: related.length ? related : radio });
+      const pool = related.length ? related : radio;
+      set({ related: pool });
+      if (get().autoplay !== false && pool.length) {
+        mergeAutoTracks(trackId, pool);
+      }
     } catch {
       set({ related: [] });
     }

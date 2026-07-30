@@ -24,9 +24,16 @@ function radiusClass(rounded: Props['rounded']) {
 }
 
 export function CoverImage({ item, size = 200, className = '', rounded = 'md', alt = '' }: Props) {
-  const candidates = useMemo(() => thumbCandidates(item, size), [item, size]);
+  const itemId = (item as { id?: string }).id || '';
+  const thumbKey = (item.thumbnails || []).map((t) => t.url).join('|');
+  const candidates = useMemo(
+    () => thumbCandidates(item, size),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- clés stables plutôt que ref objet
+    [itemId, thumbKey, size],
+  );
   const [idx, setIdx] = useState(0);
   const r = radiusClass(rounded);
+  const eager = size >= 320;
 
   useEffect(() => {
     setIdx(0);
@@ -35,7 +42,7 @@ export function CoverImage({ item, size = 200, className = '', rounded = 'md', a
   const src = candidates[idx] || '';
 
   return (
-    <div className={`relative h-full w-full overflow-hidden ${r} ${className}`}>
+    <div className={`relative h-full w-full overflow-hidden bg-yt-elevated ${r} ${className}`}>
       <div
         className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#3a3a3a] to-[#1a1a1a] text-lg font-semibold text-white/70"
         aria-hidden
@@ -49,9 +56,10 @@ export function CoverImage({ item, size = 200, className = '', rounded = 'md', a
           alt={alt}
           referrerPolicy="no-referrer"
           className="absolute inset-0 h-full w-full object-cover"
-          loading="lazy"
+          loading={eager ? 'eager' : 'lazy'}
+          fetchPriority={eager ? 'high' : 'auto'}
           decoding="async"
-          onError={() => setIdx((i) => i + 1)}
+          onError={() => setIdx((i) => (i + 1 < candidates.length ? i + 1 : i))}
         />
       ) : null}
     </div>
