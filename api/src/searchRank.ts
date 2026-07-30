@@ -130,12 +130,17 @@ export function rankByQuery<T extends Track>(
 ): T[] {
   if (!items.length) return items;
   return items
-    .map((item, index) => ({
-      item,
-      index,
-      score: scoreSearchItem(item, query) + personalizeBoost(item, personalization),
-    }))
-    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((item, index) => {
+      const relevance = scoreSearchItem(item, query);
+      return {
+        item,
+        index,
+        relevance,
+        score: relevance + personalizeBoost(item, personalization, query),
+      };
+    })
+    // Écarte le bruit perso sans match lexical (reste disponible plus bas si vraiment vide)
+    .sort((a, b) => b.score - a.score || b.relevance - a.relevance || a.index - b.index)
     .map((x) => x.item);
 }
 
@@ -145,19 +150,39 @@ export type SearchPersonalization = {
   trackIds: string[];
 };
 
-export function personalizeBoost(track: Track, p?: SearchPersonalization): number {
+/**
+ * Soft personalization: never override lexical relevance.
+ * Boost only when the track already matches the query reasonably.
+ */
+export function personalizeBoost(
+  track: Track,
+  p?: SearchPersonalization,
+  query?: string,
+): number {
   if (!p) return 0;
+  const relevance = query ? scoreSearchItem(track, query) : 0;
+  // Hors-sujet (ex. favori Keny Arkana sur « tenebro rossi ») → 0
+  if (query && relevance < 180) return 0;
+
   let boost = 0;
   const artists = foldText((track.artists || []).map((a) => a.name).join(' '));
   const title = foldText(track.title);
+  const qFold = query ? foldText(query) : '';
+
   for (const name of p.artistNames) {
     if (!name || name.length < 2) continue;
-    if (artists === name || includesWord(artists, name)) boost += 720;
-    else if (artists.includes(name)) boost += 520;
-    if (title.includes(name) && track.type === 'artist') boost += 200;
+    const mentionedInQuery = Boolean(qFold) && (qFold.includes(name) || name.includes(qFold));
+    if (artists === name || includesWord(artists, name)) {
+      boost += mentionedInQuery ? 90 : 45;
+    } else if (artists.includes(name) && name.length >= 4) {
+      boost += mentionedInQuery ? 50 : 20;
+    }
+    if (title.includes(name) && track.type === 'artist') boost += 30;
   }
-  if (p.trackIds.includes(track.id)) boost += 380;
-  return boost;
+  if (p.trackIds.includes(track.id) && relevance >= 220) boost += 40;
+
+  const cap = Math.max(40, Math.floor(relevance * 0.15));
+  return Math.min(boost, cap);
 }
 
 function uniqById(arr: Track[]): Track[] {
@@ -245,17 +270,22 @@ export function pickTopResult(
 
   const ranked = rankByQuery(uniqById(candidates), query, personalization);
   const best = ranked[0];
-  const bestScore = scoreSearchItem(best, query) + personalizeBoost(best, personalization);
+  if (!best) return buckets.topResult || null;
+  const bestRel = scoreSearchItem(best, query);
+  const bestScore = bestRel + personalizeBoost(best, personalization, query);
 
+  // Top YT n’est accepté que s’il matche aussi lexicalement la requête
   if (buckets.topResult) {
-    const ytScore =
-      scoreSearchItem(buckets.topResult, query) +
-      personalizeBoost(buckets.topResult, personalization);
-    if (bestScore >= ytScore + 60) return best;
-    if (ytScore >= 500) return buckets.topResult;
+    const ytRel = scoreSearchItem(buckets.topResult, query);
+    const ytScore = ytRel + personalizeBoost(buckets.topResult, personalization, query);
+    if (ytRel < 180) {
+      return bestRel >= 180 ? best : buckets.topResult;
+    }
+    if (bestScore >= ytScore + 40) return best;
+    if (ytRel >= 400) return buckets.topResult;
   }
 
-  return bestScore >= 280 ? best : buckets.topResult || best;
+  return bestRel >= 180 ? best : buckets.topResult || best;
 }
 
 /** Libellés de shelf Innertube (EN + FR) → bucket. */

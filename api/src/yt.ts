@@ -10,6 +10,7 @@ import {
   mergeTracks,
   pickTopResult,
   rankByQuery,
+  scoreSearchItem,
   shelfBucketFromTitle,
   tokenize,
   type SearchPersonalization,
@@ -403,27 +404,30 @@ export async function search(
 
   const personalSongs: Track[] = [];
   const personalArtists: Track[] = [];
+  // Uniquement sur requête 1 mot : sinon « tenebro rossi » + favori Keny = pollution totale
   if (
     (filterNorm === 'all' || filterNorm === 'song') &&
-    tokenize(q).length <= 2 &&
+    tokenize(q).length === 1 &&
+    foldText(q).length >= 3 &&
     personalization?.artistNames?.length
   ) {
     const hints = personalization.artistNames
-      .filter((name) => name && !foldText(q).includes(name))
-      .slice(0, 3);
+      .filter((name) => name && name.length >= 3 && !foldText(q).includes(name))
+      .slice(0, 2);
     const extras = await Promise.all(
       hints.map((name) => innertubeSearch(`${q} ${name}`, 'song').catch(() => null)),
     );
     for (const extra of extras) {
       if (!extra) continue;
       const b = collectFromResult(extra);
-      personalSongs.push(...b.songs);
-      personalArtists.push(...b.artists);
+      // Ne garder que ce qui matche encore la requête seule
+      personalSongs.push(...b.songs.filter((t) => scoreSearchItem(t, q) >= 180));
+      personalArtists.push(...b.artists.filter((t) => scoreSearchItem(t, q) >= 180));
     }
   }
 
   const songs = rankByQuery(
-    mergeTracks(personalSongs, fromSongs.songs, main.songs, fromSongs.videos.slice(0, 5)),
+    mergeTracks(fromSongs.songs, main.songs, personalSongs, fromSongs.videos.slice(0, 5)),
     q,
     personalization,
   );
@@ -454,7 +458,7 @@ export async function search(
 
   if (filterNorm === 'song') {
     const only = rankByQuery(
-      mergeTracks(personalSongs, main.songs, main.videos),
+      mergeTracks(main.songs, main.videos, personalSongs),
       q,
       personalization,
     );

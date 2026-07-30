@@ -70,6 +70,9 @@ seed-users: ## Crée/maj paul@ + dev@ (SEED_PASSWORD dans .env)
 test-verify-email: ## Teste validation email (API locale)
 	cd $(ROOT) && node scripts/test-verify-email.mjs
 
+test-search: ## Batterie tests recherche (ranking + live YouTube)
+	cd $(ROOT) && npx tsx scripts/test-search.mjs
+
 env-check: ## Vérifie que .env et .env.example ont les mêmes clés
 	@chmod +x $(ROOT)/scripts/env-check.sh
 	@bash $(ROOT)/scripts/env-check.sh

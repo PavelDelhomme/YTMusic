@@ -50,13 +50,28 @@ export function SearchPage() {
 
   useEffect(() => {
     if (!q) return;
+    let cancelled = false;
+    const reqId = `${q}::${filter}::${Date.now()}`;
     setLoading(true);
     setError('');
+    setData(null); // évite d’afficher l’ancienne recherche (Keny…) pendant le chargement
     api
       .search(q, filter)
-      .then(setData)
-      .catch((e) => setError(String(e.message || e)))
-      .finally(() => setLoading(false));
+      .then((res) => {
+        if (cancelled) return;
+        setData(res);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setError(String(e.message || e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      void reqId;
+    };
   }, [q, filter]);
 
   const noteClick = (track: Track) => {
