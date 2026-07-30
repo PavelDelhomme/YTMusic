@@ -49,16 +49,12 @@ export default defineConfig({
         navigateFallback: '/index.html',
         runtimeCaching: [
           {
+            // Streams audio : jamais CacheFirst (sinon un prefetch Range empoisonne la piste)
             urlPattern: ({ url }) => url.pathname.startsWith('/api/stream/'),
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'audio-stream',
-              expiration: { maxEntries: 80, maxAgeSeconds: 60 * 60 * 24 * 30 },
-              cacheableResponse: { statuses: [0, 200, 206] },
-            },
+            handler: 'NetworkOnly',
           },
           {
-            // Recherche / suggestions : jamais de cache SW (sinon vieux Keny après une nouvelle query)
+            // Recherche / suggestions : jamais de cache SW
             urlPattern: ({ url }) =>
               url.pathname.startsWith('/api/search') ||
               url.pathname.startsWith('/api/search/'),
