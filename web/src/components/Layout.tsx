@@ -79,6 +79,22 @@ export function Layout() {
     setQ(urlQ);
   }, [location.pathname, location.search]);
 
+  // Échap : file latérale (le Now Playing gère son propre Escape, y compris feuille « Enregistrer »)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (nowPlayingOpen) return;
+      const p = usePlayer.getState();
+      if (p.showQueue || p.showLyrics) {
+        e.preventDefault();
+        e.stopPropagation();
+        usePlayer.setState({ showQueue: false, showLyrics: false });
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [nowPlayingOpen]);
+
   useEffect(() => {
     wireRemotePlayer();
     void initAuth().then(() => {

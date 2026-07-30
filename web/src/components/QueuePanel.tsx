@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { usePlayer } from '../store/player';
 import { TrackRow } from './TrackRow';
 import { SaveQueueSheet } from './SaveQueueSheet';
@@ -16,10 +16,33 @@ export function QueuePanel() {
   const toggleQueue = usePlayer((s) => s.toggleQueue);
   const toggleLyrics = usePlayer((s) => s.toggleLyrics);
   const toggleAutoplay = usePlayer((s) => s.toggleAutoplay);
+  const topUpAutoplay = usePlayer((s) => s.topUpAutoplay);
   const playAt = usePlayer((s) => s.playAt);
   const appendRelated = usePlayer((s) => s.appendRelated);
   const play = usePlayer((s) => s.play);
   const [saveOpen, setSaveOpen] = useState(false);
+
+  useEffect(() => {
+    if (!showQueue || !autoplay) return;
+    topUpAutoplay();
+  }, [showQueue, autoplay, topUpAutoplay, queueIndex]);
+
+  useEffect(() => {
+    if (!showQueue && !showLyrics) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (saveOpen) {
+        setSaveOpen(false);
+        return;
+      }
+      if (showLyrics) toggleLyrics();
+      else toggleQueue();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [showQueue, showLyrics, saveOpen, toggleQueue, toggleLyrics]);
 
   if (!showQueue && !showLyrics) return null;
 

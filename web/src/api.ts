@@ -152,16 +152,25 @@ export function thumbCandidates(
     seen.add(u);
     out.push(u);
   };
-  for (const t of list) {
-    const raw = resizeThumbUrl(t.url, size);
-    push(proxiedThumbUrl(t.url, size));
-    push(raw);
-  }
   const id = (track as Track).id;
+  // IDs vidéo : ytimg d’abord (rapide, fiable) — évite un proxy / CDN lent qui bloque la grande cover
   if (id && /^[a-zA-Z0-9_-]{11}$/.test(id)) {
-    push(`https://i.ytimg.com/vi/${id}/hq720.jpg`);
-    push(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`);
-    push(`https://i.ytimg.com/vi/${id}/mqdefault.jpg`);
+    if (size >= 640) {
+      push(`https://i.ytimg.com/vi/${id}/maxresdefault.jpg`);
+      push(`https://i.ytimg.com/vi/${id}/hq720.jpg`);
+      push(`https://i.ytimg.com/vi/${id}/sddefault.jpg`);
+    } else if (size >= 320) {
+      push(`https://i.ytimg.com/vi/${id}/hq720.jpg`);
+      push(`https://i.ytimg.com/vi/${id}/sddefault.jpg`);
+      push(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`);
+    } else {
+      push(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`);
+      push(`https://i.ytimg.com/vi/${id}/mqdefault.jpg`);
+    }
+  }
+  for (const t of list) {
+    push(proxiedThumbUrl(t.url, size));
+    push(resizeThumbUrl(t.url, size));
   }
   return out;
 }
