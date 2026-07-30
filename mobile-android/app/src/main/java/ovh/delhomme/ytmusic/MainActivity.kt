@@ -1,9 +1,11 @@
 package ovh.delhomme.ytmusic
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -83,7 +85,6 @@ import ovh.delhomme.ytmusic.ui.search.SearchScreen
 import ovh.delhomme.ytmusic.ui.theme.YtMusicTheme
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
-import android.net.Uri
 
 class MainActivity : ComponentActivity() {
     private val notifPermission = registerForActivityResult(
@@ -104,9 +105,21 @@ class MainActivity : ComponentActivity() {
         val app = application as YtMusicApp
         setContent {
             YtMusicTheme {
-                YtMusicAppContent(app.container)
+                YtMusicAppContent(
+                    container = app.container,
+                    openPlayerFromIntent = intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) == true,
+                )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
+
+    companion object {
+        const val EXTRA_OPEN_PLAYER = "ovh.delhomme.ytmusic.OPEN_PLAYER"
     }
 }
 
@@ -117,11 +130,15 @@ private sealed class Tab(val route: String, val label: String, val icon: ImageVe
 }
 
 @Composable
-fun YtMusicAppContent(container: AppContainer) {
+fun YtMusicAppContent(
+    container: AppContainer,
+    openPlayerFromIntent: Boolean = false,
+) {
     val context = LocalContext.current
+    val activity = context as? ComponentActivity
     val scope = rememberCoroutineScope()
     var loggedIn by remember { mutableStateOf<Boolean?>(null) }
-    var showNowPlaying by remember { mutableStateOf(false) }
+    var showNowPlaying by remember { mutableStateOf(openPlayerFromIntent) }
 
     val player = remember(container) {
         PlayerController(
@@ -135,8 +152,32 @@ fun YtMusicAppContent(container: AppContainer) {
         onDispose { player.release() }
     }
 
+    // Clic notification → ouvrir le lecteur (singleTask / onNewIntent)
+    DisposableEffect(activity) {
+        if (activity == null) return@DisposableEffect onDispose { }
+        val listener = androidx.core.util.Consumer<Intent> { intent ->
+            if (intent.getBooleanExtra(MainActivity.EXTRA_OPEN_PLAYER, false)) {
+                showNowPlaying = true
+                intent.removeExtra(MainActivity.EXTRA_OPEN_PLAYER)
+            }
+        }
+        activity.addOnNewIntentListener(listener)
+        onDispose { activity.removeOnNewIntentListener(listener) }
+    }
+
+    LaunchedEffect(openPlayerFromIntent) {
+        if (openPlayerFromIntent) showNowPlaying = true
+    }
+
     LaunchedEffect(Unit) {
         loggedIn = container.validateSession()
+    }
+
+    // Si une piste tourne déjà (service survivant) → mini-player / éventuellement notif
+    LaunchedEffect(loggedIn) {
+        if (loggedIn == true && openPlayerFromIntent) {
+            showNowPlaying = true
+        }
     }
 
     BackHandler(enabled = loggedIn == true && showNowPlaying) {

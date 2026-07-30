@@ -10,8 +10,11 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSourceBitmapLoader
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.CacheBitmapLoader
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
@@ -33,7 +36,8 @@ import ovh.delhomme.ytmusic.BuildConfig
 
 /**
  * Lecture arrière-plan + notification média persistante (style YTM) :
- * précédent / play-pause / suivant + aléatoire / boucle / j’aime.
+ * précédent / play-pause / suivant, artwork, titre/artiste,
+ * clic → ouvre le lecteur plein écran + file.
  */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -67,17 +71,22 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        // Buffer raisonnable : continuité sans radio maxée (énergie)
+
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs */ 12_000,
-                /* maxBufferMs */ 45_000,
-                /* bufferForPlaybackMs */ 800,
+                /* minBufferMs */ 15_000,
+                /* maxBufferMs */ 60_000,
+                /* bufferForPlaybackMs */ 750,
                 /* bufferForPlaybackAfterRebufferMs */ 1_500,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
+
+        val mediaSourceFactory = DefaultMediaSourceFactory(this)
+            .setDataSourceFactory(PlayerCache.dataSourceFactory(this))
+
         val exo = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(mediaSourceFactory)
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -92,22 +101,18 @@ class PlaybackService : MediaSessionService() {
         exo.addListener(playerListener)
         player = exo
 
-        val openApp = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        val openPlayer = sessionActivityPendingIntent()
 
         session = MediaSession.Builder(this, exo)
             .setCallback(SessionCallback())
-            .setSessionActivity(openApp)
+            .setSessionActivity(openPlayer)
+            .setBitmapLoader(CacheBitmapLoader(DataSourceBitmapLoader(this)))
             .setMediaButtonPreferences(buildMediaButtons(exo))
             .build()
 
-        val notificationProvider = DefaultMediaNotificationProvider.Builder(this).build()
+        val notificationProvider = DefaultMediaNotificationProvider.Builder(this)
+            .setChannelName(R.string.playback_channel_name)
+            .build()
         notificationProvider.setSmallIcon(R.drawable.ic_brand_fg)
         setMediaNotificationProvider(notificationProvider)
 
@@ -115,12 +120,26 @@ class PlaybackService : MediaSessionService() {
         Holder.service = this
     }
 
+    private fun sessionActivityPendingIntent(): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_NEW_TASK
+            putExtra(MainActivity.EXTRA_OPEN_PLAYER, true)
+            action = Intent.ACTION_VIEW
+        }
+        return PendingIntent.getActivity(
+            this,
+            /* requestCode */ 42,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         val p = player
-        // Garder le service (notification + reprise) tant qu’une file existe,
-        // même en pause — sinon swipe récents tue le player.
+        // Garder service + notif tant qu’une file existe (même en pause)
         if (p == null || p.mediaItemCount == 0) {
             stopSelf()
         }
@@ -250,9 +269,10 @@ class PlaybackService : MediaSessionService() {
             base,
             queue.map { it.id },
             fromIndex,
-            ahead = 2,
-            behind = 0,
+            ahead = 3,
+            behind = 1,
         )
+        CoverPrefetcher.warmCovers(queue, fromIndex, ahead = 3, behind = 1)
     }
 
     object Holder {
@@ -260,6 +280,7 @@ class PlaybackService : MediaSessionService() {
         @Volatile var service: PlaybackService? = null
         @Volatile var queue: List<TrackDto> = emptyList()
         @Volatile var index: Int = 0
+        @Volatile var queueTitle: String = "File d'attente"
         @Volatile var likedIds: Set<String> = emptySet()
         @Volatile var onLikedIdsChanged: ((Set<String>) -> Unit)? = null
 
@@ -287,23 +308,40 @@ fun ExoPlayer.playTracks(baseStreamUrl: (String) -> String, tracks: List<TrackDt
         base,
         playable.map { it.id },
         idx,
-        ahead = 2,
-        behind = 0,
+        ahead = 3,
+        behind = 1,
     )
+    CoverPrefetcher.warmCovers(playable, idx, ahead = 3, behind = 1)
     val items = playable.map { t ->
-        MediaItem.Builder()
-            .setMediaId(t.id)
-            .setUri(baseStreamUrl(t.id))
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(t.title)
-                    .setArtist(t.artistLine())
-                    .setArtworkUri(t.coverUrl()?.let { android.net.Uri.parse(it) })
-                    .build(),
-            )
-            .build()
+        mediaItemFor(t, baseStreamUrl, PlaybackService.Holder.queueTitle)
     }
     setMediaItems(items, idx, 0L)
     prepare()
     playWhenReady = true
+}
+
+fun mediaItemFor(
+    t: TrackDto,
+    baseStreamUrl: (String) -> String,
+    queueTitle: String = PlaybackService.Holder.queueTitle,
+): MediaItem {
+    val cover = t.coverUrl(sizeHint = 600)
+    val album = t.album?.name?.takeIf { it.isNotBlank() } ?: queueTitle
+    return MediaItem.Builder()
+        .setMediaId(t.id)
+        .setUri(baseStreamUrl(t.id))
+        .setCustomCacheKey(t.id)
+        .setMediaMetadata(
+            MediaMetadata.Builder()
+                .setTitle(t.title)
+                .setArtist(t.artistLine())
+                .setAlbumTitle(album)
+                .setSubtitle(t.artistLine())
+                .setDescription(queueTitle)
+                .setArtworkUri(cover?.let { android.net.Uri.parse(it) })
+                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                .setIsPlayable(true)
+                .build(),
+        )
+        .build()
 }

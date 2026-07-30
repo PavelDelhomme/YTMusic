@@ -6,7 +6,6 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -116,6 +115,7 @@ class PlayerController(
         userQueueEnd: Int? = null,
     ) {
         if (title != null) queueTitle = title
+        PlaybackService.Holder.queueTitle = queueTitle
         ensureService()
         connect()
         warmAround(tracks, startIndex)
@@ -485,17 +485,7 @@ class PlayerController(
     }
 
     private fun mediaItem(t: TrackDto): MediaItem =
-        MediaItem.Builder()
-            .setMediaId(t.id)
-            .setUri(streamUrl(t.id))
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(t.title)
-                    .setArtist(t.artistLine())
-                    .setArtworkUri(t.coverUrl()?.let { android.net.Uri.parse(it) })
-                    .build(),
-            )
-            .build()
+        mediaItemFor(t, streamUrl, queueTitle)
 
     private fun playNow(
         player: Player,
@@ -509,6 +499,7 @@ class PlayerController(
         val idx = startIndex.coerceIn(0, playable.lastIndex)
         PlaybackService.Holder.queue = playable
         PlaybackService.Holder.index = idx
+        PlaybackService.Holder.queueTitle = queueTitle
         if (userQueueEnd <= 0 || userQueueEnd > playable.size) {
             userQueueEnd = playable.size
         }
@@ -533,9 +524,10 @@ class PlayerController(
             base,
             playable.map { it.id },
             idx,
-            ahead = 2,
-            behind = 0,
+            ahead = 3,
+            behind = 1,
         )
+        CoverPrefetcher.warmCovers(playable, idx, ahead = 3, behind = 1)
     }
 
     private fun applyRepeatShuffle(player: Player) {

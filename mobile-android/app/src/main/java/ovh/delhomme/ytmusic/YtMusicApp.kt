@@ -1,9 +1,13 @@
 package ovh.delhomme.ytmusic
 
 import android.app.Application
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.disk.DiskCache
+import coil.memory.MemoryCache
 import ovh.delhomme.ytmusic.data.AppContainer
 
-class YtMusicApp : Application() {
+class YtMusicApp : Application(), ImageLoaderFactory {
     lateinit var container: AppContainer
         private set
 
@@ -12,6 +16,23 @@ class YtMusicApp : Application() {
         instance = this
         container = AppContainer(this)
     }
+
+    override fun newImageLoader(): ImageLoader =
+        ImageLoader.Builder(this)
+            .crossfade(true)
+            .memoryCache {
+                MemoryCache.Builder(this)
+                    .maxSizePercent(0.25)
+                    .build()
+            }
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(cacheDir.resolve("coil-covers"))
+                    .maxSizeBytes(120L * 1024L * 1024L)
+                    .build()
+            }
+            .respectCacheHeaders(false)
+            .build()
 
     companion object {
         lateinit var instance: YtMusicApp
