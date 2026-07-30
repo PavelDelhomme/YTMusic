@@ -42,17 +42,23 @@ adb_print_unauthorized_help() {
   cat >&2 <<EOF
 
 ╔══════════════════════════════════════════════════════════════════╗
-║  ADB : appareil « unauthorized » — autorisation USB requise     ║
+║  ADB « unauthorized » — clé RSA PC ≠ téléphone (pas le câble)   ║
 ╚══════════════════════════════════════════════════════════════════╝
 
-  1. Déverrouille le téléphone
-  2. Accepte la popup « Autoriser le débogage USB ? »
-     → coche « Toujours autoriser depuis cet ordinateur »
-  3. Si aucune popup :
-     · Débranche / rebranche le câble USB
-     · Paramètres → Options développeur → Révoquer les autorisations
-       de débogage USB, puis rebranche
-     · Passe le mode USB en « Transfert de fichiers (MTP) »
+  Si le téléphone se réveille / MTP marche mais AUCUNE popup :
+  c’est normal → l’ancienne autorisation est invalide, Samsung
+  ne redemande pas tant que tu n’as pas révoqué.
+
+  Sur le téléphone (écran déverrouillé) :
+  1. Options pour les développeurs
+  2. « Révoquer les autorisations de débogage USB »
+  3. Coupe / rallume « Débogage USB »
+  4. Débranche / rebranche (mode Transfert de fichiers)
+  5. Accepte la popup + « Toujours autoriser… »
+
+  Puis sur le PC :
+     bash scripts/adb-fix-auth.sh --new-keys
+     make android
 
 EOF
   if [[ -n "$serial" ]]; then
