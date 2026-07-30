@@ -4,8 +4,11 @@ import android.content.Context
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.runBlocking
+import okhttp3.Authenticator
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Response
+import okhttp3.Route
 import okhttp3.logging.HttpLoggingInterceptor
 import ovh.delhomme.ytmusic.BuildConfig
 import retrofit2.Retrofit
@@ -27,6 +30,8 @@ class AppContainer(context: Context) {
         .add(KotlinJsonAdapterFactory())
         .build()
 
+    private val refreshLock = Any()
+
     private val authInterceptor = Interceptor { chain ->
         // Cache mémoire d’abord — évite runBlocking DataStore à chaque heartbeat
         val token = tokenStore.peekAccess()
@@ -41,10 +46,51 @@ class AppContainer(context: Context) {
         chain.proceed(req)
     }
 
+    /** Client sans Authenticator (refresh / login) — évite les boucles 401. */
+    private val plainClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .addInterceptor(
+            HttpLoggingInterceptor().apply {
+                level = if (BuildConfig.DEBUG) {
+                    HttpLoggingInterceptor.Level.BASIC
+                } else {
+                    HttpLoggingInterceptor.Level.NONE
+                }
+            },
+        )
+        .build()
+
+    private val tokenAuthenticator = Authenticator { _: Route?, response: Response ->
+        if (responseCount(response) >= 2) return@Authenticator null
+        val path = response.request.url.encodedPath
+        if (path.contains("/api/auth/login") ||
+            path.contains("/api/auth/register") ||
+            path.contains("/api/auth/refresh") ||
+            path.contains("/api/auth/passkeys")
+        ) {
+            return@Authenticator null
+        }
+        val newToken = synchronized(refreshLock) {
+            // Un autre thread a peut-être déjà refresh
+            val current = tokenStore.peekAccess()
+            val prevAuth = response.request.header("Authorization")
+            if (!current.isNullOrBlank() && prevAuth != null && prevAuth != "Bearer $current") {
+                return@synchronized current
+            }
+            runCatching { runBlocking { refreshAccessToken() } }.getOrNull()
+        } ?: return@Authenticator null
+
+        response.request.newBuilder()
+            .header("Authorization", "Bearer $newToken")
+            .build()
+    }
+
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
         .addInterceptor(authInterceptor)
+        .authenticator(tokenAuthenticator)
         .addInterceptor(
             HttpLoggingInterceptor().apply {
                 level = if (BuildConfig.DEBUG) {
@@ -57,12 +103,16 @@ class AppContainer(context: Context) {
         .build()
 
     /** Client sans auth interceptor (passkeys login). */
-    val httpPlain: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .build()
+    val httpPlain: OkHttpClient = plainClient
 
     val apiBaseUrl: String = BuildConfig.API_BASE_URL.trimEnd('/') + "/"
+
+    private val refreshApi: YtMusicApi = Retrofit.Builder()
+        .baseUrl(apiBaseUrl)
+        .client(plainClient)
+        .addConverterFactory(MoshiConverterFactory.create(moshi))
+        .build()
+        .create(YtMusicApi::class.java)
 
     val api: YtMusicApi = Retrofit.Builder()
         .baseUrl(apiBaseUrl)
@@ -79,22 +129,73 @@ class AppContainer(context: Context) {
     fun warmStreamUrl(trackId: String): String =
         BuildConfig.API_BASE_URL.trimEnd('/') + "/api/stream/$trackId/url"
 
-    suspend fun ensureFreshToken(): Boolean {
-        val access = tokenStore.getAccess()
+    /**
+     * Refresh JWT via client « plain » (pas d’Authenticator).
+     * @return nouvel access token, ou null si échec (session nettoyée).
+     */
+    private suspend fun refreshAccessToken(): String? {
         val refresh = tokenStore.getRefresh()
-        if (refresh.isNullOrBlank()) return !access.isNullOrBlank()
-        // Ne refresh que si l’access est absent ou proche de l’expiration (~2 jours)
-        if (!access.isNullOrBlank() && jwtExpiresInMs(access) > 2L * 24 * 3600 * 1000) {
-            return true
+        if (refresh.isNullOrBlank()) {
+            tokenStore.clear()
+            return null
         }
         return try {
-            val r = api.refresh(RefreshBody(refresh))
-            tokenStore.saveSession(r.token, r.refreshToken ?: refresh, r.user.email, r.user.name)
-            true
+            val r = refreshApi.refresh(RefreshBody(refresh))
+            tokenStore.saveSession(
+                r.token,
+                r.refreshToken ?: refresh,
+                r.user.email,
+                r.user.name,
+            )
+            r.token
         } catch (_: Exception) {
-            // Garde la session si l’access est encore valide
-            !access.isNullOrBlank() && jwtExpiresInMs(access) > 0
+            tokenStore.clear()
+            null
         }
+    }
+
+    /**
+     * Garde un access token utilisable.
+     * Ne se fie PAS uniquement à l’exp JWT (secret API peut avoir changé).
+     */
+    suspend fun ensureFreshToken(): Boolean {
+        tokenStore.warmCache()
+        val access = tokenStore.getAccess()
+        val refresh = tokenStore.getRefresh()
+        if (access.isNullOrBlank() && refresh.isNullOrBlank()) return false
+
+        val ttl = if (!access.isNullOrBlank()) jwtExpiresInMs(access) else -1L
+        // Access encore loin de l’expiration → OK (Authenticator rattrape un 401 réel)
+        if (ttl > 60_000L) return true
+
+        if (refresh.isNullOrBlank()) {
+            if (ttl > 0) return true
+            tokenStore.clear()
+            return false
+        }
+        return refreshAccessToken() != null
+    }
+
+    /**
+     * Validation réelle au démarrage : /api/auth/me doit renvoyer un user.
+     * Si le JWT est rejeté (401 silencieux → user null), force un refresh.
+     */
+    suspend fun validateSession(): Boolean {
+        tokenStore.warmCache()
+        val access = tokenStore.getAccess()
+        val refresh = tokenStore.getRefresh()
+        if (access.isNullOrBlank() && refresh.isNullOrBlank()) return false
+
+        val meOk = !access.isNullOrBlank() &&
+            runCatching { api.me().user }.getOrNull() != null
+        if (meOk) return true
+
+        if (refresh.isNullOrBlank()) {
+            tokenStore.clear()
+            return false
+        }
+        if (refreshAccessToken() == null) return false
+        return runCatching { api.me().user }.getOrNull() != null
     }
 
     companion object {
@@ -117,6 +218,16 @@ class AppContainer(context: Context) {
             } catch (_: Exception) {
                 0L
             }
+        }
+
+        private fun responseCount(response: Response): Int {
+            var n = 1
+            var prior: Response? = response.priorResponse
+            while (prior != null) {
+                n++
+                prior = prior.priorResponse
+            }
+            return n
         }
     }
 }

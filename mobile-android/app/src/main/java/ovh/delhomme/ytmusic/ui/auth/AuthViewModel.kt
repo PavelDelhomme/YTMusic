@@ -33,11 +33,8 @@ class AuthViewModel(private val container: AppContainer) : ViewModel() {
 
     init {
         viewModelScope.launch {
-            val token = container.tokenStore.getAccess()
-            if (!token.isNullOrBlank()) {
-                val ok = runCatching { container.api.me().user != null }.getOrDefault(false) ||
-                    container.ensureFreshToken()
-                if (ok) _state.value = _state.value.copy(loggedIn = true)
+            if (container.validateSession()) {
+                _state.value = _state.value.copy(loggedIn = true)
             }
         }
     }
