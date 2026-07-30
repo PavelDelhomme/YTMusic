@@ -1,34 +1,65 @@
-# YTMusic — commandes locales & déploiement
+# YTMusic — commandes locales & déploiement (style JobbingTrack)
 # Usage : make help
 
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
-.PHONY: help install dev up dev-server dev-web build start deploy-local \
-	clean-vite icons docker-dev docker-dev-down docker-build \
+# Couleurs (comme JobbingTrack)
+C_CYAN  := \033[0;36m
+C_GREEN := \033[0;32m
+C_YELL  := \033[1;33m
+C_DIM   := \033[0;90m
+C_BOLD  := \033[1m
+C_RESET := \033[0m
+
+DEVICE ?= R5CT7263YJL
+
+.PHONY: help install seed-users test-verify-email env-check \
+	dev up up-full down down-clean restart restart-api ensure-api \
+	dev-server dev-web build start deploy-local clean-vite icons \
+	docker-dev docker-dev-down docker-build \
 	mobile-qr mobile-hint mobile-adb mobile-install-adb test-register-adb \
 	android-sync android-build android-install android-prod android \
 	android-capacitor android-capacitor-prod \
-	ensure-api restart-api env-check \
-	update-apps status status-watch logs logs-tail logs-watch ports kill-dev \
-	push-dev push-prod deploy-hint seed-users test-verify-email
+	update-apps status status-watch \
+	logs logs-tail logs-watch logs-history logs-archive \
+	db-status db-backup \
+	ports kill-dev push-dev push-prod deploy-hint
 
-help: ## Affiche cette aide
+help: ## Affiche cette aide colorée
 	@echo ""
-	@echo "  YTMusic — make targets"
+	@printf "$(C_BOLD)  YTMusic — make targets$(C_RESET)\n"
 	@echo "  ======================"
-	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 	@echo ""
-	@echo "  Domaine prod  : https://ytmusic.delhomme.ovh"
-	@echo "  Dev local     : make up  (API+Vite en fond)  ·  make dev (Vite au premier plan)"
-	@echo "  API           : make ensure-api  ·  restart-api  ·  kill-dev"
-	@echo "  Mobile APK    : make android   (Kotlin Compose natif + API :8787)"
-	@echo "  Env           : make env-check  (aligne .env / .env.example)"
-	@echo "  Ops           : make status · status-watch · logs"
-	@echo "  Branches      : feat/* depuis dev → merge prod"
+	@printf "  $(C_GREEN)▶ Démarrage$(C_RESET)\n"
+	@grep -E '^(up|up-full|down|down-clean|restart|dev|ensure-api|restart-api|dev-server|dev-web):.*?##' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(C_CYAN)%-20s$(C_RESET) %s\n", $$1, $$2}'
 	@echo ""
+	@printf "  $(C_GREEN)▶ Logs & statut$(C_RESET)\n"
+	@grep -E '^(status|status-watch|logs|logs-tail|logs-watch|logs-history|logs-archive|ports):.*?##' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(C_CYAN)%-20s$(C_RESET) %s\n", $$1, $$2}'
+	@echo ""
+	@printf "  $(C_GREEN)▶ Base de données$(C_RESET)\n"
+	@grep -E '^(db-status|db-backup|seed-users):.*?##' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(C_CYAN)%-20s$(C_RESET) %s\n", $$1, $$2}'
+	@echo ""
+	@printf "  $(C_GREEN)▶ Mobile Android$(C_RESET)\n"
+	@grep -E '^(android|android-prod|android-install|android-build|mobile-):.*?##' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(C_CYAN)%-20s$(C_RESET) %s\n", $$1, $$2}'
+	@echo ""
+	@printf "  $(C_GREEN)▶ Build / Docker / Git$(C_RESET)\n"
+	@grep -E '^(install|build|start|deploy-local|docker-|icons|clean-vite|env-check|push-|deploy-hint|update-apps|test-):.*?##' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(C_CYAN)%-20s$(C_RESET) %s\n", $$1, $$2}'
+	@echo ""
+	@printf "  $(C_DIM)Domaine prod : https://ytmusic.delhomme.ovh$(C_RESET)\n"
+	@printf "  $(C_DIM)Dev local    : make up-full  ·  make logs  ·  make android$(C_RESET)\n"
+	@printf "  $(C_DIM)Branches     : feat/* depuis dev → merge prod$(C_RESET)\n"
+	@echo ""
+
+# ---------------------------------------------------------------------------
+# Démarrage
+# ---------------------------------------------------------------------------
 
 install: ## Installe les dépendances (workspaces api + web)
 	cd $(ROOT) && npm install
@@ -39,33 +70,61 @@ seed-users: ## Crée/maj paul@ + dev@ (SEED_PASSWORD dans .env)
 test-verify-email: ## Teste validation email (API locale)
 	cd $(ROOT) && node scripts/test-verify-email.mjs
 
-env-check: ## Vérifie que .env et .env.example ont les mêmes clés (sans afficher de secrets)
+env-check: ## Vérifie que .env et .env.example ont les mêmes clés
 	@chmod +x $(ROOT)/scripts/env-check.sh
 	@bash $(ROOT)/scripts/env-check.sh
 
-# API en fond via ensure-api (réutilise si déjà UP) + Vite seul sur :5173
-# → plus de double bind :8787 (EADDRINUSE) ni Vite qui bascule sur :5174
-dev: ## Lance API (ensure) + Vite web au premier plan — logs ytmusic-dev.log
+dev: ## API (ensure) + Vite au premier plan — logs ytmusic-dev.log
 	@chmod +x $(ROOT)/scripts/ensure-api.sh $(ROOT)/scripts/kill-dev.sh $(ROOT)/scripts/env-check.sh
 	@bash $(ROOT)/scripts/env-check.sh || true
 	@FORCE_RESTART=0 bash $(ROOT)/scripts/ensure-api.sh
 	@bash $(ROOT)/scripts/kill-dev.sh vite-only
 	@mkdir -p $(ROOT)/logs
-	@echo "📝 Logs → $(ROOT)/logs/ytmusic-dev.log  ·  suivi : make logs"
+	@printf "$(C_YELL)📝 Logs → $(ROOT)/logs/ytmusic-dev.log  ·  suivi : make logs$(C_RESET)\n"
 	@echo "   API :8787 (ensure-api) + Vite :5173 uniquement"
-	@echo "   Astuce fond : make up   (API + Vite détachés, terminal libre)"
+	@echo "   Astuce fond : make up / make up-full"
 	cd $(ROOT) && npm run dev:web 2>&1 | tee -a $(ROOT)/logs/ytmusic-dev.log
 
-up: ## API + Vite en fond (setsid) — terminal libre ensuite
+up: ## API + Vite en fond (setsid) — terminal libre
 	@chmod +x $(ROOT)/scripts/dev-up.sh
 	@bash $(ROOT)/scripts/dev-up.sh
+	@printf '%s\n' up > "$(ROOT)/.ytmusic-stack-mode" 2>/dev/null || true
 
-dev-server: ## API seule — réutilise :8787 si déjà UP, sinon démarre (fond)
+up-full: ## Reset propre + API + Vite + status (+ seed optionnel)
+	@printf "$(C_BOLD)🚀 up-full YTMusic$(C_RESET)\n"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@chmod +x $(ROOT)/scripts/kill-dev.sh $(ROOT)/scripts/dev-up.sh $(ROOT)/scripts/env-check.sh
+	@bash $(ROOT)/scripts/env-check.sh || true
+	@bash $(ROOT)/scripts/kill-dev.sh || true
+	@mkdir -p $(ROOT)/logs $(ROOT)/data
+	@bash $(ROOT)/scripts/dev-up.sh
+	@printf '%s\n' up-full > "$(ROOT)/.ytmusic-stack-mode" 2>/dev/null || true
+	@echo ""
+	@$(MAKE) --no-print-directory status
+	@echo ""
+	@printf "$(C_GREEN)✅ up-full OK$(C_RESET) — web http://127.0.0.1:5173  ·  api :8787\n"
+	@printf "$(C_DIM)   make logs · make android · make db-status$(C_RESET)\n"
+
+down: ## Arrête API + Vite locaux (données SQLite intactes)
+	@chmod +x $(ROOT)/scripts/kill-dev.sh
+	@bash $(ROOT)/scripts/kill-dev.sh
+	@rm -f "$(ROOT)/.ytmusic-stack-mode"
+	@printf "$(C_GREEN)✅ Stack locale arrêtée$(C_RESET) (data/ytmusic.db conservée)\n"
+
+down-clean: ## Arrêt + archive logs (DB intacte)
+	@$(MAKE) --no-print-directory logs-archive || true
+	@$(MAKE) --no-print-directory down
+
+restart: ## down + up-full
+	@$(MAKE) --no-print-directory down
+	@$(MAKE) --no-print-directory up-full
+
+dev-server: ## API seule — réutilise :8787 si déjà UP
 	@chmod +x $(ROOT)/scripts/ensure-api.sh
 	@bash $(ROOT)/scripts/ensure-api.sh
 	@echo "   Relancer de force : make restart-api · logs : make logs"
 
-ensure-api: ## Garantit l’API :8787 (réutilise si UP, sinon démarre en fond)
+ensure-api: ## Garantit l’API :8787 (réutilise si UP)
 	@chmod +x $(ROOT)/scripts/ensure-api.sh
 	@bash $(ROOT)/scripts/ensure-api.sh
 
@@ -92,7 +151,7 @@ clean-vite: ## Vide le cache Vite (fix 504 Outdated Optimize Dep)
 	rm -rf $(ROOT)/web/node_modules/.vite \
 	       $(ROOT)/node_modules/.vite \
 	       $(ROOT)/node_modules/web/node_modules/.vite 2>/dev/null || true
-	@echo "Cache Vite nettoyé — relance : make dev"
+	@echo "Cache Vite nettoyé — relance : make up"
 
 icons: ## Régénère les icônes PWA (PNG) depuis favicon.svg
 	@command -v rsvg-convert >/dev/null || (echo "installe librsvg (rsvg-convert)" && exit 1)
@@ -112,11 +171,15 @@ docker-dev-down: ## Stoppe les conteneurs dev
 docker-build: ## Build image Docker locale
 	cd $(ROOT) && npm run docker:build
 
+# ---------------------------------------------------------------------------
+# Mobile
+# ---------------------------------------------------------------------------
+
 mobile-hint: ## Affiche comment installer l’app mobile (APK + PWA)
 	@echo ""
 	@echo "  YTMusic sur téléphone Android"
 	@echo "  -----------------------------"
-	@echo "  App Kotlin native (Compose + ExoPlayer, sans WebView) :"
+	@echo "  App Kotlin native (Compose + ExoPlayer) :"
 	@echo "    make android                      # API locale :8787"
 	@echo "    make android-prod                 # API ytmusic.delhomme.ovh"
 	@echo "    API_BASE_URL=http://IP:8787 make android-install"
@@ -124,8 +187,6 @@ mobile-hint: ## Affiche comment installer l’app mobile (APK + PWA)
 	@echo "  Legacy Capacitor (WebView) : make android-capacitor"
 	@echo "  PWA (navigateur)           : make mobile-install-adb"
 	@echo ""
-# DEVICE=R5CT7263YJL par défaut (Samsung branché)
-DEVICE ?= R5CT7263YJL
 
 mobile-qr: ## Liste les URLs d’accès LAN pour le mobile
 	@echo "URLs utiles :"
@@ -152,7 +213,7 @@ android-build: ## Compile l’APK Kotlin (Compose / Media3)
 	@chmod +x $(ROOT)/scripts/kotlin-android-install.sh
 	@DEVICE="$(DEVICE)" API_BASE_URL="$(or $(API_BASE_URL),$(or $(VITE_API_ORIGIN),http://127.0.0.1:8787))" bash $(ROOT)/scripts/kotlin-android-install.sh build
 
-android-install: ## Build + installe l’APK Kotlin (ADB) — s’assure que l’API :8787 est UP
+android-install: ## Build + installe l’APK Kotlin (ADB) — ensure-api
 	@chmod +x $(ROOT)/scripts/kotlin-android-install.sh $(ROOT)/scripts/ensure-api.sh
 	@bash $(ROOT)/scripts/ensure-api.sh
 	@DEVICE="$(DEVICE)" API_BASE_URL="$(or $(API_BASE_URL),$(or $(VITE_API_ORIGIN),http://127.0.0.1:8787))" bash $(ROOT)/scripts/kotlin-android-install.sh install
@@ -184,22 +245,18 @@ update-apps: ## Rappel : comment MAJ web / mobile / desktop
 	@echo ""
 	@echo "  Mises à jour (sans store, sans pubs)"
 	@echo "  -----------------------------------"
-	@echo "  Web + PWA mobile/desktop :"
-	@echo "    git push sur prod → CI build GHCR → Portainer/Watchtower tire l’image"
-	@echo "    Les clients PWA se mettent à jour au prochain lancement (SW autoUpdate)"
-	@echo ""
-	@echo "  Linux / Windows / mac (PWA installée) :"
-	@echo "    Même chose — c’est la PWA du domaine ; pas de binaire séparé requis"
-	@echo ""
-	@echo "  Electron (optionnel) :"
-	@echo "    npm run dev:desktop   # puis rebuild desktop quand tu packs"
-	@echo ""
-	@echo "  Préprod / tests : branche dev → image :dev"
+	@echo "  Web + PWA : push prod → CI GHCR → Portainer/Watchtower"
+	@echo "  APK Kotlin : make android / make android-prod"
+	@echo "  Docs : docs/DNS-ET-INSTALL.md  DEPLOY.md"
 	@echo ""
 
-status: ## Statut coloré API / Vite / Docker (UP/DOWN)
+# ---------------------------------------------------------------------------
+# Statut & logs
+# ---------------------------------------------------------------------------
+
+status: ## Statut coloré API / Vite / Docker / DB
 	@echo ""
-	@echo "📊 Statut YTMusic"
+	@printf "$(C_BOLD)📊 Statut YTMusic$(C_RESET)\n"
 	@echo "================="
 	@echo ""
 	@printf "  "; \
@@ -213,8 +270,16 @@ status: ## Statut coloré API / Vite / Docker (UP/DOWN)
 	if curl -fsS --max-time 2 -o /dev/null http://127.0.0.1:5173/ 2>/dev/null; then \
 	  printf "\033[1;32m✅ UP\033[0m   %-22s \033[0;36m5173\033[0m  vite\n" "client"; \
 	else \
-	  printf "\033[1;90m⚪ DOWN\033[0m %-22s \033[0;90m:5173 (make dev)\033[0m\n" "client"; \
+	  printf "\033[1;90m⚪ DOWN\033[0m %-22s \033[0;90m:5173 (make up)\033[0m\n" "client"; \
 	fi
+	@echo ""
+	@if [ -f "$(ROOT)/data/ytmusic.db" ]; then \
+	  printf "  \033[1;32m✅ DB\033[0m    %-22s %s\n" "sqlite" "$$(du -h "$(ROOT)/data/ytmusic.db" | awk '{print $$1}')"; \
+	else \
+	  printf "  \033[1;33m⚠ DB\033[0m    %-22s \033[0;90mabsente\033[0m\n" "sqlite"; \
+	fi
+	@MODE=$$(cat "$(ROOT)/.ytmusic-stack-mode" 2>/dev/null || true); \
+	if [ -n "$$MODE" ]; then printf "  \033[0;90m📌 dernier mode : %s\033[0m\n" "$$MODE"; fi
 	@echo ""
 	@echo "🐳 Conteneurs docker (ytmusic*) :"
 	@echo ""
@@ -222,8 +287,8 @@ status: ## Statut coloré API / Vite / Docker (UP/DOWN)
 	for c in $$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E 'ytmusic|mailhog' || true); do \
 	  found=1; \
 	  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$$c"; then \
-	    st=$$(docker ps --filter "name=^$$c$$" --format '{{.Status}}' 2>/dev/null); \
 	    ports=$$(docker ps --filter "name=^$$c$$" --format '{{.Ports}}' 2>/dev/null); \
+	    st=$$(docker ps --filter "name=^$$c$$" --format '{{.Status}}' 2>/dev/null); \
 	    printf "  \033[1;32m✅ UP\033[0m   %-28s %s\n" "$$c" "$$ports"; \
 	    printf "         \033[0;90m%s\033[0m\n" "$$st"; \
 	  else \
@@ -232,7 +297,7 @@ status: ## Statut coloré API / Vite / Docker (UP/DOWN)
 	  fi; \
 	done; \
 	if [ "$$found" = "0" ]; then \
-	  printf "  \033[0;90m(aucun conteneur ytmusic — make docker-dev ou make dev)\033[0m\n"; \
+	  printf "  \033[0;90m(aucun conteneur ytmusic — make docker-dev ou make up)\033[0m\n"; \
 	fi
 	@echo ""
 	@echo "📱 ADB :"
@@ -246,19 +311,40 @@ status-watch: ## Rafraîchit make status en boucle (INTERVAL=4)
 	@chmod +x $(ROOT)/scripts/status-watch.sh 2>/dev/null || true
 	@INTERVAL="$(or $(INTERVAL),4)" CLEAR="$(or $(CLEAR),1)" bash $(ROOT)/scripts/status-watch.sh
 
-logs: ## Logs récents puis suivi temps réel (Docker ou local) — Ctrl+C
-	@chmod +x $(ROOT)/scripts/ops/logs.sh $(ROOT)/scripts/ops/color-logs.sh 2>/dev/null || true
+logs: ## Logs colorés + suivi temps réel (Docker ou local) — Ctrl+C
+	@chmod +x $(ROOT)/scripts/ops/logs.sh $(ROOT)/scripts/ops/color-logs.sh
 	@LOGS_SINCE="$(or $(LOGS_SINCE),24h)" LOGS_TAIL="$(or $(LOGS_TAIL),500)" \
 	  bash $(ROOT)/scripts/ops/logs.sh follow
 
-logs-tail: ## Dernières lignes de logs puis quitte (LOGS_TAIL=200)
-	@chmod +x $(ROOT)/scripts/ops/logs.sh $(ROOT)/scripts/ops/color-logs.sh 2>/dev/null || true
+logs-tail: ## Dernières lignes puis quitte (LOGS_TAIL=200)
+	@chmod +x $(ROOT)/scripts/ops/logs.sh $(ROOT)/scripts/ops/color-logs.sh
 	@LOGS_TAIL="$(or $(LOGS_TAIL),200)" bash $(ROOT)/scripts/ops/logs.sh tail
 
-logs-watch: ## Logs avec reconnexion auto (surtout Docker) — Ctrl+C
-	@chmod +x $(ROOT)/scripts/ops/logs.sh $(ROOT)/scripts/ops/color-logs.sh 2>/dev/null || true
+logs-watch: ## Logs avec reconnexion auto (Docker) — Ctrl+C
+	@chmod +x $(ROOT)/scripts/ops/logs.sh $(ROOT)/scripts/ops/color-logs.sh
 	@LOGS_SINCE="$(or $(LOGS_SINCE),24h)" LOGS_TAIL="$(or $(LOGS_TAIL),500)" \
 	  bash $(ROOT)/scripts/ops/logs.sh watch
+
+logs-history: ## Archives + historique puis suivi — Ctrl+C
+	@chmod +x $(ROOT)/scripts/ops/logs.sh $(ROOT)/scripts/ops/color-logs.sh
+	@LOGS_SINCE="$(or $(LOGS_SINCE),168h)" LOGS_TAIL="$(or $(LOGS_TAIL),2000)" \
+	  bash $(ROOT)/scripts/ops/logs.sh history
+
+logs-archive: ## Rotate les logs locaux vers logs/archive/
+	@chmod +x $(ROOT)/scripts/ops/archive-logs.sh
+	@bash $(ROOT)/scripts/ops/archive-logs.sh
+
+# ---------------------------------------------------------------------------
+# Base de données
+# ---------------------------------------------------------------------------
+
+db-status: ## Stats SQLite (users, likes, refresh, orphans)
+	@chmod +x $(ROOT)/scripts/db-ops.sh
+	@bash $(ROOT)/scripts/db-ops.sh status
+
+db-backup: ## Backup data/ytmusic.db → data/backups/
+	@chmod +x $(ROOT)/scripts/db-ops.sh
+	@bash $(ROOT)/scripts/db-ops.sh backup
 
 ports: ## Affiche qui écoute 5173 / 8787
 	@echo "Ports YTMusic :"
@@ -274,11 +360,10 @@ ports: ## Affiche qui écoute 5173 / 8787
 	  fi; \
 	done
 
-kill-dev: ## Tue les process sur 5173 et 8787 (proprement)
-	@chmod +x $(ROOT)/scripts/kill-dev.sh
-	@bash $(ROOT)/scripts/kill-dev.sh
+kill-dev: ## Alias de down — tue 5173 et 8787
+	@$(MAKE) --no-print-directory down
 
-push-dev: ## Push la branche courante vers origin (intégration)
+push-dev: ## Push la branche courante vers origin
 	cd $(ROOT) && git push -u origin HEAD
 
 push-prod: ## Merge dev → prod localement puis push (ATTENTION prod)
@@ -293,23 +378,8 @@ deploy-hint: ## Guide déploiement Portainer / NPM / mobile
 	@echo ""
 	@echo "  Déploiement"
 	@echo "  -----------"
-	@echo "  LOCAL + téléphone (même Wi‑Fi) :"
-	@echo "    make dev"
-	@echo "    make mobile-qr          # ouvre http://IP:5173 sur Android/iPhone"
-	@echo "    Admin → QR code"
-	@echo ""
-	@echo "  DEV distant (image :dev) :"
-	@echo "    git push origin dev     # CI → ghcr.io/.../ytmusic:dev"
-	@echo "    Portainer stack : YTMUSIC_IMAGE=...:dev"
-	@echo ""
-	@echo "  PRÉPROD : même VPS, autre domaine ytmusic-preprod.delhomme.ovh"
-	@echo "    APP_ENV=preprod APP_URL=https://ytmusic-preprod.delhomme.ovh"
-	@echo ""
-	@echo "  PROD :"
-	@echo "    make push-prod          # ou PR GitHub dev → prod"
-	@echo "    CI → :latest / :prod → Watchtower / Portainer pull"
-	@echo "    NPM : ytmusic.delhomme.ovh → ytmusic:8787 + websockets"
-	@echo ""
-	@echo "  PWA déjà installée : se met à jour au prochain lancement (SW)"
-	@echo "  Docs : docs/DNS-ET-INSTALL.md  DEPLOY.md"
+	@echo "  LOCAL : make up-full && make android"
+	@echo "  DEV   : git push origin dev → image :dev"
+	@echo "  PROD  : make push-prod → :latest / :prod"
+	@echo "  Docs  : docs/DNS-ET-INSTALL.md  DEPLOY.md"
 	@echo ""

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # make logs — suivi type JobbingTrack (Docker compose OU fichiers locaux)
-# Modes : follow (défaut) | tail | watch
+# Modes : follow (défaut) | tail | watch | history
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 1
@@ -11,7 +11,7 @@ chmod +x "$COLOR" 2>/dev/null || true
 LOGS_SINCE="${LOGS_SINCE:-24h}"
 LOGS_TAIL="${LOGS_TAIL:-80}"
 LOG_DIR="$ROOT/logs"
-# API (ensure-api) + Vite (make dev) — les deux flux
+ARCH_DIR="$LOG_DIR/archive"
 LOG_FILES=(
   "$LOG_DIR/ytmusic-server.log"
   "$LOG_DIR/ytmusic-dev.log"
@@ -43,19 +43,52 @@ docker_running() {
   return 1
 }
 
+print_banner() {
+  echo "📋 Logs YTMusic ($1)"
+  echo "========================"
+  echo "⏹  Ctrl+C pour quitter"
+  echo "🔧 LOGS_SINCE=${LOGS_SINCE}  LOGS_TAIL=${LOGS_TAIL}"
+  echo "📜 Historique archives : make logs-history   ·  rotation : make logs-archive"
+  echo ""
+}
+
+dump_archives() {
+  local n="${1:-200}"
+  if [[ ! -d "$ARCH_DIR" ]]; then
+    echo "  (pas encore d’archives — make logs-archive)"
+    return 0
+  fi
+  local files
+  mapfile -t files < <(ls -1t "$ARCH_DIR"/*.log 2>/dev/null | head -n 8 || true)
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo "  (archives vides)"
+    return 0
+  fi
+  echo "──── archives récentes (extraits) ────"
+  local f base
+  for f in "${files[@]}"; do
+    base="$(basename "$f")"
+    echo "── $base (dernieres $n lignes) ──"
+    tail -n "$n" "$f" 2>/dev/null | sed "s/^/[archive:$base] /" | bash "$COLOR" || true
+    echo ""
+  done
+}
+
 follow_docker() {
   local args
   args=$(compose_args)
   set_term_title "YTMusic Logs"
-  echo "📋 Logs YTMusic (Docker)"
-  echo "========================"
-  echo "⏹  Ctrl+C pour quitter"
-  echo "🔧 LOGS_SINCE=${LOGS_SINCE}  LOGS_TAIL=${LOGS_TAIL}"
-  echo ""
+  print_banner "Docker"
   # shellcheck disable=SC2086
   if [[ "$MODE" == "tail" ]]; then
     docker compose $args logs -t --tail="${LOGS_TAIL}" 2>&1 | bash "$COLOR"
     return $?
+  fi
+  if [[ "$MODE" == "history" ]]; then
+    # shellcheck disable=SC2086
+    docker compose $args logs -t --since="${LOGS_SINCE:-168h}" --tail="${LOGS_TAIL:-2000}" 2>&1 | bash "$COLOR"
+    echo ""
+    echo "──── suivi en direct ────"
   fi
   # shellcheck disable=SC2086
   docker compose $args logs -f -t --since="${LOGS_SINCE}" --tail="${LOGS_TAIL}" 2>&1 | bash "$COLOR"
@@ -63,10 +96,7 @@ follow_docker() {
 
 follow_docker_by_name() {
   set_term_title "YTMusic Logs"
-  echo "📋 Logs YTMusic (docker logs par nom)"
-  echo "===================================="
-  echo "⏹  Ctrl+C pour quitter"
-  echo ""
+  print_banner "docker logs par nom"
   local names
   names=$(docker ps --format '{{.Names}}' | grep -E '^ytmusic' || true)
   [[ -z "$names" ]] && return 1
@@ -85,14 +115,15 @@ ensure_log_files() {
 follow_local_files() {
   ensure_log_files
   set_term_title "YTMusic Logs"
-  echo "📋 Logs YTMusic (local · multi-fichiers)"
-  echo "======================================="
-  echo "⏹  Ctrl+C pour quitter"
+  print_banner "local · multi-fichiers"
   echo "💡 API  → logs/ytmusic-server.log   (make ensure-api / restart-api)"
-  echo "💡 Vite → logs/ytmusic-dev.log      (make dev)"
-  echo "🔧 LOGS_TAIL=${LOGS_TAIL}"
+  echo "💡 Vite → logs/ytmusic-dev.log      (make up / make dev)"
   echo ""
-  # Affiche un extrait récent de chaque fichier (étiqueté)
+
+  if [[ "$MODE" == "history" ]]; then
+    dump_archives "${LOGS_TAIL:-200}"
+  fi
+
   local f base
   for f in "${LOG_FILES[@]}"; do
     base="$(basename "$f")"
@@ -106,7 +137,7 @@ follow_local_files() {
     return 0
   fi
   echo "──── suivi en direct (tail -F) ────"
-  # -F : suit même si le fichier est tronqué / recréé (restart-api)
+  # -F : suit même si le fichier est tronqué / recréé (restart-api / logs-archive)
   tail -n 0 -F "${LOG_FILES[@]}" 2>&1 | bash "$COLOR"
 }
 
@@ -114,8 +145,7 @@ follow_watch_docker() {
   local args
   args=$(compose_args)
   set_term_title "YTMusic Logs"
-  echo "📋 logs-watch — reconnexion auto — Ctrl+C pour quitter"
-  echo ""
+  print_banner "watch · reconnexion auto"
   trap 'echo ""; echo "⏹ logs-watch arrêté."; exit 130' INT
   while true; do
     # shellcheck disable=SC2086
@@ -146,12 +176,5 @@ if docker_running; then
 fi
 
 # Local npm/tsx — toujours suivre les fichiers (même vides)
-if ss -tln 2>/dev/null | grep -qE ':5173|:5174|:8787' || true; then
-  follow_local_files
-  exit $?
-fi
-
-echo "⚠️  Rien à suivre."
-echo "   Local  : make kill-dev && make ensure-api && make dev"
-echo "   Docker : make docker-dev   puis  make logs"
-exit 1
+follow_local_files
+exit $?

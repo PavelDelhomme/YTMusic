@@ -51,8 +51,17 @@ export const useAuth = create<AuthState>((set) => ({
         const r = await api.refresh();
         applySession(r);
         set({ user: r.user, loaded: true });
+        reconnectSession();
       } catch {
-        set({ user: null, loaded: true });
+        // Dernier recours : cookies httpOnly seuls (localStorage vide / périmé)
+        try {
+          const r = await api.refresh('');
+          applySession(r);
+          set({ user: r.user, loaded: true });
+          reconnectSession();
+        } catch {
+          set({ user: null, loaded: true });
+        }
       }
     } catch {
       set({ loaded: true, user: null });

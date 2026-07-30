@@ -40,6 +40,9 @@ export function ensurePlatformSchema() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE INDEX IF NOT EXISTS idx_refresh_user_active ON refresh_tokens(user_id, revoked_at, expires_at);
+    CREATE INDEX IF NOT EXISTS idx_refresh_hash ON refresh_tokens(token_hash);
+
     CREATE TABLE IF NOT EXISTS telemetry_events (
       id TEXT PRIMARY KEY,
       created_at INTEGER NOT NULL,
@@ -139,7 +142,11 @@ export function setTotpSecret(userId: string, secret: string | null, enabled = f
   );
 }
 
-export function createRefreshToken(userId: string, deviceLabel?: string, ttlMs = 400 * 24 * 3600 * 1000) {
+const REFRESH_TTL_MS = 400 * 24 * 3600 * 1000;
+/** Fenêtre de grâce si un ancien refresh (après rotation rare) est encore présenté (multi-onglets). */
+const REFRESH_REUSE_GRACE_MS = 90_000;
+
+export function createRefreshToken(userId: string, deviceLabel?: string, ttlMs = REFRESH_TTL_MS) {
   const raw = randomBytes(48).toString('base64url');
   const id = randomUUID();
   db.prepare(
@@ -149,15 +156,56 @@ export function createRefreshToken(userId: string, deviceLabel?: string, ttlMs =
   return { id, token: raw };
 }
 
+/**
+ * Session longue : sliding window — on prolonge le même refresh (pas de rotation à chaque appel).
+ * Évite les déconnexions multi-onglets / ensureFreshToken mobile qui brûlaient le token.
+ * Rotation optionnelle uniquement si REFRESH_ROTATE=1 (rare, admin).
+ */
 export function rotateRefreshToken(raw: string, deviceLabel?: string) {
+  const hash = hashToken(raw);
   const row = db
     .prepare(`SELECT * FROM refresh_tokens WHERE token_hash = ? AND revoked_at IS NULL`)
-    .get(hashToken(raw)) as
-    | { id: string; user_id: string; expires_at: number }
-    | undefined;
-  if (!row || row.expires_at < Date.now()) return null;
-  db.prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?').run(Date.now(), row.id);
-  return { userId: row.user_id, ...createRefreshToken(row.user_id, deviceLabel) };
+    .get(hash) as { id: string; user_id: string; expires_at: number } | undefined;
+
+  if (row && row.expires_at >= Date.now()) {
+    const forceRotate = process.env.REFRESH_ROTATE === '1';
+    if (!forceRotate) {
+      const now = Date.now();
+      db.prepare(
+        `UPDATE refresh_tokens
+         SET last_used_at = ?, expires_at = ?, device_label = COALESCE(?, device_label)
+         WHERE id = ?`,
+      ).run(now, now + REFRESH_TTL_MS, deviceLabel || null, row.id);
+      return { userId: row.user_id, id: row.id, token: raw };
+    }
+    db.prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?').run(Date.now(), row.id);
+    return { userId: row.user_id, ...createRefreshToken(row.user_id, deviceLabel) };
+  }
+
+  // Grâce : token récemment révoqué (ancienne rotation) → prolonger via un refresh encore actif du même user
+  const revoked = db
+    .prepare(`SELECT * FROM refresh_tokens WHERE token_hash = ? AND revoked_at IS NOT NULL`)
+    .get(hash) as { user_id: string; revoked_at: number } | undefined;
+  if (
+    revoked &&
+    typeof revoked.revoked_at === 'number' &&
+    Date.now() - revoked.revoked_at < REFRESH_REUSE_GRACE_MS
+  ) {
+    const active = db
+      .prepare(
+        `SELECT id, user_id, expires_at FROM refresh_tokens
+         WHERE user_id = ? AND revoked_at IS NULL AND expires_at >= ?
+         ORDER BY last_used_at DESC LIMIT 1`,
+      )
+      .get(revoked.user_id, Date.now()) as { id: string; user_id: string; expires_at: number } | undefined;
+    if (active) {
+      // On ne peut pas renvoyer le raw du token actif (hash only) → en émettre un neuf et révoquer l’actif
+      db.prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?').run(Date.now(), active.id);
+      return { userId: active.user_id, ...createRefreshToken(active.user_id, deviceLabel) };
+    }
+  }
+
+  return null;
 }
 
 export function revokeRefreshToken(raw: string) {

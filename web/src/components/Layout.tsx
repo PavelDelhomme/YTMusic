@@ -500,6 +500,13 @@ export function Layout() {
         ref={audioRef}
         preload="metadata"
         playsInline
+        // Requis pour Media Session / touches média OS
+        onPlay={() => {
+          usePlayer.setState({ isPlaying: true });
+        }}
+        onPause={() => {
+          usePlayer.setState({ isPlaying: false });
+        }}
         onTimeUpdate={(e) => {
           const t = e.currentTarget.currentTime;
           const d = e.currentTarget.duration || 0;

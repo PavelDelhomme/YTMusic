@@ -115,27 +115,40 @@ export function installMediaKeys(): () => void {
   wireMediaSession();
   updateMediaSessionMetadata();
 
+  const isMediaKey = (e: KeyboardEvent) => {
+    const k = e.key;
+    const c = e.code;
+    return (
+      k === 'MediaPlayPause' ||
+      k === 'MediaPlay' ||
+      k === 'MediaPause' ||
+      k === 'MediaTrackNext' ||
+      k === 'MediaTrackPrevious' ||
+      k === 'MediaStop' ||
+      c === 'MediaPlayPause' ||
+      c === 'MediaPlay' ||
+      c === 'MediaPause' ||
+      c === 'MediaTrackNext' ||
+      c === 'MediaTrackPrevious' ||
+      c === 'MediaStop'
+    );
+  };
+
   const onKeyDown = (e: KeyboardEvent) => {
     // Touches média hardware / OS — toujours actives (même dans un champ)
-    const mediaKey = e.key;
-    if (
-      mediaKey === 'MediaPlayPause' ||
-      mediaKey === 'MediaPlay' ||
-      mediaKey === 'MediaPause' ||
-      mediaKey === 'MediaTrackNext' ||
-      mediaKey === 'MediaTrackPrevious' ||
-      mediaKey === 'MediaStop'
-    ) {
+    if (isMediaKey(e)) {
       e.preventDefault();
+      e.stopPropagation();
       const p = usePlayer.getState();
-      if (!p.current && mediaKey !== 'MediaStop') return;
-      if (mediaKey === 'MediaPlayPause') p.toggle();
-      else if (mediaKey === 'MediaPlay') {
+      const key = e.key.startsWith('Media') ? e.key : e.code;
+      if (!p.current && key !== 'MediaStop') return;
+      if (key === 'MediaPlayPause') p.toggle();
+      else if (key === 'MediaPlay') {
         if (!p.isPlaying) p.toggle();
-      } else if (mediaKey === 'MediaPause' || mediaKey === 'MediaStop') {
+      } else if (key === 'MediaPause' || key === 'MediaStop') {
         if (p.isPlaying) p.toggle();
-      } else if (mediaKey === 'MediaTrackNext') void p.next();
-      else if (mediaKey === 'MediaTrackPrevious') void p.prev();
+      } else if (key === 'MediaTrackNext') void p.next();
+      else if (key === 'MediaTrackPrevious') void p.prev();
       return;
     }
 

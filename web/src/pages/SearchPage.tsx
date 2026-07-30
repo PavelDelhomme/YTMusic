@@ -114,7 +114,28 @@ export function SearchPage() {
       </div>
 
       {loading && <p className="text-yt-muted">Recherche…</p>}
-      {error && <p className="text-sm text-red-400">{error}</p>}
+      {error && (
+        <div className="mb-4 rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          <p>{error.includes('Bad Gateway') || error.includes('502')
+            ? 'API indisponible (Bad Gateway). Vérifie que make up / ensure-api tourne.'
+            : error}</p>
+          <button
+            type="button"
+            className="mt-2 text-xs underline opacity-80 hover:opacity-100"
+            onClick={() => {
+              setLoading(true);
+              setError('');
+              api
+                .search(q, filter)
+                .then(setData)
+                .catch((e) => setError(String(e.message || e)))
+                .finally(() => setLoading(false));
+            }}
+          >
+            Réessayer
+          </button>
+        </div>
+      )}
 
       {data && (
         <div className="space-y-8">
@@ -201,6 +222,18 @@ export function SearchPage() {
               </div>
             </section>
           )}
+
+          {!loading &&
+            !data.topResult &&
+            !data.songs.length &&
+            !data.artists.length &&
+            !data.albums.length &&
+            !data.playlists.length &&
+            !data.videos.length && (
+              <p className="text-yt-muted">
+                Aucun résultat pour « {q} ». Essaie un autre filtre ou une orthographe différente.
+              </p>
+            )}
         </div>
       )}
     </div>
