@@ -16,39 +16,70 @@ function setMediaHandler(
   try {
     navigator.mediaSession.setActionHandler(action, handler);
   } catch {
-    /* action non supportée sur ce navigateur */
+    /* action non supportée */
   }
 }
 
-/** Enregistre / rafraîchit les handlers Media Session (touches média OS + Chrome). */
+function audioEl() {
+  return usePlayer.getState().audioEl;
+}
+
+/** Play explicite (Media Session / MPRIS envoie « play », pas un toggle). */
+function ensurePlaying() {
+  const p = usePlayer.getState();
+  if (!p.current) return;
+  const audio = p.audioEl;
+  if (audio && !audio.paused && !audio.ended) {
+    usePlayer.setState({ isPlaying: true });
+    updateMediaSessionMetadata();
+    return;
+  }
+  if (audio && audio.src && audio.dataset.trackId === p.current.id) {
+    void audio
+      .play()
+      .then(() => {
+        usePlayer.setState({ isPlaying: true });
+        updateMediaSessionMetadata();
+      })
+      .catch(() => {
+        p.toggle();
+      });
+    return;
+  }
+  // Pas de source prête → laisse toggle/play reconstruire
+  p.toggle();
+}
+
+function ensurePaused() {
+  const p = usePlayer.getState();
+  const audio = p.audioEl;
+  if (audio && !audio.paused) {
+    audio.pause();
+    usePlayer.setState({ isPlaying: false });
+    updateMediaSessionMetadata();
+    return;
+  }
+  if (p.isPlaying) p.toggle();
+  else updateMediaSessionMetadata();
+}
+
+function doNext() {
+  void usePlayer.getState().next();
+}
+
+function doPrev() {
+  void usePlayer.getState().prev();
+}
+
+/** Enregistre / rafraîchit les handlers Media Session (MPRIS Linux + OS). */
 export function wireMediaSession() {
   if (!('mediaSession' in navigator)) return;
 
-  const play = () => {
-    const p = usePlayer.getState();
-    if (!p.current) return;
-    const audio = p.audioEl;
-    if (audio && !audio.paused) return;
-    p.toggle();
-  };
-  const pause = () => {
-    const p = usePlayer.getState();
-    const audio = p.audioEl;
-    if (audio && !audio.paused) {
-      audio.pause();
-      usePlayer.setState({ isPlaying: false });
-      updateMediaSessionMetadata();
-      return;
-    }
-    if (p.isPlaying) p.toggle();
-  };
-  const stop = () => pause();
-
-  setMediaHandler('play', play);
-  setMediaHandler('pause', pause);
-  setMediaHandler('stop', stop);
-  setMediaHandler('previoustrack', () => void usePlayer.getState().prev());
-  setMediaHandler('nexttrack', () => void usePlayer.getState().next());
+  setMediaHandler('play', () => ensurePlaying());
+  setMediaHandler('pause', () => ensurePaused());
+  setMediaHandler('stop', () => ensurePaused());
+  setMediaHandler('previoustrack', () => doPrev());
+  setMediaHandler('nexttrack', () => doNext());
   setMediaHandler('seekto', (details) => {
     if (typeof details.seekTime === 'number') usePlayer.getState().seek(details.seekTime);
   });
@@ -67,7 +98,10 @@ export function wireMediaSession() {
 
 export function updateMediaSessionMetadata() {
   if (!('mediaSession' in navigator)) return;
-  const { current, isPlaying, progress, duration } = usePlayer.getState();
+  const { current, progress, duration } = usePlayer.getState();
+  const audio = audioEl();
+  const playing = audio ? !audio.paused && !audio.ended : usePlayer.getState().isPlaying;
+
   if (!current) {
     try {
       navigator.mediaSession.metadata = null;
@@ -97,11 +131,13 @@ export function updateMediaSessionMetadata() {
           ]
         : [],
     });
-    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
-    if (duration > 0) {
+    navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+    const dur = Number.isFinite(duration) && duration > 0 ? duration : audio?.duration || 0;
+    const pos = Number.isFinite(progress) ? progress : audio?.currentTime || 0;
+    if (dur > 0 && Number.isFinite(pos)) {
       navigator.mediaSession.setPositionState({
-        duration,
-        position: Math.min(Math.max(0, progress), duration),
+        duration: dur,
+        position: Math.min(Math.max(0, pos), dur),
         playbackRate: 1,
       });
     }
@@ -109,83 +145,124 @@ export function updateMediaSessionMetadata() {
     /* ignore */
   }
 
-  // Les handlers doivent rester branchés même après un changement de piste
+  // Chromium/Linux droppe parfois les handlers après un update metadata
   wireMediaSession();
 }
 
+type MediaAction = 'playpause' | 'play' | 'pause' | 'stop' | 'next' | 'prev';
+
+/** Détecte touches média hardware (Linux/Logitech souvent via keyCode legacy). */
+function mediaActionFromEvent(e: KeyboardEvent): MediaAction | null {
+  const k = e.key;
+  const c = e.code;
+  // keyCode legacy (toujours renvoyé par beaucoup de claviers Logitech sous X11/Wayland)
+  const code = e.keyCode || (e as KeyboardEvent & { which?: number }).which || 0;
+
+  if (
+    k === 'MediaPlayPause' ||
+    c === 'MediaPlayPause' ||
+    k === 'AudioPlay' ||
+    code === 179
+  ) {
+    return 'playpause';
+  }
+  if (k === 'MediaPlay' || c === 'MediaPlay' || code === 250 /* XF86AudioPlay rare */) {
+    return 'play';
+  }
+  if (k === 'MediaPause' || c === 'MediaPause') return 'pause';
+  if (k === 'MediaStop' || c === 'MediaStop' || code === 178) return 'stop';
+  if (k === 'MediaTrackNext' || c === 'MediaTrackNext' || code === 176) return 'next';
+  if (k === 'MediaTrackPrevious' || c === 'MediaTrackPrevious' || code === 177) return 'prev';
+  return null;
+}
+
+function handleMediaAction(action: MediaAction) {
+  const p = usePlayer.getState();
+  if (!p.current && action !== 'stop') return;
+  if (action === 'playpause') {
+    const audio = p.audioEl;
+    if (audio ? audio.paused || audio.ended : !p.isPlaying) ensurePlaying();
+    else ensurePaused();
+    return;
+  }
+  if (action === 'play') ensurePlaying();
+  else if (action === 'pause' || action === 'stop') ensurePaused();
+  else if (action === 'next') doNext();
+  else if (action === 'prev') doPrev();
+}
+
 /**
- * Raccourcis clavier app-wide + Media Session.
- * Fonctionne sur toutes les pages (Accueil, Recherche, etc.), pas seulement le lecteur.
+ * Raccourcis clavier app-wide + Media Session (MPRIS).
+ * Sur Linux les touches Logitech passent surtout par Media Session ;
+ * on garde aussi keydown/keyup + raccourcis secours.
  */
 export function installMediaKeys(): () => void {
   wireMediaSession();
   updateMediaSessionMetadata();
 
-  const isMediaKey = (e: KeyboardEvent) => {
-    const k = e.key;
-    const c = e.code;
-    return (
-      k === 'MediaPlayPause' ||
-      k === 'MediaPlay' ||
-      k === 'MediaPause' ||
-      k === 'MediaTrackNext' ||
-      k === 'MediaTrackPrevious' ||
-      k === 'MediaStop' ||
-      c === 'MediaPlayPause' ||
-      c === 'MediaPlay' ||
-      c === 'MediaPause' ||
-      c === 'MediaTrackNext' ||
-      c === 'MediaTrackPrevious' ||
-      c === 'MediaStop'
-    );
-  };
-
-  const onKeyDown = (e: KeyboardEvent) => {
-    // Touches média hardware / OS — toujours actives (même dans un champ)
-    if (isMediaKey(e)) {
+  const onKey = (e: KeyboardEvent) => {
+    const media = mediaActionFromEvent(e);
+    if (media) {
       e.preventDefault();
       e.stopPropagation();
-      const p = usePlayer.getState();
-      const key = e.key.startsWith('Media') ? e.key : e.code;
-      if (!p.current && key !== 'MediaStop') return;
-      if (key === 'MediaPlayPause') p.toggle();
-      else if (key === 'MediaPlay') {
-        const audio = p.audioEl;
-        if (audio ? audio.paused : !p.isPlaying) p.toggle();
-      } else if (key === 'MediaPause' || key === 'MediaStop') {
-        const audio = p.audioEl;
-        if (audio && !audio.paused) {
-          audio.pause();
-          usePlayer.setState({ isPlaying: false });
-          updateMediaSessionMetadata();
-        } else if (p.isPlaying) p.toggle();
-      } else if (key === 'MediaTrackNext') void p.next();
-      else if (key === 'MediaTrackPrevious') void p.prev();
+      // keydown + keyup → une seule action (ignore keyup dupliqué immédiat)
+      if (e.type === 'keyup') return;
+      handleMediaAction(media);
       return;
     }
 
     if (isTypingTarget(e.target)) return;
-    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.altKey || e.metaKey) return;
     if (!usePlayer.getState().current) return;
 
-    // Espace / K = play-pause (style YouTube)
-    if (e.code === 'Space' || e.key === ' ' || e.key === 'k' || e.key === 'K') {
+    // Ctrl+← / Ctrl+→ = précédent / suivant (fiable sur tous claviers Linux)
+    if (e.ctrlKey && !e.shiftKey && e.key === 'ArrowRight') {
       e.preventDefault();
-      usePlayer.getState().toggle();
+      doNext();
       return;
     }
+    if (e.ctrlKey && !e.shiftKey && e.key === 'ArrowLeft') {
+      e.preventDefault();
+      doPrev();
+      return;
+    }
+    if (e.ctrlKey) return;
+
+    // Espace / K = play-pause
+    if (e.code === 'Space' || e.key === ' ' || e.key === 'k' || e.key === 'K') {
+      e.preventDefault();
+      const p = usePlayer.getState();
+      const audio = p.audioEl;
+      if (audio ? audio.paused || audio.ended : !p.isPlaying) ensurePlaying();
+      else ensurePaused();
+      return;
+    }
+
     // Shift+N / Shift+P — piste suivante / précédente
     if (e.shiftKey && (e.key === 'N' || e.key === 'n')) {
       e.preventDefault();
-      void usePlayer.getState().next();
+      doNext();
       return;
     }
     if (e.shiftKey && (e.key === 'P' || e.key === 'p')) {
       e.preventDefault();
-      void usePlayer.getState().prev();
+      doPrev();
       return;
     }
-    // J / L ou flèches — seek ±10s (hors champ texte)
+
+    // [ ] = prev / next (secours sans modificateur)
+    if (e.key === ']' || e.code === 'BracketRight') {
+      e.preventDefault();
+      doNext();
+      return;
+    }
+    if (e.key === '[' || e.code === 'BracketLeft') {
+      e.preventDefault();
+      doPrev();
+      return;
+    }
+
+    // J / L ou flèches — seek ±10s
     if (e.key === 'ArrowLeft' || e.key === 'j' || e.key === 'J') {
       e.preventDefault();
       const p = usePlayer.getState();
@@ -200,19 +277,23 @@ export function installMediaKeys(): () => void {
     }
   };
 
-  // Capture = prioritaire même si un enfant stoppe la propagation
-  window.addEventListener('keydown', onKeyDown, true);
+  window.addEventListener('keydown', onKey, true);
+  window.addEventListener('keyup', onKey, true);
+  document.addEventListener('keydown', onKey, true);
 
-  // Garde metadata / handlers à jour quand le store change
   const unsub = usePlayer.subscribe((state, prev) => {
     if (
       state.current?.id !== prev.current?.id ||
       state.isPlaying !== prev.isPlaying ||
+      state.audioEl !== prev.audioEl ||
       Math.floor(state.progress) !== Math.floor(prev.progress) ||
       state.duration !== prev.duration
     ) {
-      // Throttle léger via rAF pour progress
-      if (state.current?.id === prev.current?.id && state.isPlaying === prev.isPlaying) {
+      if (
+        state.current?.id === prev.current?.id &&
+        state.isPlaying === prev.isPlaying &&
+        state.audioEl === prev.audioEl
+      ) {
         if (Math.abs(state.progress - prev.progress) < 1 && state.duration === prev.duration) {
           return;
         }
@@ -221,18 +302,84 @@ export function installMediaKeys(): () => void {
     }
   });
 
-  // Re-wire si l’onglet redevient visible (certains navigateurs droppent les handlers)
   const onVis = () => {
     if (document.visibilityState === 'visible') {
       wireMediaSession();
       updateMediaSessionMetadata();
     }
   };
+  const onFocus = () => {
+    wireMediaSession();
+    updateMediaSessionMetadata();
+  };
   document.addEventListener('visibilitychange', onVis);
+  window.addEventListener('focus', onFocus);
+
+  // Keepalive MPRIS : Chromium Linux perd parfois la session
+  const keepAlive = window.setInterval(() => {
+    if (!usePlayer.getState().current) return;
+    wireMediaSession();
+    try {
+      const audio = audioEl();
+      const playing = audio ? !audio.paused && !audio.ended : usePlayer.getState().isPlaying;
+      navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+    } catch {
+      /* ignore */
+    }
+  }, 8000);
+
+  // Branche play/pause audio dès qu’un élément est lié
+  let attached: HTMLAudioElement | null = null;
+  const audioListeners: Array<[string, EventListener]> = [];
+  const attachAudio = (el: HTMLAudioElement | null) => {
+    if (attached === el) return;
+    if (attached) {
+      for (const [ev, fn] of audioListeners) attached.removeEventListener(ev, fn);
+      audioListeners.length = 0;
+    }
+    attached = el;
+    if (!el) return;
+    const bump = () => {
+      wireMediaSession();
+      updateMediaSessionMetadata();
+    };
+    for (const ev of ['play', 'playing', 'pause', 'ended', 'loadedmetadata', 'timeupdate'] as const) {
+      // timeupdate : throttle via updateMediaSessionMetadata (déjà soft)
+      const fn: EventListener =
+        ev === 'timeupdate'
+          ? () => {
+              const { progress, duration } = usePlayer.getState();
+              if (!duration) return;
+              try {
+                navigator.mediaSession.setPositionState({
+                  duration,
+                  position: Math.min(Math.max(0, progress || el.currentTime), duration),
+                  playbackRate: 1,
+                });
+              } catch {
+                /* ignore */
+              }
+            }
+          : bump;
+      el.addEventListener(ev, fn);
+      audioListeners.push([ev, fn]);
+    }
+    bump();
+  };
+  attachAudio(usePlayer.getState().audioEl);
+  const unsubAudio = usePlayer.subscribe((s, prev) => {
+    if (s.audioEl !== prev.audioEl) attachAudio(s.audioEl);
+  });
 
   return () => {
-    window.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('keyup', onKey, true);
+    document.removeEventListener('keydown', onKey, true);
     document.removeEventListener('visibilitychange', onVis);
+    window.removeEventListener('focus', onFocus);
+    window.clearInterval(keepAlive);
     unsub();
+    unsubAudio();
+    attachAudio(null);
   };
 }

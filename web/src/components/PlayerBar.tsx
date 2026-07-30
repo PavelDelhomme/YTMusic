@@ -188,7 +188,7 @@ export function PlayerBar({
               void prev();
             }}
             className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10"
-            title="Précédent"
+            title="Précédent (Ctrl+← · [ · touche média)"
             aria-label="Titre précédent"
           >
             <SkipBack className="h-6 w-6 fill-white" />
@@ -201,7 +201,7 @@ export function PlayerBar({
             }}
             disabled={isLoading}
             className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition hover:scale-105 disabled:opacity-60"
-            title={isPlaying ? 'Pause' : 'Lecture'}
+            title={isPlaying ? 'Pause (Espace · touche média)' : 'Lecture (Espace · touche média)'}
             aria-label={isPlaying ? 'Pause' : 'Lecture'}
           >
             {isPlaying ? <Pause className="h-6 w-6 fill-black" /> : <Play className="h-6 w-6 fill-black" />}
@@ -213,7 +213,7 @@ export function PlayerBar({
               void next();
             }}
             className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10"
-            title="Suivant"
+            title="Suivant (Ctrl+→ · ] · touche média)"
             aria-label="Titre suivant"
           >
             <SkipForward className="h-6 w-6 fill-white" />
