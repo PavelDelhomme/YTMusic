@@ -220,14 +220,30 @@ function collectFromResult(result: any): SearchBuckets {
     else buckets.songs.push(mapped);
   };
 
-  const contents = result?.contents || [];
+  // Formes Innertube variables : contents, results, items, shelves
+  const contents =
+    result?.contents ||
+    result?.results ||
+    result?.items ||
+    result?.sections ||
+    [];
   for (const shelf of contents) {
     const title = String(
-      shelf?.header?.title?.text || shelf?.title?.text || shelf?.header?.title || '',
+      shelf?.header?.title?.text || shelf?.title?.text || shelf?.header?.title || shelf?.title || '',
     );
     const shelfBucket = shelfBucketFromTitle(title);
     const shelfType = String(shelf?.type || '');
-    let items = shelf?.contents || shelf?.items || [];
+    let items = shelf?.contents || shelf?.items || shelf?.results || [];
+
+    // Item plat (pas un shelf) — mapper directement
+    if (!items.length && (shelf?.id || shelf?.video_id || shelf?.browse_id)) {
+      const mapped = mapAny(shelf);
+      if (mapped) {
+        if (shelfBucket) push(mapped, shelfBucket);
+        else push(mapped);
+      }
+      continue;
+    }
 
     // MusicCardShelf: carte top + liste imbriquée — bucket selon le type mappé
     if (shelfType === 'MusicCardShelf') {
@@ -242,7 +258,7 @@ function collectFromResult(result: any): SearchBuckets {
           if (!buckets.topResult) buckets.topResult = card;
         }
       }
-      items = items.filter((i: any) => i?.type === 'MusicResponsiveListItem');
+      items = items.filter((i: any) => i?.type === 'MusicResponsiveListItem' || i?.id);
     }
 
     for (const item of items) {
@@ -253,14 +269,14 @@ function collectFromResult(result: any): SearchBuckets {
     }
   }
 
-  const top = result?.header || result?.top_result;
+  const top = result?.header || result?.top_result || result?.reframed_header;
   if (top && !buckets.topResult) {
     buckets.topResult = mapAny(top?.contents?.[0] || top) || null;
   }
 
   for (const key of ['songs', 'videos', 'albums', 'artists', 'playlists'] as const) {
     const shelf = result?.[key];
-    const items = shelf?.contents || shelf?.items || [];
+    const items = shelf?.contents || shelf?.items || (Array.isArray(shelf) ? shelf : []);
     for (const item of items) {
       const mapped = mapAny(item);
       if (mapped) buckets[key].push(mapped);
@@ -364,16 +380,23 @@ export async function search(
 
   if (filterNorm === 'all') {
     [primary, songExtra, artistExtra, albumExtra] = await Promise.all([
-      innertubeSearch(q),
+      innertubeSearch(q).catch(() => null),
       innertubeSearch(q, 'song').catch(() => null),
       innertubeSearch(q, 'artist').catch(() => null),
       innertubeSearch(q, 'album').catch(() => null),
     ]);
+    if (!primary && !songExtra && !artistExtra && !albumExtra) {
+      // Dernier essai soft : recherche sans filtre
+      primary = await innertubeSearch(q).catch(() => null);
+    }
   } else {
-    primary = await innertubeSearch(q, filterNorm);
+    primary = await innertubeSearch(q, filterNorm).catch(() => null);
+    if (!primary) {
+      primary = await innertubeSearch(q).catch(() => null);
+    }
   }
 
-  const main = collectFromResult(primary);
+  const main = primary ? collectFromResult(primary) : emptyBuckets();
   const fromSongs = songExtra ? collectFromResult(songExtra) : emptyBuckets();
   const fromArtists = artistExtra ? collectFromResult(artistExtra) : emptyBuckets();
   const fromAlbums = albumExtra ? collectFromResult(albumExtra) : emptyBuckets();

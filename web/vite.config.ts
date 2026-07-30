@@ -90,13 +90,35 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:8787',
+        target: 'http://127.0.0.1:8787',
         changeOrigin: true,
+        timeout: 120_000,
+        proxyTimeout: 120_000,
+        configure: (proxy) => {
+          proxy.on('error', (err, _req, res) => {
+            console.error('[vite-proxy /api]', err.message);
+            if (res && 'writeHead' in res && !res.headersSent) {
+              res.writeHead(502, { 'Content-Type': 'application/json' });
+              res.end(
+                JSON.stringify({
+                  error: 'Bad Gateway — API indisponible sur :8787',
+                  hint: 'Lance make ensure-api ou make up-full',
+                }),
+              );
+            }
+          });
+        },
       },
       '/ws': {
-        target: 'ws://localhost:8787',
+        target: 'ws://127.0.0.1:8787',
         ws: true,
         changeOrigin: true,
+        timeout: 0,
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            console.error('[vite-proxy /ws]', err.message);
+          });
+        },
       },
     },
   },

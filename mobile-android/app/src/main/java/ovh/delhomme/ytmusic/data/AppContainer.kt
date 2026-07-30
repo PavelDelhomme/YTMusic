@@ -73,13 +73,43 @@ class AppContainer(context: Context) {
         BuildConfig.API_BASE_URL.trimEnd('/') + "/api/stream/$trackId/url"
 
     suspend fun ensureFreshToken(): Boolean {
-        val refresh = tokenStore.getRefresh() ?: return tokenStore.getAccess() != null
+        val access = tokenStore.getAccess()
+        val refresh = tokenStore.getRefresh()
+        if (refresh.isNullOrBlank()) return !access.isNullOrBlank()
+        // Ne refresh que si l’access est absent ou proche de l’expiration (~2 jours)
+        if (!access.isNullOrBlank() && jwtExpiresInMs(access) > 2L * 24 * 3600 * 1000) {
+            return true
+        }
         return try {
             val r = api.refresh(RefreshBody(refresh))
             tokenStore.saveSession(r.token, r.refreshToken ?: refresh, r.user.email, r.user.name)
             true
         } catch (_: Exception) {
-            false
+            // Garde la session si l’access est encore valide
+            !access.isNullOrBlank() && jwtExpiresInMs(access) > 0
+        }
+    }
+
+    companion object {
+        /** Decode JWT exp sans vérif crypto (indicatif client). */
+        fun jwtExpiresInMs(jwt: String): Long {
+            return try {
+                val parts = jwt.split('.')
+                if (parts.size < 2) return 0L
+                val padded = parts[1]
+                    .replace('-', '+')
+                    .replace('_', '/')
+                    .let {
+                        val rem = it.length % 4
+                        if (rem == 0) it else it + "=".repeat(4 - rem)
+                    }
+                val json = String(android.util.Base64.decode(padded, android.util.Base64.DEFAULT))
+                val exp = Regex("\"exp\"\\s*:\\s*(\\d+)").find(json)?.groupValues?.get(1)?.toLongOrNull()
+                    ?: return 0L
+                exp * 1000L - System.currentTimeMillis()
+            } catch (_: Exception) {
+                0L
+            }
         }
     }
 }

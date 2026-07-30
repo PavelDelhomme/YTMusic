@@ -6,6 +6,10 @@ import { useLibrary } from './library';
 
 type RepeatMode = 'off' | 'all' | 'one';
 
+function refreshMediaSession() {
+  void import('../lib/mediaKeys').then((m) => m.updateMediaSessionMetadata()).catch(() => undefined);
+}
+
 type PlayerState = {
   current: Track | null;
   queue: Track[];
@@ -83,58 +87,6 @@ function mergeArtists(
       name: r.name || l?.name || 'Artiste',
       id: r.id || l?.id,
     };
-  });
-}
-
-function setupMediaSession(
-  track: Track,
-  handlers: {
-    play: () => void;
-    pause: () => void;
-    next: () => void;
-    prev: () => void;
-    seek: (time: number) => void;
-  },
-) {
-  if (!('mediaSession' in navigator)) return;
-  navigator.mediaSession.metadata = new MediaMetadata({
-    title: track.title,
-    artist: artistNames(track),
-    album: track.album?.name || 'YTMusic',
-    artwork: thumb(track, 512)
-      ? [
-          { src: thumb(track, 96), sizes: '96x96', type: 'image/jpeg' },
-          { src: thumb(track, 256), sizes: '256x256', type: 'image/jpeg' },
-          { src: thumb(track, 512), sizes: '512x512', type: 'image/jpeg' },
-        ]
-      : [],
-  });
-  const set = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
-    try {
-      navigator.mediaSession.setActionHandler(action, handler);
-    } catch {
-      /* ignore */
-    }
-  };
-  set('play', handlers.play);
-  set('pause', handlers.pause);
-  set('stop', handlers.pause);
-  set('previoustrack', handlers.prev);
-  set('nexttrack', handlers.next);
-  set('seekto', (details) => {
-    if (typeof details.seekTime === 'number') handlers.seek(details.seekTime);
-  });
-  set('seekbackward', (details) => {
-    const audio = usePlayer.getState().audioEl;
-    if (!audio) return;
-    const off = details.seekOffset ?? 10;
-    handlers.seek(Math.max(0, audio.currentTime - off));
-  });
-  set('seekforward', (details) => {
-    const audio = usePlayer.getState().audioEl;
-    if (!audio) return;
-    const off = details.seekOffset ?? 10;
-    handlers.seek(Math.min(audio.duration || audio.currentTime + off, audio.currentTime + off));
   });
 }
 
@@ -547,25 +499,8 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   }
   if (gen !== playGeneration) return;
 
-  setupMediaSession(enriched, {
-    play: () => {
-      void audio.play();
-      usePlayer.setState({ isPlaying: true });
-      publish();
-    },
-    pause: () => {
-      audio.pause();
-      usePlayer.setState({ isPlaying: false });
-      publish();
-    },
-    next: () => void usePlayer.getState().next(),
-    prev: () => void usePlayer.getState().prev(),
-    seek: (time) => {
-      audio.currentTime = time;
-      usePlayer.setState({ progress: time });
-      publish();
-    },
-  });
+  // Media Session unique via mediaKeys (touches clavier OS + Chrome)
+  refreshMediaSession();
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
 }
 
@@ -589,6 +524,12 @@ export const usePlayer = create<PlayerState>((set, get) => ({
 
   bindAudio: (el) => {
     set({ audioEl: el });
+    if (el) {
+      const sync = () => refreshMediaSession();
+      el.addEventListener('play', sync);
+      el.addEventListener('pause', sync);
+      el.addEventListener('ended', sync);
+    }
     if (el && get().hydrated && get().current) {
       void restoreAudioFromPersisted();
     }
@@ -699,14 +640,20 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       const playing = get().isPlaying;
       sendCmd({ action: playing ? 'pause' : 'resume' });
       set({ isPlaying: !playing });
+      refreshMediaSession();
       return;
     }
     const { audioEl, isPlaying, current, queue, progress } = get();
-    if (!audioEl) return;
+    if (!audioEl) {
+      if (current) {
+        void get().play(current, queue.length ? queue : [current], { preserveQueue: true });
+      }
+      return;
+    }
     if (isPlaying) {
       audioEl.pause();
       set({ isPlaying: false });
-      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+      refreshMediaSession();
       persistPlayer();
     } else {
       const needsLoad =
@@ -727,7 +674,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
             }
             await audioEl.play();
             set({ isPlaying: true, isLoading: false });
-            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+            refreshMediaSession();
             publish();
             if (current.id) void ensureAutoRadio(current.id);
           } catch (err) {
@@ -743,7 +690,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       }
       void audioEl.play().then(() => {
         set({ isPlaying: true });
-        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+        refreshMediaSession();
       });
     }
     publish();

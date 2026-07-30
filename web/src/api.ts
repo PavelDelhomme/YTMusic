@@ -195,29 +195,54 @@ async function req<T>(url: string, init?: RequestInit, retried = false): Promise
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    const err = new Error(body.error || res.statusText) as Error & { needs2fa?: boolean };
+    const msg =
+      body.error ||
+      (res.status === 502
+        ? 'Bad Gateway — API indisponible (make ensure-api)'
+        : res.statusText);
+    const err = new Error(msg) as Error & { needs2fa?: boolean; status?: number };
     if (body.needs2fa) err.needs2fa = true;
+    err.status = res.status;
     throw err;
   }
   return res.json() as Promise<T>;
 }
 
-async function tryRefresh() {
-  const refreshToken = getRefreshToken();
+/** Un seul refresh à la fois (évite course multi-onglets / appels parallèles). */
+let refreshInFlight: Promise<boolean> | null = null;
+
+async function tryRefresh(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    const refreshToken = getRefreshToken();
+    const attempt = async (body: Record<string, unknown>) => {
+      const r = await fetch(apiUrl('/api/auth/refresh'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-Device-Id': deviceId() },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) return null;
+      return r.json() as Promise<{ token?: string; refreshToken?: string }>;
+    };
+    try {
+      // 1) localStorage + cookies ; 2) cookies seuls si le refresh local est périmé
+      let data = await attempt(refreshToken ? { refreshToken } : {});
+      if (!data && refreshToken) {
+        data = await attempt({});
+      }
+      if (!data) return false;
+      if (data.token) setToken(data.token);
+      if (data.refreshToken) setRefreshToken(data.refreshToken);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
   try {
-    const r = await fetch(apiUrl('/api/auth/refresh'), {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', 'X-Device-Id': deviceId() },
-      body: JSON.stringify({ refreshToken }),
-    });
-    if (!r.ok) return false;
-    const data = await r.json();
-    if (data.token) setToken(data.token);
-    if (data.refreshToken) setRefreshToken(data.refreshToken);
-    return true;
-  } catch {
-    return false;
+    return await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
   }
 }
 
@@ -247,7 +272,10 @@ export const api = {
   refresh: (refreshToken?: string) =>
     req<{ user: User; token: string; refreshToken: string }>('/api/auth/refresh', {
       method: 'POST',
-      body: JSON.stringify({ refreshToken }),
+      body: JSON.stringify({
+        // undefined → localStorage ; '' → cookies httpOnly seuls
+        refreshToken: refreshToken !== undefined ? refreshToken : getRefreshToken(),
+      }),
     }),
   verifyEmail: (token: string) =>
     req<{ ok: boolean; user: User }>('/api/auth/verify-email', {

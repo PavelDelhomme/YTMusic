@@ -120,6 +120,14 @@ db.exec(`
   );
 `);
 
+// Indexes pour biblio (idempotents)
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_liked_tracks_user ON liked_tracks(user_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_liked_tracks_track ON liked_tracks(track_id);
+  CREATE INDEX IF NOT EXISTS idx_history_user_played ON history(user_id, played_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_playlist_tracks_pl ON playlist_tracks(playlist_id, position);
+`);
+
 export function upsertTrack(track: Track) {
   db.prepare(
     `INSERT INTO tracks_cache (id, payload, updated_at) VALUES (?, ?, ?)

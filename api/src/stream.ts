@@ -137,6 +137,10 @@ export async function handleStream(req: Request, res: Response) {
       const upstream = await fetch(format.url, {
         headers: req.headers.range ? { Range: String(req.headers.range) } : {},
       });
+      // Ne pas propager 403/502 googlevideo brut → fallbacks Innertube / yt-dlp
+      if (upstream.status >= 400) {
+        throw new Error(`upstream audio ${upstream.status}`);
+      }
       res.status(upstream.status);
       const ct = upstream.headers.get('content-type');
       const cl = upstream.headers.get('content-length');

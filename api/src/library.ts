@@ -19,14 +19,16 @@ function parseTrack(row: { payload?: string; track_id?: string }): Track | null 
 }
 
 export function getFullLibrary(userId: string) {
+  // LEFT JOIN : un like sans cache ne disparaît plus (placeholder minimal)
   const likedRows = db
     .prepare(
-      `SELECT t.payload FROM liked_tracks l
-       JOIN tracks_cache t ON t.id = l.track_id
+      `SELECT l.track_id AS track_id, t.payload AS payload
+       FROM liked_tracks l
+       LEFT JOIN tracks_cache t ON t.id = l.track_id
        WHERE l.user_id = ?
        ORDER BY l.created_at DESC`,
     )
-    .all(userId) as { payload: string }[];
+    .all(userId) as { track_id: string; payload: string | null }[];
 
   const likedPlaylists = (
     db
@@ -58,8 +60,27 @@ export function getFullLibrary(userId: string) {
       .all(userId) as { track_id: string }[]
   ).map((r) => r.track_id);
 
+  const liked = likedRows
+    .map((r) => {
+      if (r.payload) {
+        try {
+          return JSON.parse(r.payload) as Track;
+        } catch {
+          /* fallthrough */
+        }
+      }
+      return {
+        id: r.track_id,
+        title: r.track_id,
+        artists: [],
+        thumbnails: [],
+        type: 'song' as const,
+      } satisfies Track;
+    })
+    .filter(Boolean);
+
   return {
-    liked: likedRows.map((r) => JSON.parse(r.payload) as Track),
+    liked,
     likedPlaylists,
     albums,
     artists,

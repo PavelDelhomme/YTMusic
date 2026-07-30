@@ -192,6 +192,13 @@ fun SearchScreen(
                     modifier = Modifier.padding(24.dp),
                 )
             }
+            !state.loading && state.sections.isEmpty() -> {
+                Text(
+                    "Aucun résultat pour « ${state.query} ». Essaie un autre filtre.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(24.dp),
+                )
+            }
             else -> {
                 LazyColumn(contentPadding = PaddingValues(bottom = 24.dp, top = 4.dp)) {
                     state.sections.forEach { section ->
