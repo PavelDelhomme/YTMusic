@@ -30,7 +30,7 @@ type PlayerState = {
   playQueue: (tracks: Track[], startIndex?: number) => Promise<void>;
   playAt: (index: number) => Promise<void>;
   toggle: () => void;
-  next: () => Promise<void>;
+  next: (opts?: { fromEnded?: boolean }) => Promise<void>;
   prev: () => Promise<void>;
   setProgress: (n: number) => void;
   seek: (n: number) => void;
@@ -707,7 +707,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       });
   },
 
-  next: async () => {
+  next: async (opts) => {
     if (!isActivePlayer()) {
       sendCmd({ action: 'next' });
       return;
@@ -723,13 +723,15 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       return;
     }
     reportSkipIfEarly(progress);
-    if (repeat === 'one') {
+    // Boucle 1 titre : seulement à la fin naturelle du morceau.
+    // Next manuel (bouton / clavier) → passe au suivant et boucle sur celui-là.
+    if (repeat === 'one' && opts?.fromEnded) {
       await get().playAt(queueIndex);
       return;
     }
     let nextIndex = queueIndex + 1;
     if (nextIndex >= queue.length) {
-      if (repeat === 'all') {
+      if (repeat === 'all' || repeat === 'one') {
         nextIndex = 0;
       } else if (current?.id) {
         await ensureAutoRadio(current.id);
