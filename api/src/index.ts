@@ -674,14 +674,23 @@ app.get('/api/deploy/info', accountRequired, (_req, res) => {
 
 app.get('/api/home', accountRequired, async (req, res) => {
   try {
-    const personal: Awaited<ReturnType<typeof getHome>> = [];
-    const reco = await homeReco(req.userId!);
-    personal.push(...(reco.shelves as Awaited<ReturnType<typeof getHome>>));
+    const userId = req.userId!;
+    const history = getHistory(userId, 40);
+    const top = getTopListened(userId, 25);
+    const likedPl = getFullLibrary(userId).likedPlaylists || [];
+    const localPl = listPlaylists(userId);
 
-    const history = getHistory(req.userId!, 40);
-    const top = getTopListened(req.userId!, 25);
-    const likedPl = getFullLibrary(req.userId!).likedPlaylists || [];
-    const localPl = listPlaylists(req.userId!);
+    // reco perso + home YT + similar en parallèle (gros gain cold start)
+    const similarPromise =
+      top[0] && /^[a-zA-Z0-9_-]{11}$/.test(top[0].id)
+        ? similarForUser(userId, top[0].id, top[0]).catch(() => null)
+        : Promise.resolve(null);
+
+    const [reco, ytHome, sim] = await Promise.all([homeReco(userId), getHome(), similarPromise]);
+
+    const personal: Awaited<ReturnType<typeof getHome>> = [
+      ...(reco.shelves as Awaited<ReturnType<typeof getHome>>),
+    ];
 
     if (likedPl.length) {
       personal.push({
@@ -710,18 +719,10 @@ app.get('/api/home', accountRequired, async (req, res) => {
       });
     }
 
-    if (top[0] && /^[a-zA-Z0-9_-]{11}$/.test(top[0].id)) {
-      try {
-        const sim = await similarForUser(req.userId!, top[0].id, top[0]);
-        if (sim.tracks.length) {
-          personal.push({ title: 'Rapide · pour toi', items: sim.tracks.slice(0, 20) });
-        }
-      } catch {
-        /* ignore */
-      }
+    if (sim?.tracks?.length) {
+      personal.push({ title: 'Rapide · pour toi', items: sim.tracks.slice(0, 20) });
     }
 
-    const ytHome = await getHome();
     const shelves = [...personal, ...ytHome];
     const seeds = [...top, ...history]
       .map((t) => t.id)
@@ -757,14 +758,12 @@ app.get('/api/home/more', accountRequired, async (req, res) => {
 
 app.get('/api/explore', accountRequired, async (req, res) => {
   try {
-    const yt = await getExplore();
-    const reco = await exploreReco(req.userId!);
-    const radioShelves = reco.radios
-      .filter((r) => r.items.length)
-      .map((r) => ({ title: `Radio · ${r.title}`, items: r.items }));
+    // Léger : YT Explore seulement. Les radios se chargent une par une côté client.
+    const yt = await getExplore().catch(() => [] as Awaited<ReturnType<typeof getExplore>>);
+    const prefs = getPrefs(req.userId!);
     res.json({
-      shelves: [...radioShelves, ...yt],
-      needsOnboarding: reco.needsOnboarding,
+      shelves: yt,
+      needsOnboarding: !prefs.onboardingDone,
       radios: RADIO_CATEGORIES.map((c) => ({ id: c.id, title: c.title })),
     });
   } catch (err) {
@@ -1003,7 +1002,12 @@ app.get('/api/reco/similar/:trackId', accountRequired, async (req, res) => {
 
 app.get('/api/reco/radio/:category', accountRequired, async (req, res) => {
   try {
-    res.json(await radioForUser(req.userId!, p(req.params.category)));
+    const light =
+      req.query.preview === '1' ||
+      req.query.preview === 'true' ||
+      req.query.light === '1' ||
+      req.query.light === 'true';
+    res.json(await radioForUser(req.userId!, p(req.params.category), { light }));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

@@ -441,8 +441,10 @@ export const api = {
     req<{ ok: boolean; follows: any[] }>(`/api/artists/${id}/follow`, { method: 'DELETE' }),
   recoSimilar: (trackId: string) =>
     req<{ tracks: Track[]; related: Track[]; radio: Track[] }>(`/api/reco/similar/${trackId}`),
-  recoRadio: (category: string) =>
-    req<{ category: any; tracks: Track[]; seed: Track | null }>(`/api/reco/radio/${category}`),
+  recoRadio: (category: string, opts?: { preview?: boolean }) =>
+    req<{ category: any; tracks: Track[]; seed: Track | null }>(
+      `/api/reco/radio/${category}${opts?.preview ? '?preview=1' : ''}`,
+    ),
   recoRadios: () => req<{ radios: { id: string; title: string }[] }>('/api/reco/radios'),
   recoFeedback: (payload: {
     trackId: string;

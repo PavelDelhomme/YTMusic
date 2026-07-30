@@ -263,7 +263,7 @@ export function LibraryPage() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <button
               type="button"
-              onClick={() => setTab('titres')}
+              onClick={() => setTab('liked')}
               className="rounded-xl bg-yt-elevated p-4 text-left transition hover:bg-yt-hover"
             >
               <div className="mb-3 flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-yt-red to-yt-red-dim">

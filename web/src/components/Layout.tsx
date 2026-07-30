@@ -47,6 +47,7 @@ export function Layout() {
   const initSession = useSession((s) => s.init);
   const remoteState = useSession((s) => s.remoteState);
   const isActivePlayer = useSession((s) => s.isActivePlayer);
+  const transferHere = useSession((s) => s.transferHere);
   const user = useAuth((s) => s.user);
   const authLoaded = useAuth((s) => s.loaded);
   const logout = useAuth((s) => s.logout);
@@ -229,20 +230,34 @@ export function Layout() {
   }, [hydrate]);
 
   // Persistance lecture à la fermeture / mise en arrière-plan (web + PWA)
+  // + refresh biblio au retour (multi-appareils / like≠save)
   useEffect(() => {
+    let lastLibRefresh = 0;
     const flush = () => flushPlayerPersist();
     const onHide = () => {
       if (document.visibilityState === 'hidden') flush();
     };
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      const u = useAuth.getState().user;
+      const guest = !u || u.isGuest || u.email?.includes('@local.ytmusic');
+      if (guest) return;
+      const now = Date.now();
+      if (now - lastLibRefresh < 45_000) return;
+      lastLibRefresh = now;
+      void refresh();
+    };
     window.addEventListener('pagehide', flush);
     window.addEventListener('beforeunload', flush);
     document.addEventListener('visibilitychange', onHide);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       window.removeEventListener('pagehide', flush);
       window.removeEventListener('beforeunload', flush);
       document.removeEventListener('visibilitychange', onHide);
+      document.removeEventListener('visibilitychange', onVisible);
     };
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     if (!remoteState || isActivePlayer) return;
@@ -571,8 +586,18 @@ export function Layout() {
             {authLoaded && (!isGuest || allowGuestPage) && (
               <>
                 {!isActivePlayer && !allowGuestPage && (
-                  <div className="mb-4 rounded-xl border border-yt-red/30 bg-yt-red/10 px-4 py-2 text-sm">
-                    Contrôle à distance — la musique joue sur un autre appareil. Tu peux tout piloter d’ici.
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-yt-red/30 bg-yt-red/10 px-4 py-2 text-sm">
+                    <span>La musique joue ailleurs — clique Lecture pour écouter ici.</span>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded-full bg-yt-red px-3 py-1 text-xs font-medium text-white"
+                      onClick={() => {
+                        transferHere();
+                        void usePlayer.getState().toggle();
+                      }}
+                    >
+                      Écouter ici
+                    </button>
                   </div>
                 )}
                 <Outlet />
@@ -587,8 +612,8 @@ export function Layout() {
       {!nowPlayingOpen && !navOpen && (
         <nav
           className={`fixed left-0 right-0 z-30 flex overflow-x-auto border-t border-yt-border bg-yt-surface lg:hidden ${
-            // Barre lecteur ~72–88 px + bandeau « contrôle distant » éventuel
-            hasPlayback ? 'bottom-[100px] sm:bottom-[108px]' : 'bottom-0'
+            // Mobile player ~ 2 lignes (~112px) + safe area ; desktop bar ~88px
+            hasPlayback ? 'bottom-[7.5rem] sm:bottom-[6.75rem]' : 'bottom-0'
           }`}
           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
         >

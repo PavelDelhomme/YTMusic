@@ -264,6 +264,12 @@ interface YtMusicApi {
     @GET("api/home")
     suspend fun home(): HomeResponse
 
+    @GET("api/home/more")
+    suspend fun homeMore(
+        @Query("page") page: Int,
+        @Query("seeds") seeds: String,
+    ): HomeResponse
+
     @GET("api/explore")
     suspend fun explore(): HomeResponse
 

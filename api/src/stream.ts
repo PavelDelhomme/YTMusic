@@ -226,13 +226,13 @@ export async function handleStreamWarm(req: Request, res: Response) {
   res.json({ ok: true, requested: ids.length, warmed: ok });
 }
 
-/** Redirect 302 pour ExoPlayer / clients qui passent ?redirect=1. */
+/**
+ * Redirect 302 vers googlevideo — uniquement si demandé explicitement (?redirect=1).
+ * Ne pas auto-rediriger ExoPlayer/OkHttp : l’URL CDN est liée à l’IP du serveur API,
+ * donc un client sur une autre IP reçoit 403.
+ */
 function wantsDirectRedirect(req: Request): boolean {
-  if (String(req.query.redirect || '') === '1') return true;
-  const client = String(req.headers['x-ytm-client'] || '').toLowerCase();
-  if (client === 'android' || client === 'mobile') return true;
-  const ua = String(req.headers['user-agent'] || '').toLowerCase();
-  return ua.includes('okhttp') || ua.includes('exoplayer') || ua.includes('media3');
+  return String(req.query.redirect || '') === '1';
 }
 
 export async function downloadTrack(videoId: string): Promise<string> {
