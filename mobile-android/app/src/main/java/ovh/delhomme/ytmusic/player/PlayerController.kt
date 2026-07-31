@@ -229,6 +229,13 @@ class PlayerController(
     fun skipNext() {
         connect()
         val p = player() ?: PlaybackService.Holder.player ?: return
+        val nextIdx = when {
+            p.hasNextMediaItem() -> p.currentMediaItemIndex + 1
+            repeatMode == RepeatMode.All && p.mediaItemCount > 0 -> 0
+            p.mediaItemCount > 1 -> (p.currentMediaItemIndex + 1) % p.mediaItemCount
+            else -> p.currentMediaItemIndex
+        }
+        warmAround(PlaybackService.Holder.queue, nextIdx)
         // REPEAT_MODE_ONE bloque le next ExoPlayer : on le désactive le temps du saut
         val wasOne = repeatMode == RepeatMode.One
         if (wasOne) p.repeatMode = Player.REPEAT_MODE_OFF
@@ -242,8 +249,7 @@ class PlayerController(
                 p.play()
             }
             p.mediaItemCount > 1 -> {
-                val next = (p.currentMediaItemIndex + 1) % p.mediaItemCount
-                p.seekTo(next, 0L)
+                p.seekTo(nextIdx, 0L)
                 p.play()
             }
             else -> {

@@ -13,6 +13,7 @@ import {
   Moon,
   Pin,
   PinOff,
+  Play,
   Share2,
   Smartphone,
   SlidersHorizontal,
@@ -73,7 +74,7 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
   const startMix = usePlayer((s) => s.startMix);
   const queue = usePlayer((s) => s.queue);
   const queueIndex = usePlayer((s) => s.queueIndex);
-  const { isLiked, isInLibrary, toggleLike, toggleLibrarySong, playlists, addToPlaylist, hasAlbum, hasArtist, isPlaylistLiked, applyLibrary, downloaded, refresh } =
+  const { isLiked, isInLibrary, toggleLike, toggleLibrarySong, playlists, addToPlaylist, hasAlbum, hasArtist, hasMix, saveMix, removeMix, isPlaylistLiked, applyLibrary, downloaded, refresh } =
     useLibrary();
   const pinId = usePins((s) => (item ? s.pinIdFor(item.id) : null));
   const togglePin = usePins((s) => s.togglePin);
@@ -217,6 +218,40 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
             <X className="h-6 w-6" />
           </button>
         </div>
+
+        {/* Mix radio */}
+        {item.type === 'mix' && (
+          <div className="border-b border-white/10 px-2 py-2">
+            <Row
+              icon={<Play className="h-4 w-4" />}
+              label="Lire le mix"
+              onClick={() =>
+                after(async () => {
+                  const r = await api.recoRadio(item.id);
+                  if (r.tracks?.length) usePlayer.getState().playQueue(r.tracks, 0);
+                })
+              }
+            />
+            <Row
+              icon={<Library className="h-4 w-4" />}
+              label={hasMix(item.id) ? 'Retirer de la bibliothèque' : 'Enregistrer le mix'}
+              sub={hasMix(item.id) ? undefined : 'Dans Bibliothèque → Mixes'}
+              onClick={() =>
+                after(async () => {
+                  if (hasMix(item.id)) await removeMix(item.id);
+                  else {
+                    await saveMix({
+                      id: item.id,
+                      title: item.title,
+                      covers: Array.isArray((item as any).covers) ? (item as any).covers : undefined,
+                      tracks: Array.isArray((item as any).tracks) ? (item as any).tracks : undefined,
+                    });
+                  }
+                })
+              }
+            />
+          </div>
+        )}
 
         {/* 3 boutons rapides */}
         {playable && (

@@ -15,12 +15,11 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import { api } from '../api';
+import { api, artistNames } from '../api';
 import { usePlayer } from '../store/player';
 import { useLibrary } from '../store/library';
 import { useSession } from '../store/session';
 import { useItemActions } from '../store/itemActions';
-import { ArtistLinks } from './ArtistLinks';
 import { CoverImage } from './CoverImage';
 import { formatClock } from '../lib/time';
 import type { NowPlayingTab } from './NowPlaying';
@@ -204,10 +203,10 @@ export function PlayerBar({
           if (e.key === 'ArrowLeft') seek(Math.max(0, progress - 5));
         }}
       >
-        <div className="absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 bg-[#3a3a3a] transition group-hover:h-1.5">
+        <div className="absolute inset-x-0 top-1/2 h-[2px] -translate-y-1/2 bg-[#3a3a3a] transition group-hover:h-1">
           <div className="relative h-full bg-[#ff0033]" style={{ width: `${pct}%` }}>
             <span
-              className="absolute right-0 top-1/2 h-3.5 w-3.5 -translate-y-1/2 translate-x-1/2 rounded-full bg-[#ff0033] shadow-[0_0_0_2px_#000] ring-2 ring-[#ff0033]/40 transition group-hover:scale-110"
+              className="absolute right-0 top-1/2 h-2.5 w-2.5 -translate-y-1/2 translate-x-1/2 rounded-full bg-[#ff0033] shadow-[0_0_0_2px_#000] ring-1 ring-[#ff0033]/40 transition group-hover:scale-110"
               aria-hidden
             />
           </div>
@@ -240,9 +239,7 @@ export function PlayerBar({
           </div>
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold leading-tight text-white">{current.title}</div>
-            <div className="truncate text-[11px] text-yt-muted" onClick={stop}>
-              <ArtistLinks track={current} />
-            </div>
+            <div className="truncate text-[11px] text-yt-muted">{artistNames(current)}</div>
           </div>
           <button
             type="button"
@@ -359,8 +356,8 @@ export function PlayerBar({
           </div>
           <div className="min-w-0 max-w-[min(420px,36vw)]">
             <div className="truncate text-sm font-semibold text-white">{current.title}</div>
-            <div className="truncate text-xs text-yt-muted" onClick={stop} onKeyDown={stop}>
-              <ArtistLinks track={current} />
+            <div className="truncate text-xs text-yt-muted">
+              {artistNames(current)}
               {current.album?.name ? <span> — {current.album.name}</span> : null}
             </div>
           </div>

@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type Shelf, type Track } from '../api';
 import { ShelfRow } from '../components/MediaCard';
+import { MixCollageCard } from '../components/MixCollageCard';
 import { usePlayer } from '../store/player';
+import { useLibrary } from '../store/library';
+import { useItemActions } from '../store/itemActions';
 import { Loader2, Radio } from 'lucide-react';
 
 type RadioCat = { id: string; title: string };
@@ -12,12 +15,18 @@ export function ExplorePage() {
   const [ytShelves, setYtShelves] = useState<Shelf[]>([]);
   const [radioShelves, setRadioShelves] = useState<RadioShelf[]>([]);
   const [radios, setRadios] = useState<RadioCat[]>([]);
+  const [radioPreviews, setRadioPreviews] = useState<Record<string, Track[]>>({});
   const [loading, setLoading] = useState(true);
   const [loadingRadios, setLoadingRadios] = useState(false);
   const [pendingRadios, setPendingRadios] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [startingId, setStartingId] = useState<string | null>(null);
   const playQueue = usePlayer((s) => s.playQueue);
+  const isPlaying = usePlayer((s) => s.isPlaying);
+  const currentId = usePlayer((s) => s.current?.id);
+  const hasMix = useLibrary((s) => s.hasMix);
+  const saveMix = useLibrary((s) => s.saveMix);
+  const openActions = useItemActions((s) => s.open);
   const cancelled = useRef(false);
 
   useEffect(() => {
@@ -53,6 +62,7 @@ export function ExplorePage() {
                 if (prev.some((s) => s.id === cat.id)) return prev;
                 return [...prev, { id: cat.id, title: `Radio · ${cat.title}`, items }];
               });
+              setRadioPreviews((prev) => ({ ...prev, [cat.id]: items.slice(0, 4) }));
             }
           } catch {
             /* radio individuelle KO → on continue */
@@ -107,19 +117,40 @@ export function ExplorePage() {
         <section className="mb-8">
           <div className="mb-3 flex items-center gap-2">
             <Radio className="h-4 w-4 text-yt-muted" />
-            <h2 className="font-display text-lg font-semibold">Lancer une radio</h2>
+            <h2 className="font-display text-lg font-semibold">Mixés pour toi</h2>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="shelf-scroll">
             {radios.map((r) => (
-              <button
+              <MixCollageCard
                 key={r.id}
-                type="button"
-                disabled={startingId === r.id}
+                title={r.title}
+                tracks={radioPreviews[r.id] || []}
+                busy={startingId === r.id}
+                subtitle="Mix radio"
+                saved={hasMix(r.id)}
+                playing={
+                  isPlaying &&
+                  Boolean(currentId) &&
+                  (radioPreviews[r.id] || []).some((t) => t.id === currentId)
+                }
                 onClick={() => void startRadio(r.id)}
-                className="rounded-full bg-yt-elevated px-4 py-2 text-sm text-yt-muted transition hover:bg-yt-hover hover:text-white disabled:opacity-60"
-              >
-                {startingId === r.id ? '…' : r.title}
-              </button>
+                onSave={() => {
+                  const covers = radioPreviews[r.id] || [];
+                  void saveMix({ id: r.id, title: r.title, covers, tracks: covers });
+                }}
+                onMore={() => {
+                  const covers = radioPreviews[r.id] || [];
+                  openActions({
+                    id: r.id,
+                    title: r.title,
+                    type: 'mix',
+                    artists: [{ name: 'Mix radio' }],
+                    thumbnails: covers.flatMap((t) => t.thumbnails || []).slice(0, 4),
+                    covers,
+                    tracks: covers,
+                  } as Track);
+                }}
+              />
             ))}
           </div>
         </section>

@@ -87,6 +87,24 @@ export function getFullLibrary(userId: string) {
       .all(userId) as { payload: string }[]
   ).map((r) => sanitizeLibraryItem(JSON.parse(r.payload)));
 
+  const mixes = (
+    db
+      .prepare(`SELECT payload FROM library_mixes WHERE user_id = ? ORDER BY created_at DESC`)
+      .all(userId) as { payload: string }[]
+  ).map((r) => {
+    try {
+      const raw = JSON.parse(r.payload) as Record<string, unknown>;
+      return {
+        ...raw,
+        id: String(raw.id || ''),
+        title: String(raw.title || 'Mix'),
+        type: 'mix',
+      };
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
+
   const playlists = listPlaylists(userId);
 
   const history = getHistory(userId, 500);
@@ -106,6 +124,7 @@ export function getFullLibrary(userId: string) {
     likedPlaylists,
     albums,
     artists,
+    mixes,
     playlists,
     history,
     downloaded,
@@ -207,6 +226,45 @@ export function saveArtist(userId: string, artist: Record<string, unknown>) {
 
 export function removeArtist(userId: string, artistId: string) {
   db.prepare('DELETE FROM library_artists WHERE user_id = ? AND artist_id = ?').run(userId, artistId);
+}
+
+/** Enregistre un mix radio (catégorie) dans la bibliothèque. */
+export function saveMix(userId: string, mix: Record<string, unknown>) {
+  const id = String(mix.id || '').trim();
+  if (!id) throw new Error('mix id manquant');
+  const title = String(mix.title || 'Mix').trim() || 'Mix';
+  const tracks = Array.isArray(mix.tracks) ? mix.tracks : [];
+  const covers = Array.isArray(mix.covers)
+    ? mix.covers
+    : tracks.slice(0, 4);
+  const payload = {
+    id,
+    title,
+    type: 'mix',
+    categoryId: id,
+    thumbnails: covers
+      .map((t: any) => (Array.isArray(t?.thumbnails) ? t.thumbnails[0] : null))
+      .filter(Boolean)
+      .slice(0, 4),
+    covers,
+    tracks: tracks.slice(0, 80),
+    trackCount: tracks.length || Number(mix.trackCount) || 0,
+  };
+  db.prepare(
+    `INSERT INTO library_mixes (user_id, mix_id, payload, created_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, mix_id) DO UPDATE SET payload = excluded.payload`,
+  ).run(userId, id, JSON.stringify(payload), Date.now());
+  return payload;
+}
+
+export function removeMix(userId: string, mixId: string) {
+  db.prepare('DELETE FROM library_mixes WHERE user_id = ? AND mix_id = ?').run(userId, mixId);
+}
+
+export function isMixSaved(userId: string, mixId: string) {
+  return Boolean(
+    db.prepare('SELECT 1 FROM library_mixes WHERE user_id = ? AND mix_id = ?').get(userId, mixId),
+  );
 }
 
 export function addHistory(userId: string, track: Track) {

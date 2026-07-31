@@ -43,6 +43,9 @@ import {
   toggleLikePlaylist,
   saveAlbum,
   removeAlbum,
+  saveMix,
+  removeMix,
+  isMixSaved,
   saveArtist,
   removeArtist,
   createPlaylist,
@@ -1280,6 +1283,33 @@ app.post('/api/library/artists', accountRequired, (req, res) => {
 app.delete('/api/library/artists/:id', accountRequired, (req, res) => {
   removeArtist(req.userId!, p(req.params.id));
   res.json({ ok: true, library: getFullLibrary(req.userId!) });
+});
+
+app.post('/api/library/mixes', accountRequired, async (req, res) => {
+  try {
+    const id = String(req.body?.id || '').trim();
+    const title = String(req.body?.title || 'Mix').trim() || 'Mix';
+    let tracks = Array.isArray(req.body?.tracks) ? req.body.tracks : [];
+    let covers = Array.isArray(req.body?.covers) ? req.body.covers : [];
+    if (!tracks.length && id) {
+      const mix = await radioForUser(req.userId!, id, { light: true });
+      tracks = mix.tracks || [];
+    }
+    if (!covers.length) covers = tracks.slice(0, 4);
+    const saved = saveMix(req.userId!, { id, title, tracks, covers });
+    res.json({ mix: saved, saved: true, library: getFullLibrary(req.userId!) });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.delete('/api/library/mixes/:id', accountRequired, (req, res) => {
+  removeMix(req.userId!, p(req.params.id));
+  res.json({ ok: true, library: getFullLibrary(req.userId!) });
+});
+
+app.get('/api/library/mixes/:id/saved', accountRequired, (req, res) => {
+  res.json({ saved: isMixSaved(req.userId!, p(req.params.id)) });
 });
 
 app.post('/api/library/playlists', accountRequired, (req, res) => {

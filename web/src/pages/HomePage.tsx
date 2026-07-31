@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type Shelf, type Track } from '../api';
 import { ShelfRow } from '../components/MediaCard';
+import { MixCollageCard } from '../components/MixCollageCard';
 import { usePlayer } from '../store/player';
 import { usePins } from '../store/pins';
+import { useLibrary } from '../store/library';
+import { useItemActions } from '../store/itemActions';
 import { Pin, Play, Radio } from 'lucide-react';
 
 export function HomePage() {
@@ -14,10 +17,17 @@ export function HomePage() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [radios, setRadios] = useState<{ id: string; title: string }[]>([]);
+  const [radioPreviews, setRadioPreviews] = useState<Record<string, Track[]>>({});
+  const [startingRadio, setStartingRadio] = useState<string | null>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const playQueue = usePlayer((s) => s.playQueue);
+  const isPlaying = usePlayer((s) => s.isPlaying);
+  const currentId = usePlayer((s) => s.current?.id);
   const pinCount = usePins((s) => s.pins.length);
   const refreshPins = usePins((s) => s.refresh);
+  const hasMix = useLibrary((s) => s.hasMix);
+  const saveMix = useLibrary((s) => s.saveMix);
+  const openActions = useItemActions((s) => s.open);
   const seenTitles = useRef(new Set<string>());
 
   const mergeShelves = useCallback((incoming: Shelf[]) => {
@@ -43,18 +53,36 @@ export function HomePage() {
   useEffect(() => {
     setLoading(true);
     seenTitles.current = new Set();
+    setRadioPreviews({});
     api
       .home()
-      .then((r) => {
+      .then(async (r) => {
         for (const s of r.shelves) seenTitles.current.add(s.title);
         setShelves(r.shelves);
         setSeeds(r.seeds || []);
         setHasMore(r.hasMore !== false);
-        setRadios(r.radios || []);
+        const cats = r.radios || [];
+        setRadios(cats);
         setPage(0);
+        setLoading(false);
+        // Previews mosaïque (léger) — en parallèle limité
+        const previews: Record<string, Track[]> = {};
+        await Promise.all(
+          cats.slice(0, 8).map(async (cat) => {
+            try {
+              const mix = await api.recoRadio(cat.id, { preview: true });
+              previews[cat.id] = (mix.tracks || []).slice(0, 4);
+            } catch {
+              /* ignore */
+            }
+          }),
+        );
+        setRadioPreviews(previews);
       })
-      .catch((e) => setError(String(e.message || e)))
-      .finally(() => setLoading(false));
+      .catch((e) => {
+        setError(String(e.message || e));
+        setLoading(false);
+      });
   }, [pinCount]);
 
   const loadMore = useCallback(async () => {
@@ -92,12 +120,37 @@ export function HomePage() {
   const quickTracks = (quick?.items || []).filter((t) => /^[a-zA-Z0-9_-]{11}$/.test(t.id));
 
   const startRadio = async (id: string) => {
+    setStartingRadio(id);
     try {
       const r = await api.recoRadio(id);
       if (r.tracks?.length) void playQueue(r.tracks, 0);
     } catch (e) {
       console.error(e);
+    } finally {
+      setStartingRadio(null);
     }
+  };
+
+  const saveRadioMix = async (id: string, title: string) => {
+    try {
+      const covers = radioPreviews[id] || [];
+      await saveMix({ id, title, covers, tracks: covers });
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const openMixMenu = (id: string, title: string) => {
+    const covers = radioPreviews[id] || [];
+    openActions({
+      id,
+      title,
+      type: 'mix',
+      artists: [{ name: 'Mix radio' }],
+      thumbnails: covers.flatMap((t) => t.thumbnails || []).slice(0, 4),
+      covers,
+      tracks: covers,
+    } as Track);
   };
 
   return (
@@ -142,18 +195,26 @@ export function HomePage() {
         <section className="mb-8">
           <div className="mb-3 flex items-center gap-2">
             <Radio className="h-4 w-4 text-yt-muted" />
-            <h2 className="font-display text-lg font-semibold">Radios</h2>
+            <h2 className="font-display text-lg font-semibold">Mixés pour toi</h2>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="shelf-scroll">
             {radios.map((r) => (
-              <button
+              <MixCollageCard
                 key={r.id}
-                type="button"
+                title={r.title}
+                tracks={radioPreviews[r.id] || []}
+                busy={startingRadio === r.id}
+                subtitle="Mix radio"
+                saved={hasMix(r.id)}
+                playing={
+                  isPlaying &&
+                  Boolean(currentId) &&
+                  (radioPreviews[r.id] || []).some((t) => t.id === currentId)
+                }
                 onClick={() => void startRadio(r.id)}
-                className="rounded-full bg-yt-elevated px-4 py-2 text-sm text-yt-muted transition hover:bg-yt-hover hover:text-white"
-              >
-                {r.title}
-              </button>
+                onSave={() => void saveRadioMix(r.id, r.title)}
+                onMore={() => openMixMenu(r.id, r.title)}
+              />
             ))}
           </div>
         </section>

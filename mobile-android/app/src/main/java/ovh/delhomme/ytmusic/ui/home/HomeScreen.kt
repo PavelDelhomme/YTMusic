@@ -23,10 +23,15 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.LibraryAddCheck
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -43,6 +48,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -57,6 +63,7 @@ import ovh.delhomme.ytmusic.ui.components.AccountSheet
 import ovh.delhomme.ytmusic.ui.components.AppTopBar
 import ovh.delhomme.ytmusic.ui.components.HistorySheet
 import ovh.delhomme.ytmusic.ui.components.MediaCover
+import ovh.delhomme.ytmusic.ui.components.MixCollageCover
 import ovh.delhomme.ytmusic.ui.components.TrackRow
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
@@ -72,6 +79,7 @@ fun HomeScreen(
     onOpenDebugLogs: () -> Unit = {},
     onOpenYtmImport: () -> Unit = {},
     onLoggedOut: () -> Unit = {},
+    onMoreMix: ((id: String, title: String, covers: List<TrackDto>) -> Unit)? = null,
     vm: HomeViewModel = viewModel(factory = HomeViewModel.factory(container)),
 ) {
     val state by vm.state.collectAsState()
@@ -180,22 +188,133 @@ fun HomeScreen(
                             Modifier
                                 .horizontalScroll(rememberScrollState())
                                 .padding(horizontal = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
                             state.radios.forEach { radio ->
                                 val loading = state.radioLoadingId == radio.id
-                                TextButton(
-                                    onClick = {
-                                        vm.playRadio(radio.id) { tracks, title ->
-                                            onPlayNamed(tracks, 0, title)
+                                val preview = state.radioPreviews[radio.id].orEmpty()
+                                val saved = state.savedMixIds.contains(radio.id)
+                                Column(Modifier.width(140.dp).padding(4.dp)) {
+                                    Box(
+                                        Modifier
+                                            .size(132.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable(enabled = !loading) {
+                                                vm.playRadio(radio.id) { tracks, title ->
+                                                    onPlayNamed(tracks, 0, title)
+                                                }
+                                            },
+                                    ) {
+                                        MixCollageCover(
+                                            tracks = preview,
+                                            size = 132.dp,
+                                            titleFallback = radio.title,
+                                        )
+                                        // Play toujours visible (mobile)
+                                        Box(
+                                            Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(6.dp)
+                                                .size(36.dp)
+                                                .clip(RoundedCornerShape(18.dp))
+                                                .background(MaterialTheme.colorScheme.error)
+                                                .clickable(enabled = !loading) {
+                                                    vm.playRadio(radio.id) { tracks, title ->
+                                                        onPlayNamed(tracks, 0, title)
+                                                    }
+                                                },
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Icon(
+                                                Icons.Default.PlayArrow,
+                                                contentDescription = "Lire",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(22.dp),
+                                            )
                                         }
-                                    },
-                                    enabled = !loading,
-                                ) {
-                                    Text(if (loading) "…" else radio.title)
+                                        Row(
+                                            Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(4.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        ) {
+                                            IconButton(
+                                                onClick = { onMoreMix?.invoke(radio.id, radio.title, preview) },
+                                                modifier = Modifier
+                                                    .size(32.dp)
+                                                    .background(
+                                                        Color.Black.copy(alpha = 0.7f),
+                                                        RoundedCornerShape(16.dp),
+                                                    ),
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.MoreVert,
+                                                    contentDescription = "Options",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = {
+                                                    if (!saved) {
+                                                        scope.launch {
+                                                            vm.saveMix(radio.id, radio.title, preview)
+                                                        }
+                                                    }
+                                                },
+                                                enabled = !saved,
+                                                modifier = Modifier
+                                                    .size(32.dp)
+                                                    .background(
+                                                        Color.Black.copy(alpha = 0.7f),
+                                                        RoundedCornerShape(16.dp),
+                                                    ),
+                                            ) {
+                                                Icon(
+                                                    if (saved) Icons.Default.LibraryAddCheck else Icons.Default.Add,
+                                                    contentDescription = if (saved) "Enregistré" else "Enregistrer",
+                                                    tint = if (saved) MaterialTheme.colorScheme.error else Color.White,
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                            }
+                                        }
+                                        if (loading) {
+                                            Box(
+                                                Modifier
+                                                    .fillMaxSize()
+                                                    .background(
+                                                        MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f),
+                                                    ),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(28.dp),
+                                                    strokeWidth = 2.dp,
+                                                    color = MaterialTheme.colorScheme.onPrimary,
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        radio.title,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onBackground,
+                                    )
+                                    Text(
+                                        "Mix radio",
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
                                 }
                             }
                         }
+                        Spacer(Modifier.height(8.dp))
                     }
                 }
 

@@ -1220,44 +1220,44 @@ export async function getAudioFormat(videoId: string): Promise<AudioFormat> {
 
   const job = (async (): Promise<AudioFormat> => {
     const innertube = await getYT();
-    // WEB/ANDROID cassent souvent le decipher ; IOS renvoie des URLs jouables.
+    // Course parallèle IOS/ANDROID/WEB — le 1er qui déchiffre gagne (évite 10–20 s séquentiels).
     const clients = ['IOS', 'ANDROID', 'WEB'] as const;
-    let lastErr: unknown;
-    for (const client of clients) {
-      try {
-        const format = await innertube.getStreamingData(videoId, {
-          type: 'audio',
-          quality: 'bestefficiency',
-          client,
-        });
-        const url = await format.decipher(innertube.session.player);
-        if (!url) throw new Error('empty stream url');
-        const entry: AudioFormat = {
-          url,
-          mimeType: format.mime_type,
-          bitrate: format.bitrate,
-          contentLength: format.content_length,
-          expiresAt: parseExpireMs(url) ?? Date.now() + 3 * 60 * 60 * 1000,
-        };
-        audioFormatCache.set(videoId, entry);
-        if (audioFormatCache.size > 250) {
-          const stale = [...audioFormatCache.entries()]
-            .sort((a, b) => a[1].expiresAt - b[1].expiresAt)
-            .slice(0, 80);
-          for (const [id] of stale) audioFormatCache.delete(id);
-        }
-        return entry;
-      } catch (err) {
-        lastErr = err;
-      }
-    }
+    const tryClient = async (client: (typeof clients)[number]): Promise<AudioFormat> => {
+      const format = await innertube.getStreamingData(videoId, {
+        type: 'audio',
+        quality: 'bestefficiency',
+        client,
+      });
+      const url = await format.decipher(innertube.session.player);
+      if (!url) throw new Error('empty stream url');
+      return {
+        url,
+        mimeType: format.mime_type,
+        bitrate: format.bitrate,
+        contentLength: format.content_length,
+        expiresAt: parseExpireMs(url) ?? Date.now() + 3 * 60 * 60 * 1000,
+      };
+    };
+
+    let entry: AudioFormat | null = null;
     try {
-      const entry = await audioFormatViaYtDlp(videoId);
-      audioFormatCache.set(videoId, entry);
-      return entry;
-    } catch (err) {
-      throw lastErr || err;
+      entry = await Promise.any(clients.map((c) => tryClient(c)));
+    } catch {
+      /* tous ont échoué → yt-dlp */
     }
+
+    if (!entry) {
+      entry = await audioFormatViaYtDlp(videoId);
+    }
+
+    audioFormatCache.set(videoId, entry);
+    if (audioFormatCache.size > 250) {
+      const stale = [...audioFormatCache.entries()]
+        .sort((a, b) => a[1].expiresAt - b[1].expiresAt)
+        .slice(0, 80);
+      for (const [id] of stale) audioFormatCache.delete(id);
+    }
+    return entry;
   })().finally(() => {
     audioFormatInflight.delete(videoId);
   });

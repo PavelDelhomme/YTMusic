@@ -16,7 +16,10 @@ type LibraryState = LibraryData & {
   isInLibrary: (id: string) => boolean;
   hasAlbum: (id: string) => boolean;
   hasArtist: (id: string) => boolean;
+  hasMix: (id: string) => boolean;
   isPlaylistLiked: (id: string) => boolean;
+  saveMix: (mix: { id: string; title: string; tracks?: Track[]; covers?: Track[] }) => Promise<boolean>;
+  removeMix: (id: string) => Promise<void>;
 };
 
 const empty: LibraryData = {
@@ -25,6 +28,7 @@ const empty: LibraryData = {
   likedPlaylists: [],
   albums: [],
   artists: [],
+  mixes: [],
   playlists: [],
   history: [],
   downloaded: [],
@@ -40,6 +44,7 @@ function mergeLibrary(lib: LibraryData): LibraryData {
     likedPlaylists: Array.isArray(lib.likedPlaylists) ? lib.likedPlaylists : [],
     albums: Array.isArray(lib.albums) ? lib.albums : [],
     artists: Array.isArray(lib.artists) ? lib.artists : [],
+    mixes: Array.isArray((lib as LibraryData).mixes) ? (lib as LibraryData).mixes : [],
     playlists: Array.isArray(lib.playlists) ? lib.playlists : [],
     history: Array.isArray(lib.history) ? lib.history : [],
     downloaded: Array.isArray(lib.downloaded) ? lib.downloaded : [],
@@ -162,5 +167,15 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   isInLibrary: (id) => get().songs.some((t) => t.id === id),
   hasAlbum: (id) => get().albums.some((a) => a.id === id),
   hasArtist: (id) => get().artists.some((a) => a.id === id),
+  hasMix: (id) => get().mixes.some((m) => m.id === id),
   isPlaylistLiked: (id) => get().likedPlaylists.some((p) => p.id === id),
+  saveMix: async (mix) => {
+    const r = await api.saveMix(mix);
+    if (r.library) get().applyLibrary(r.library);
+    return r.saved;
+  },
+  removeMix: async (id) => {
+    const r = await api.removeMix(id);
+    get().applyLibrary(r.library);
+  },
 }));

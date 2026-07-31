@@ -2,6 +2,7 @@ package ovh.delhomme.ytmusic.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -164,6 +165,7 @@ fun TrackRow(
 }
 
 /** Mini-lecteur style YT / Google Music — seek, prev, play, next. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MiniPlayerBar(
     track: TrackDto,
@@ -175,13 +177,12 @@ fun MiniPlayerBar(
     onSeek: ((Float) -> Unit)? = null,
     onPrev: (() -> Unit)? = null,
     onNext: (() -> Unit)? = null,
-    onOpenArtist: ((id: String?, name: String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var scrub by remember(track.id) { mutableFloatStateOf(-1f) }
     val shown = if (scrub >= 0f) scrub else progress.coerceIn(0f, 1f)
     var barWidthPx by remember { mutableFloatStateOf(1f) }
-    val thumbPx = with(LocalDensity.current) { 14.dp.toPx() }
+    val thumbPx = with(LocalDensity.current) { 8.dp.toPx() }
 
     fun seekFromX(x: Float) {
         if (onSeek == null || barWidthPx <= 0f) return
@@ -194,7 +195,7 @@ fun MiniPlayerBar(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(16.dp)
+                .height(14.dp)
                 .onSizeChanged { barWidthPx = it.width.toFloat().coerceAtLeast(1f) }
                 .pointerInput(track.id, onSeek) {
                     detectTapGestures { offset ->
@@ -218,13 +219,13 @@ fun MiniPlayerBar(
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(3.dp)
+                    .height(2.dp)
                     .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f)),
             )
             Box(
                 Modifier
                     .fillMaxWidth(shown)
-                    .height(3.dp)
+                    .height(2.dp)
                     .background(SeekRed),
             )
             Box(
@@ -236,7 +237,7 @@ fun MiniPlayerBar(
                             y = 0,
                         )
                     }
-                    .size(14.dp)
+                    .size(8.dp)
                     .align(Alignment.CenterStart)
                     .clip(CircleShape)
                     .background(SeekRed),
@@ -281,26 +282,19 @@ fun MiniPlayerBar(
                 Text(
                     track.title,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    overflow = TextOverflow.Clip,
                     fontWeight = FontWeight.SemiBold,
                     color = Color(0xFFF5F5F5),
+                    modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 1000),
                 )
-                if (onOpenArtist != null) {
-                    ArtistLinksText(
-                        track = track,
-                        onOpenArtist = onOpenArtist,
-                        color = Color(0xFFCFCFCF),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                } else {
-                    Text(
-                        track.artistLine(),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFCFCFCF),
-                    )
-                }
+                Text(
+                    track.artistLine(),
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFCFCFCF),
+                    modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 1400),
+                )
             }
             if (onCast != null) {
                 IconButton(onClick = onCast) {
