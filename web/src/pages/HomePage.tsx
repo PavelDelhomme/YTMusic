@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type Shelf, type Track } from '../api';
 import { ShelfRow } from '../components/MediaCard';
 import { usePlayer } from '../store/player';
+import { usePins } from '../store/pins';
 import { Pin, Play, Radio } from 'lucide-react';
 
 export function HomePage() {
@@ -15,6 +16,8 @@ export function HomePage() {
   const [radios, setRadios] = useState<{ id: string; title: string }[]>([]);
   const sentinel = useRef<HTMLDivElement>(null);
   const playQueue = usePlayer((s) => s.playQueue);
+  const pinCount = usePins((s) => s.pins.length);
+  const refreshPins = usePins((s) => s.refresh);
   const seenTitles = useRef(new Set<string>());
 
   const mergeShelves = useCallback((incoming: Shelf[]) => {
@@ -34,6 +37,10 @@ export function HomePage() {
   }, []);
 
   useEffect(() => {
+    void refreshPins();
+  }, [refreshPins]);
+
+  useEffect(() => {
     setLoading(true);
     seenTitles.current = new Set();
     api
@@ -48,7 +55,7 @@ export function HomePage() {
       })
       .catch((e) => setError(String(e.message || e)))
       .finally(() => setLoading(false));
-  }, []);
+  }, [pinCount]);
 
   const loadMore = useCallback(async () => {
     if (loadingMore || !hasMore) return;

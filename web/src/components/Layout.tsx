@@ -28,6 +28,7 @@ import { useLibrary } from '../store/library';
 import { usePlayer, wireRemotePlayer, reportListenProgress, flushPlayerPersist } from '../store/player';
 import { useAuth } from '../store/auth';
 import { useSession } from '../store/session';
+import { usePins } from '../store/pins';
 import { api } from '../api';
 import { installMediaKeys } from '../lib/mediaKeys';
 import { wireEqualizer, resumeEqContext } from '../lib/equalizer';
@@ -43,6 +44,7 @@ const links = [
 
 export function Layout() {
   const refresh = useLibrary((s) => s.refresh);
+  const refreshPins = usePins((s) => s.refresh);
   const initAuth = useAuth((s) => s.init);
   const initSession = useSession((s) => s.init);
   const remoteState = useSession((s) => s.remoteState);
@@ -143,10 +145,11 @@ export function Layout() {
       const guest = !u || u.isGuest || u.email?.includes('@local.ytmusic');
       if (!guest) {
         void refresh();
+        void refreshPins();
         initSession();
       }
     });
-  }, [initAuth, refresh, initSession]);
+  }, [initAuth, refresh, refreshPins, initSession]);
 
   useEffect(() => {
     if (/^\/(album|artist|playlist|local)\//.test(location.pathname)) {
@@ -165,12 +168,13 @@ export function Layout() {
     // Connecté → jamais laisser la popup login ouverte
     setAuthOpen(false);
     void refresh();
+    void refreshPins();
     initSession();
     void api
       .prefs()
       .then((r) => setNeedsOnboarding(!r.prefs?.onboardingDone))
       .catch(() => undefined);
-  }, [authLoaded, user, refresh, initSession, location.pathname]);
+  }, [authLoaded, user, refresh, refreshPins, initSession, location.pathname]);
 
   useEffect(() => {
     const guest = !user || user.isGuest || user.email?.includes('@local.ytmusic');
@@ -563,7 +567,10 @@ export function Layout() {
 
           <main
             className={`min-h-0 flex-1 overflow-y-auto px-4 pt-4 md:px-8 ${
-              hasPlayback ? 'pb-48' : 'pb-24 lg:pb-28'
+              // Mobile : lecteur + nav bas (~3.25rem) ; desktop/lg : lecteur seul (pas de nav bas)
+              hasPlayback
+                ? 'pb-[calc(var(--ytm-player-h,8rem)+3.5rem)] lg:pb-[calc(var(--ytm-player-h,5.5rem)+1.25rem)]'
+                : 'pb-24 lg:pb-28'
             }`}
           >
             {!authLoaded && <p className="text-yt-muted">Chargement…</p>}
@@ -609,13 +616,16 @@ export function Layout() {
         {!nowPlayingOpen && <QueuePanel />}
       </div>
 
+      {/* Nav bas : uniquement < lg — au-dessus du lecteur, jamais sur grand écran (drawer gauche) */}
       {!nowPlayingOpen && !navOpen && (
         <nav
-          className={`fixed left-0 right-0 z-30 flex overflow-x-auto border-t border-yt-border bg-yt-surface lg:hidden ${
-            // Mobile player ~ 2 lignes (~112px) + safe area ; desktop bar ~88px
-            hasPlayback ? 'bottom-[7.5rem] sm:bottom-[6.75rem]' : 'bottom-0'
-          }`}
-          style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+          className="fixed inset-x-0 z-40 flex border-t border-yt-border bg-yt-surface lg:hidden"
+          style={{
+            bottom: 'var(--ytm-player-h, 0px)',
+            // Safe-area seulement sans lecteur (sinon déjà géré par PlayerBar)
+            paddingBottom: hasPlayback ? 0 : 'env(safe-area-inset-bottom)',
+          }}
+          aria-label="Navigation principale"
         >
           {links.map(({ to, label, icon: Icon }) => (
             <NavLink
@@ -623,13 +633,13 @@ export function Layout() {
               to={to}
               end={to === '/'}
               className={({ isActive }) =>
-                `flex min-w-[4.5rem] flex-1 flex-col items-center gap-1 py-2 text-[10px] ${
+                `flex min-w-0 flex-1 flex-col items-center gap-0.5 px-1 py-2 text-[10px] leading-tight ${
                   isActive ? 'text-white' : 'text-yt-muted'
                 }`
               }
             >
-              <Icon className="h-5 w-5" />
-              {label}
+              <Icon className="h-5 w-5 shrink-0" />
+              <span className="max-w-full truncate">{label}</span>
             </NavLink>
           ))}
         </nav>
@@ -695,6 +705,12 @@ export function Layout() {
           usePlayer.setState({ isPlaying: false });
         }}
         onEnded={() => {
+          const s = usePlayer.getState();
+          if (s.sleepUntilEnd) {
+            s.setSleepTimer(null, null);
+            usePlayer.setState({ isPlaying: false });
+            return;
+          }
           usePlayer.setState({ isPlaying: false });
           void next({ fromEnded: true });
         }}

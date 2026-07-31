@@ -29,7 +29,7 @@ pids_on_port() {
   if [[ -z "$out" ]] && command -v ss >/dev/null 2>&1; then
     out="$(ss -tlnp 2>/dev/null | grep -E ":${PORT}\\b" | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true)"
   fi
-  echo "$out" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -u
+  echo "$out" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -u || true
 }
 
 free_port() {
@@ -63,10 +63,12 @@ free_port() {
 start_server() {
   echo "  Démarrage API (tsx, détaché) → $LOG"
   cd "$ROOT"
-  # Sans `watch` en fond : plus stable (évite zombies tsx watch)
-  setsid -f bash -c "cd '$ROOT' && exec npx tsx api/src/index.ts" >>"$LOG" 2>&1
-  sleep 1.2
-  pgrep -n -f "tsx api/src/index.ts" >"$PIDFILE" 2>/dev/null || true
+  # Nouvelle session : survit à la fermeture du shell parent (Cursor / make)
+  # Évite que $! pointe seulement sur un wrapper npx tué avec le groupe.
+  setsid nohup "$ROOT/node_modules/.bin/tsx" api/src/index.ts >>"$LOG" 2>&1 </dev/null &
+  echo $! >"$PIDFILE"
+  disown $! 2>/dev/null || true
+  sleep 1.8
   echo "  PID api: $(cat "$PIDFILE" 2>/dev/null || echo '?')"
 }
 

@@ -20,7 +20,7 @@ DEVICE ?= R5CT7263YJL
 	dev-server dev-web build start deploy-local clean-vite icons \
 	docker-dev docker-dev-down docker-build \
 	mobile-qr mobile-hint mobile-adb mobile-install-adb test-register-adb \
-	android-sync android-build android-install android-prod android \
+	android-sync android-build android-install android-logs android-publish android-prod android \
 	android-capacitor android-capacitor-prod adb-fix \
 	adb-fix-keys \
 	update-apps status status-watch \
@@ -46,7 +46,7 @@ help: ## Affiche cette aide colorée
 		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(C_CYAN)%-20s$(C_RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@printf "  $(C_GREEN)▶ Mobile Android$(C_RESET)\n"
-	@grep -E '^(android|android-prod|android-install|android-build|mobile-):.*?##' $(MAKEFILE_LIST) | \
+	@grep -E '^(android|android-prod|android-install|android-build|android-logs|android-publish|mobile-):.*?##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(C_CYAN)%-20s$(C_RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@printf "  $(C_GREEN)▶ Build / Docker / Git$(C_RESET)\n"
@@ -222,6 +222,14 @@ android-install: ## Build + installe l’APK Kotlin (ADB) — ensure-api
 	@bash $(ROOT)/scripts/ensure-api.sh
 	@DEVICE="$(DEVICE)" API_BASE_URL="$(or $(API_BASE_URL),$(or $(VITE_API_ORIGIN),http://127.0.0.1:8787))" bash $(ROOT)/scripts/kotlin-android-install.sh install
 
+android-logs: ## Pull crashes + journal APK → logs/android/ (dev)
+	@chmod +x $(ROOT)/scripts/android-pull-logs.sh
+	@DEVICE="$(DEVICE)" bash $(ROOT)/scripts/android-pull-logs.sh
+
+android-publish: ## Compile APK + publie pour /api/deploy/apk (Admin QR)
+	@chmod +x $(ROOT)/scripts/android-publish-apk.sh
+	@API_BASE_URL="$(or $(API_BASE_URL),)" bash $(ROOT)/scripts/android-publish-apk.sh
+
 android: ## Raccourci : ensure-api + APK Kotlin native
 	@$(MAKE) android-install DEVICE="$(DEVICE)" API_BASE_URL="$(or $(API_BASE_URL),$(or $(VITE_API_ORIGIN),http://127.0.0.1:8787))"
 
@@ -233,9 +241,21 @@ adb-fix-keys: ## Régénère clés ADB (après révocation USB sur le téléphon
 	@chmod +x $(ROOT)/scripts/adb-fix-auth.sh
 	@bash $(ROOT)/scripts/adb-fix-auth.sh --new-keys
 
-android-prod: ## APK Kotlin → API https://ytmusic.delhomme.ovh + install ADB
-	@chmod +x $(ROOT)/scripts/kotlin-android-install.sh
-	@DEVICE="$(DEVICE)" API_BASE_URL="https://ytmusic.delhomme.ovh" bash $(ROOT)/scripts/kotlin-android-install.sh install
+android-prod: ## APK → API prod (APP_URL / ANDROID_API_BASE_URL / ytmusic.delhomme.ovh) + ADB + publish
+	@chmod +x $(ROOT)/scripts/kotlin-android-install.sh $(ROOT)/scripts/android-publish-apk.sh
+	@API_URL="$$( \
+	  if [ -n "$(API_BASE_URL)" ]; then echo "$(API_BASE_URL)"; \
+	  else \
+	    v=$$(grep -E '^ANDROID_API_BASE_URL=' $(ROOT)/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' '); \
+	    if [ -n "$$v" ]; then echo "$$v"; \
+	    else \
+	      v=$$(grep -E '^APP_URL=' $(ROOT)/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' '); \
+	      case "$$v" in *127.0.0.1*|*localhost*|"" ) echo "https://ytmusic.delhomme.ovh" ;; *) echo "$$v" ;; esac; \
+	    fi; \
+	  fi)"; \
+	 echo "==> android-prod API=$$API_URL"; \
+	 DEVICE="$(DEVICE)" API_BASE_URL="$$API_URL" bash $(ROOT)/scripts/kotlin-android-install.sh install; \
+	 API_BASE_URL="$$API_URL" bash $(ROOT)/scripts/android-publish-apk.sh
 
 android-capacitor: ## Legacy : APK Capacitor (WebView) + API locale
 	@chmod +x $(ROOT)/scripts/android-install.sh $(ROOT)/scripts/ensure-api.sh

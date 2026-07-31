@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { sanitizeTrack } from './mappers.js';
 import type { Track } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -148,17 +149,23 @@ try {
 }
 
 export function upsertTrack(track: Track) {
+  const clean = sanitizeTrack(track);
   db.prepare(
     `INSERT INTO tracks_cache (id, payload, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`,
-  ).run(track.id, JSON.stringify(track), Date.now());
+  ).run(clean.id, JSON.stringify(clean), Date.now());
 }
 
 export function getTrackPayload(id: string): Track | null {
   const row = db.prepare('SELECT payload FROM tracks_cache WHERE id = ?').get(id) as
     | { payload: string }
     | undefined;
-  return row ? (JSON.parse(row.payload) as Track) : null;
+  if (!row) return null;
+  try {
+    return sanitizeTrack(JSON.parse(row.payload) as Track);
+  } catch {
+    return null;
+  }
 }
 
 export type UserRow = {

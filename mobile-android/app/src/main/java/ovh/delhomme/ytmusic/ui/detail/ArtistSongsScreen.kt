@@ -105,52 +105,56 @@ fun ArtistSongsScreen(
             else -> {
                 LazyColumn(contentPadding = PaddingValues(bottom = 32.dp)) {
                     item {
-                        Row(
-                            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.Bottom,
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            cover?.let { MediaCover(it, 120.dp, circle = true) }
-                            Spacer(Modifier.width(16.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    "Discographie",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Text(
-                                    name,
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    "${tracks.size} titre${if (tracks.size > 1) "s" else ""}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                if (tracks.isNotEmpty()) {
-                                    Spacer(Modifier.height(12.dp))
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            cover?.let {
+                                MediaCover(it, 140.dp, circle = true)
+                                Spacer(Modifier.height(14.dp))
+                            }
+                            Text(
+                                "Discographie",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                name,
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                "${tracks.size} titre${if (tracks.size > 1) "s" else ""}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (tracks.isNotEmpty()) {
+                                Spacer(Modifier.height(14.dp))
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Button(
+                                        onClick = { onPlay(tracks, 0) },
+                                        modifier = Modifier.weight(1f),
                                     ) {
-                                        Button(
-                                            onClick = { onPlay(tracks, 0) },
-                                            modifier = Modifier.weight(1f),
-                                        ) {
-                                            Icon(Icons.Default.PlayArrow, null, Modifier.size(20.dp))
-                                            Spacer(Modifier.width(4.dp))
-                                            Text("Lecture")
-                                        }
-                                        OutlinedButton(
-                                            onClick = { onPlay(tracks.shuffled(), 0) },
-                                            modifier = Modifier.weight(1f),
-                                        ) {
-                                            Icon(Icons.Default.Shuffle, null, Modifier.size(18.dp))
-                                            Spacer(Modifier.width(4.dp))
-                                            Text("Aléatoire")
-                                        }
+                                        Icon(Icons.Default.PlayArrow, null, Modifier.size(20.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Lecture")
+                                    }
+                                    OutlinedButton(
+                                        onClick = { onPlay(tracks.shuffled(), 0) },
+                                        modifier = Modifier.weight(1f),
+                                    ) {
+                                        Icon(Icons.Default.Shuffle, null, Modifier.size(18.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Aléatoire")
                                     }
                                 }
                             }

@@ -62,7 +62,14 @@ import { handleStream, handleStreamUrl, handleStreamWarm, downloadTrack, cachePa
 import { importByKind, importByQueryOrUrl } from './import.js';
 import { handleOfflineStatus, startOfflineCollection } from './offline.js';
 import { handleImageProxy } from './img.js';
-import { deployInfo, getBuildJob, startBuild } from './admin.js';
+import {
+  deployInfo,
+  getApkJob,
+  getApkPath,
+  getBuildJob,
+  startApkBuild,
+  startBuild,
+} from './admin.js';
 import {
   beginAuthentication,
   beginRegistration,
@@ -661,6 +668,45 @@ app.get('/api/admin/build', requireAdmin, (_req, res) => {
   res.json(getBuildJob());
 });
 
+/** Compile + publie l’APK (SDK Android requis sur la machine API). body.target = auto|lan|app_url|URL */
+app.post('/api/admin/apk/build', requireAdmin, (req, res) => {
+  const target = String(req.body?.target || 'auto').trim() || 'auto';
+  res.json(startApkBuild(target, PORT));
+});
+
+app.get('/api/admin/apk', requireAdmin, (_req, res) => {
+  res.json(getApkJob());
+});
+
+/** Téléchargement public de l’APK publiée (QR téléphone, hors Wi‑Fi via APP_URL). */
+app.get('/api/deploy/apk', (req, res) => {
+  const path = getApkPath();
+  if (!path) {
+    res.status(404).json({
+      error: 'APK non publiée',
+      hint: 'Admin → Déploiement mobile → Compiler l’APK, ou make android-publish',
+    });
+    return;
+  }
+  res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+  res.setHeader('Content-Disposition', 'attachment; filename="ytmusic.apk"');
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path);
+});
+
+app.get('/api/deploy/apk/info', (_req, res) => {
+  const info = deployInfo(PORT).apk;
+  res.json({
+    ready: info.ready,
+    versionName: info.versionName,
+    versionCode: info.versionCode,
+    apiBaseUrl: info.apiBaseUrl,
+    builtAt: info.builtAt,
+    sizeBytes: info.sizeBytes,
+    downloadPath: info.downloadPath,
+  });
+});
+
 // Deploy info also available lightly for logged-in users (QR on profile) — LAN URLs only
 app.get('/api/deploy/info', accountRequired, (_req, res) => {
   const info = deployInfo(PORT);
@@ -669,6 +715,12 @@ app.get('/api/deploy/info', accountRequired, (_req, res) => {
     lan: info.lan,
     port: info.port,
     built: info.built,
+    apk: {
+      ready: info.apk.ready,
+      downloadUrl: info.apk.downloadUrl,
+      apiBaseUrl: info.apk.apiBaseUrl,
+      versionName: info.apk.versionName,
+    },
   });
 });
 

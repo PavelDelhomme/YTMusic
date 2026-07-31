@@ -2,10 +2,11 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { Track } from '../api';
 import { api } from '../api';
 import { usePlayer } from '../store/player';
-import { Library, MoreHorizontal, Pin, Play, Plus } from 'lucide-react';
+import { Check, Library, MoreHorizontal, Pin, PinOff, Play, Plus } from 'lucide-react';
 import { ArtistLinks } from './ArtistLinks';
 import { CoverImage } from './CoverImage';
 import { useLibrary } from '../store/library';
+import { usePins } from '../store/pins';
 import { useState, type MouseEvent } from 'react';
 import { useItemActions } from '../store/itemActions';
 
@@ -25,9 +26,13 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
   const navigate = useNavigate();
   const openActions = useItemActions((s) => s.open);
   const { applyLibrary, isPlaylistLiked, hasAlbum, hasArtist, isInLibrary } = useLibrary();
+  const pinned = usePins((s) => s.isPinned(item.id));
+  const togglePin = usePins((s) => s.togglePin);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [playBusy, setPlayBusy] = useState(false);
+  const [pinBusy, setPinBusy] = useState(false);
+  const [pinToast, setPinToast] = useState<string | null>(null);
 
   const local = isLocalPlaylist(item);
   const isMood = item.id.startsWith('mood:') || item.id.includes('moods_and_genres');
@@ -205,22 +210,26 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
         </button>
         <button
           type="button"
-          title="Épingler à l’accueil"
+          title={pinned ? 'Épinglé — retirer' : 'Épingler à l’accès rapide'}
+          disabled={pinBusy}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            void api
-              .addPin({
-                kind: item.type || 'song',
-                targetId: item.id,
-                payload: item,
-                id: item.id,
+            if (pinBusy) return;
+            setPinBusy(true);
+            void togglePin(item)
+              .then((r) => {
+                setPinToast(r === 'pinned' ? 'Épinglé' : 'Retiré');
+                window.setTimeout(() => setPinToast(null), 1600);
               })
-              .catch((err) => console.error(err));
+              .catch((err) => console.error(err))
+              .finally(() => setPinBusy(false));
           }}
-          className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-white shadow-lg"
+          className={`pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full shadow-lg ${
+            pinned ? 'bg-yt-red text-white' : 'bg-black/70 text-white'
+          }`}
         >
-          <Pin className="h-4 w-4" />
+          {pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
         </button>
         {(item.type === 'playlist' || item.type === 'album' || item.type === 'artist') && !local && (
           <button
@@ -259,8 +268,19 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
   );
 
   return (
-    <div className="group w-40 shrink-0 text-left sm:w-44" onContextMenu={openMenu}>
+    <div className="group relative w-40 shrink-0 text-left sm:w-44" onContextMenu={openMenu}>
       {cover}
+      {pinToast && (
+        <div className="absolute left-1/2 top-2 z-10 -translate-x-1/2 rounded-full bg-black/85 px-2.5 py-1 text-[11px] font-medium text-white shadow-lg">
+          {pinToast === 'Épinglé' ? (
+            <span className="inline-flex items-center gap-1">
+              <Check className="h-3 w-3 text-emerald-400" /> Épinglé
+            </span>
+          ) : (
+            pinToast
+          )}
+        </div>
+      )}
       <div className="mt-2 flex items-start gap-1 px-0.5">
         <div className="min-w-0 flex-1">
           {href ? (
@@ -275,6 +295,9 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
             >
               {item.title}
             </button>
+          )}
+          {pinned && (
+            <div className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-yt-red">Épinglé</div>
           )}
           <div className="truncate text-xs text-yt-muted">
             {item.id.startsWith('mood:') || item.id.includes('moods_and_genres')

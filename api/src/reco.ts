@@ -246,10 +246,14 @@ export async function homeReco(userId: string) {
     shelves.push({
       title: 'Épinglé',
       items: pins.map((p) => {
-        const payload = p.payload as Track;
+        const payload = (p.payload || {}) as Track & { name?: string };
+        const title = String(payload.title || payload.name || '').trim();
         return {
           ...payload,
           id: payload.id || p.targetId,
+          title: title || p.targetId,
+          artists: Array.isArray(payload.artists) ? payload.artists : [],
+          thumbnails: Array.isArray(payload.thumbnails) ? payload.thumbnails : [],
           type: (payload.type || p.kind) as Track['type'],
         };
       }),

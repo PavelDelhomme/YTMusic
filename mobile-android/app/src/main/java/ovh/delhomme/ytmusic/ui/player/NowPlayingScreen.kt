@@ -99,9 +99,11 @@ import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.CreatePlaylistBody
 import ovh.delhomme.ytmusic.data.PlaylistDto
+import ovh.delhomme.ytmusic.data.RecoFeedbackBody
 import ovh.delhomme.ytmusic.data.TimedLyricLine
 import ovh.delhomme.ytmusic.data.TrackDto
 import ovh.delhomme.ytmusic.data.buildRadioQueue
+import ovh.delhomme.ytmusic.debug.AppLog
 import ovh.delhomme.ytmusic.player.PlayerController
 import ovh.delhomme.ytmusic.player.PlayerUiState
 import ovh.delhomme.ytmusic.player.RepeatMode
@@ -382,11 +384,6 @@ fun NowPlayingScreen(
                         NowPlayingChrome.topBarActions.forEach { slot ->
                             if (!slot.enabled) return@forEach
                             when (slot.id) {
-                                PlayerChromeAction.Cast -> if (onCast != null) {
-                                    IconButton(onClick = onCast) {
-                                        Icon(Icons.Default.Cast, slot.label, tint = PlayerFg)
-                                    }
-                                }
                                 PlayerChromeAction.More -> if (onMore != null) {
                                     IconButton(onClick = { onMore(track) }) {
                                         Icon(Icons.Default.MoreVert, slot.label, tint = PlayerFg)
@@ -518,19 +515,20 @@ fun NowPlayingScreen(
                                         ) {
                                             scope.launch {
                                                 runCatching {
+                                                    AppLog.breadcrumb("like", track.id)
                                                     val r = container.api.like(track)
                                                     onLikedChanged(
                                                         if (r.liked) likedIds + track.id
                                                         else likedIds - track.id,
                                                     )
                                                     container.api.recoFeedback(
-                                                        ovh.delhomme.ytmusic.data.RecoFeedbackBody(
+                                                        RecoFeedbackBody(
                                                             track.id,
                                                             if (r.liked) "good" else "bad",
                                                             "now_playing_like",
                                                         ),
                                                     )
-                                                }
+                                                }.onFailure { AppLog.e("like", "échec like ${track.id}", it) }
                                             }
                                         }
                                         PlayerChromeAction.Lyrics -> SecondaryIcon(
@@ -940,11 +938,6 @@ private fun QueueExpandedHeader(
                     )
                 } else {
                     Text(track.artistLine(), maxLines = 1, overflow = TextOverflow.Ellipsis, color = PlayerMuted, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-            if (onCast != null) {
-                IconButton(onClick = onCast) {
-                    Icon(Icons.Default.Cast, "Cast", tint = PlayerFg)
                 }
             }
             IconButton(onClick = onToggle) {

@@ -22,7 +22,7 @@ export function asText(value: unknown): string {
   return '';
 }
 
-function formatDurationClock(totalSeconds: number): string {
+export function formatDurationClock(totalSeconds: number): string {
   if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00';
   const total = Math.floor(totalSeconds);
   const s = total % 60;
@@ -34,7 +34,7 @@ function formatDurationClock(totalSeconds: number): string {
 }
 
 /** Corrige les textes type `164:16` → `2:44:16`. */
-function normalizeDurationText(raw: string): string {
+export function normalizeDurationText(raw: string): string {
   const parts = raw.trim().split(':').map((p) => Number(p));
   if (parts.some((n) => !Number.isFinite(n))) return raw;
   if (parts.length === 3) return formatDurationClock(parts[0] * 3600 + parts[1] * 60 + parts[2]);
@@ -44,6 +44,49 @@ function normalizeDurationText(raw: string): string {
     return `${m}:${s.toString().padStart(2, '0')}`;
   }
   return raw;
+}
+
+/**
+ * Garantit `duration` string (clients Moshi / JSON strict).
+ * Anciens payloads DB peuvent avoir `duration: 212` (secondes).
+ */
+export function sanitizeTrack(track: Track): Track {
+  const raw = track as Track & { duration?: unknown };
+  let durationSeconds =
+    typeof track.durationSeconds === 'number' && Number.isFinite(track.durationSeconds)
+      ? Math.floor(track.durationSeconds)
+      : undefined;
+  let duration: string | undefined;
+
+  if (typeof raw.duration === 'number' && Number.isFinite(raw.duration)) {
+    durationSeconds = durationSeconds ?? Math.floor(raw.duration);
+    duration = formatDurationClock(raw.duration);
+  } else if (typeof raw.duration === 'string' && raw.duration.trim()) {
+    duration = normalizeDurationText(raw.duration.trim());
+  } else if (durationSeconds != null) {
+    duration = formatDurationClock(durationSeconds);
+  }
+
+  return {
+    ...track,
+    artists: Array.isArray(track.artists)
+      ? track.artists.filter((a) => a?.name && !isJunkArtistName(String(a.name)))
+      : track.artists,
+    duration,
+    durationSeconds,
+  };
+}
+
+/** Nettoie un payload album/artiste de biblio (métadonnées YTM type « 4 songs »). */
+export function sanitizeLibraryItem<T extends { artists?: { name: string; id?: string }[]; title?: string; name?: string }>(
+  item: T,
+): T {
+  if (!item || typeof item !== 'object') return item;
+  if (!Array.isArray(item.artists)) return item;
+  return {
+    ...item,
+    artists: item.artists.filter((a) => a?.name && !isJunkArtistName(String(a.name))),
+  };
 }
 
 /** Collect every possible thumbnail array from a YT Music node */
@@ -124,7 +167,7 @@ export function bestThumbUrl(thumbs: Thumb[], size = 544): string {
   return resizeThumbUrl(sorted[0].url, size);
 }
 
-function isJunkArtistName(name: string) {
+export function isJunkArtistName(name: string) {
   return (
     !name ||
     name === '•' ||
@@ -133,6 +176,15 @@ function isJunkArtistName(name: string) {
     ) ||
     /^\d+:\d+$/.test(name) ||
     /^\d{4}$/.test(name) ||
+    /^\d+\s*songs?$/i.test(name.trim()) ||
+    /^\d+\s*titres?$/i.test(name.trim()) ||
+    /^\d+\s*(min|mins|minutes?|sec|secs|seconds?|h|hr|hrs|hours?)$/i.test(name.trim()) ||
+    /^\d+\s*(song|album|playlist|video)s?$/i.test(name.trim()) ||
+    /^\d+\s*hours?(?:,?\s*\d+\s*minutes?)?$/i.test(name.trim()) ||
+    /^\d+\s*hour,\s*\d+\s*minutes?$/i.test(name.trim()) ||
+    /^(?:\d+\s*)?(?:hour|hours|minute|minutes|second|seconds)(?:\s*,\s*\d+\s*(?:hour|hours|minute|minutes|second|seconds))?$/i.test(
+      name.trim(),
+    ) ||
     /plays?/i.test(name) ||
     /views?/i.test(name) ||
     /monthly audience/i.test(name)

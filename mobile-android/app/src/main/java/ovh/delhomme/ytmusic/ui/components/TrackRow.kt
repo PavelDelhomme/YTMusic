@@ -170,8 +170,8 @@ fun MiniPlayerBar(
     playing: Boolean,
     progress: Float,
     onToggle: () -> Unit,
-    onCast: () -> Unit,
     onOpen: () -> Unit,
+    onCast: (() -> Unit)? = null,
     onSeek: ((Float) -> Unit)? = null,
     onPrev: (() -> Unit)? = null,
     onNext: (() -> Unit)? = null,
@@ -265,8 +265,19 @@ fun MiniPlayerBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            MediaCover(track, 48.dp, modifier = Modifier.clip(RoundedCornerShape(6.dp)))
-            Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+            MediaCover(
+                track,
+                48.dp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(onClick = onOpen),
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp)
+                    .clickable(onClick = onOpen),
+            ) {
                 Text(
                     track.title,
                     maxLines = 1,
@@ -291,12 +302,14 @@ fun MiniPlayerBar(
                     )
                 }
             }
-            IconButton(onClick = onCast) {
-                Icon(
-                    Icons.Default.Cast,
-                    contentDescription = "Caster",
-                    tint = Color(0xFFF5F5F5),
-                )
+            if (onCast != null) {
+                IconButton(onClick = onCast) {
+                    Icon(
+                        Icons.Default.Cast,
+                        contentDescription = "Caster",
+                        tint = Color(0xFFF5F5F5),
+                    )
+                }
             }
             if (onPrev != null) {
                 IconButton(onClick = onPrev) {

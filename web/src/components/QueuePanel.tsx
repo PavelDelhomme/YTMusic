@@ -51,7 +51,10 @@ export function QueuePanel() {
     queue.length,
   );
   const userTracks = queue.slice(0, boundary);
-  const autoTracks = autoplay ? queue.slice(boundary) : [];
+  // En zone auto : à partir du titre courant (les déjà joués auto sont listés juste au-dessus)
+  const autoTracks = autoplay
+    ? queue.slice(queueIndex >= boundary ? queueIndex : boundary)
+    : [];
 
   return (
     <aside className="fixed bottom-[88px] right-0 top-0 z-30 flex w-full max-w-xl flex-col border-l border-yt-border bg-yt-surface shadow-2xl md:static md:bottom-auto md:z-10 md:max-w-lg lg:max-w-xl">
@@ -90,11 +93,17 @@ export function QueuePanel() {
           <>
             <div className="mb-2 px-2 text-xs text-yt-muted">
               {userTracks.length} titre{userTracks.length > 1 ? 's' : ''} dans ta file
+              {queueIndex > 0 ? ` · ${Math.min(queueIndex, userTracks.length)} déjà joué${queueIndex > 1 ? 's' : ''}` : ''}
             </div>
             {userTracks.map((track, i) => (
               <div
                 key={`u-${track.id}-${i}`}
-                className={i === queueIndex ? 'rounded-lg ring-1 ring-yt-red/40' : undefined}
+                className={[
+                  i === queueIndex ? 'rounded-lg ring-1 ring-yt-red/40' : '',
+                  i < queueIndex ? 'opacity-60' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ') || undefined}
               >
                 <TrackRow
                   track={track}
@@ -107,6 +116,27 @@ export function QueuePanel() {
                 />
               </div>
             ))}
+
+            {/* Titres auto déjà joués (avant le courant) quand on est dans « À suivre » */}
+            {autoplay && queueIndex >= boundary && boundary < queueIndex && (
+              <div className="mt-2 opacity-60">
+                {queue.slice(boundary, queueIndex).map((track, i) => {
+                  const abs = boundary + i;
+                  return (
+                    <TrackRow
+                      key={`apast-${track.id}-${abs}`}
+                      track={track}
+                      queue={queue}
+                      queueIndex={abs}
+                      hideIndex
+                      draggable
+                      alwaysActions
+                      onPlay={() => void playAt(abs)}
+                    />
+                  );
+                })}
+              </div>
+            )}
 
             <section className="mt-5 border-t border-yt-border pt-4">
               <div className="mb-2 flex items-center justify-between gap-2 px-2">

@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Person
@@ -55,6 +57,8 @@ fun AccountSheet(
     onOpenRecoPrefs: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenDownloads: () -> Unit = {},
+    onOpenDebugLogs: (() -> Unit)? = null,
+    onOpenYtmImport: (() -> Unit)? = null,
     onLoggedOut: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -150,6 +154,17 @@ fun AccountSheet(
                     onOpenRecoPrefs()
                 },
             )
+            if (onOpenYtmImport != null) {
+                AccountRow(
+                    icon = { Icon(Icons.Default.CloudDownload, contentDescription = null) },
+                    title = "Importer YouTube Music",
+                    subtitle = "Likes, albums, playlists — sans Google Console",
+                    onClick = {
+                        onDismiss()
+                        onOpenYtmImport()
+                    },
+                )
+            }
             AccountRow(
                 icon = { Icon(Icons.Default.VpnKey, contentDescription = null) },
                 title = "Enregistrer une passkey",
@@ -164,6 +179,15 @@ fun AccountSheet(
                             Toast.makeText(context, e.message ?: "Échec", Toast.LENGTH_SHORT).show()
                         }
                     }
+                },
+            )
+            AccountRow(
+                icon = { Icon(Icons.Default.BugReport, contentDescription = null) },
+                title = "API & logs",
+                subtitle = "URL serveur · ${container.resolvedApiBase()}",
+                onClick = {
+                    onDismiss()
+                    onOpenDebugLogs?.invoke()
                 },
             )
 

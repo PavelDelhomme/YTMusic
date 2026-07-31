@@ -242,6 +242,58 @@ data class ListenBody(
     val track: TrackDto? = null,
 )
 
+@JsonClass(generateAdapter = false)
+data class YtmAccountDto(
+    val connected: Boolean = false,
+    val canSyncLibrary: Boolean = false,
+    val hasCookie: Boolean = false,
+    val hasOauth: Boolean = false,
+    val connectedAt: Long? = null,
+    val lastSyncAt: Long? = null,
+    val lastSyncSummary: String? = null,
+    val hint: String? = null,
+)
+
+@JsonClass(generateAdapter = false)
+data class YtmStatusResponse(val account: YtmAccountDto)
+
+@JsonClass(generateAdapter = false)
+data class YtmCookieBody(val cookie: String)
+
+@JsonClass(generateAdapter = false)
+data class YtmOauthStartResponse(
+    val verificationUrl: String? = null,
+    val userCode: String? = null,
+    val expiresIn: Int? = null,
+)
+
+@JsonClass(generateAdapter = false)
+data class YtmOauthStatusResponse(
+    val status: String,
+    val verificationUrl: String? = null,
+    val userCode: String? = null,
+    val error: String? = null,
+)
+
+@JsonClass(generateAdapter = false)
+data class YtmSyncStats(
+    val songs: Int = 0,
+    val librarySongs: Int = 0,
+    val albums: Int = 0,
+    val artists: Int = 0,
+    val playlists: Int = 0,
+    val playlistTracks: Int = 0,
+    val likedSongsPlaylist: Int = 0,
+    val history: Int = 0,
+)
+
+@JsonClass(generateAdapter = false)
+data class YtmSyncResponse(
+    val stats: YtmSyncStats = YtmSyncStats(),
+    val library: LibraryResponse? = null,
+    val account: YtmAccountDto? = null,
+)
+
 interface YtMusicApi {
     @GET("api/health")
     suspend fun health(): Map<String, Any>
@@ -393,6 +445,24 @@ interface YtMusicApi {
 
     @POST("api/listen")
     suspend fun listen(@Body body: ListenBody): Map<String, Any>
+
+    @GET("api/ytm/status")
+    suspend fun ytmStatus(): YtmStatusResponse
+
+    @POST("api/ytm/connect/cookie")
+    suspend fun ytmConnectCookie(@Body body: YtmCookieBody): YtmStatusResponse
+
+    @POST("api/ytm/connect/oauth")
+    suspend fun ytmConnectOauth(): YtmOauthStartResponse
+
+    @GET("api/ytm/oauth/status")
+    suspend fun ytmOauthStatus(): YtmOauthStatusResponse
+
+    @POST("api/ytm/sync")
+    suspend fun ytmSync(): YtmSyncResponse
+
+    @DELETE("api/ytm/disconnect")
+    suspend fun ytmDisconnect(): YtmStatusResponse
 
     @GET("api/reco/radios")
     suspend fun radios(): Map<String, Any>

@@ -10,6 +10,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Response
 import okhttp3.Route
 import okhttp3.logging.HttpLoggingInterceptor
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import ovh.delhomme.ytmusic.BuildConfig
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -17,20 +18,54 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class AppContainer(context: Context) {
-    val tokenStore = TokenStore(context.applicationContext)
-    val quickAccess = QuickAccessStore(context.applicationContext)
+    private val appContext = context.applicationContext
+    val tokenStore = TokenStore(appContext)
+    val quickAccess = QuickAccessStore(appContext)
+    private val apiPrefs = appContext.getSharedPreferences("ytm_api", Context.MODE_PRIVATE)
+
     val deviceId: String by lazy {
-        val prefs = context.getSharedPreferences("ytm_device", Context.MODE_PRIVATE)
+        val prefs = appContext.getSharedPreferences("ytm_device", Context.MODE_PRIVATE)
         prefs.getString("id", null) ?: UUID.randomUUID().toString().also {
             prefs.edit().putString("id", it).apply()
         }
     }
 
+    /** Base API sans slash final (override prefs > BuildConfig). */
+    fun resolvedApiBase(): String {
+        val override = apiPrefs.getString("base_url", null)?.trim()?.trimEnd('/')
+        return if (!override.isNullOrBlank()) override else BuildConfig.API_BASE_URL.trimEnd('/')
+    }
+
+    fun apiBaseOverride(): String? =
+        apiPrefs.getString("base_url", null)?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
+
+    /** Persiste une URL API (ex. http://192.168.1.134:8787). null = reset BuildConfig. */
+    fun setApiBaseOverride(url: String?) {
+        val cleaned = url?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
+        apiPrefs.edit().apply {
+            if (cleaned == null) remove("base_url") else putString("base_url", cleaned)
+        }.apply()
+    }
+
     private val moshi: Moshi = Moshi.Builder()
+        // Avant KotlinJsonAdapterFactory : duration (et autres) string|number
+        .add(FlexibleStringAdapter())
         .add(KotlinJsonAdapterFactory())
         .build()
 
     private val refreshLock = Any()
+
+    private val rewriteHost = Interceptor { chain ->
+        val preferred = (resolvedApiBase() + "/").toHttpUrlOrNull()
+            ?: return@Interceptor chain.proceed(chain.request())
+        val req = chain.request()
+        val nextUrl = req.url.newBuilder()
+            .scheme(preferred.scheme)
+            .host(preferred.host)
+            .port(preferred.port)
+            .build()
+        chain.proceed(req.newBuilder().url(nextUrl).build())
+    }
 
     private val authInterceptor = Interceptor { chain ->
         // Cache mémoire d’abord — évite runBlocking DataStore à chaque heartbeat
@@ -48,8 +83,9 @@ class AppContainer(context: Context) {
 
     /** Client sans Authenticator (refresh / login) — évite les boucles 401. */
     private val plainClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
+        .addInterceptor(rewriteHost)
         .addInterceptor(
             HttpLoggingInterceptor().apply {
                 level = if (BuildConfig.DEBUG) {
@@ -87,8 +123,9 @@ class AppContainer(context: Context) {
     }
 
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
+        .addInterceptor(rewriteHost)
         .addInterceptor(authInterceptor)
         .authenticator(tokenAuthenticator)
         .addInterceptor(
@@ -105,17 +142,18 @@ class AppContainer(context: Context) {
     /** Client sans auth interceptor (passkeys login). */
     val httpPlain: OkHttpClient = plainClient
 
-    val apiBaseUrl: String = BuildConfig.API_BASE_URL.trimEnd('/') + "/"
+    val apiBaseUrl: String
+        get() = resolvedApiBase().trimEnd('/') + "/"
 
     private val refreshApi: YtMusicApi = Retrofit.Builder()
-        .baseUrl(apiBaseUrl)
+        .baseUrl(BuildConfig.API_BASE_URL.trimEnd('/') + "/")
         .client(plainClient)
         .addConverterFactory(MoshiConverterFactory.create(moshi))
         .build()
         .create(YtMusicApi::class.java)
 
     val api: YtMusicApi = Retrofit.Builder()
-        .baseUrl(apiBaseUrl)
+        .baseUrl(BuildConfig.API_BASE_URL.trimEnd('/') + "/")
         .client(client)
         .addConverterFactory(MoshiConverterFactory.create(moshi))
         .build()
@@ -124,11 +162,32 @@ class AppContainer(context: Context) {
     fun streamUrl(trackId: String): String =
         // Toujours via proxy API : les URLs googlevideo sont liées à l’IP du serveur
         // (?redirect=1 → 403 depuis le téléphone / autre réseau).
-        BuildConfig.API_BASE_URL.trimEnd('/') + "/api/stream/$trackId"
+        resolvedApiBase() + "/api/stream/$trackId"
 
     /** Pré-chauffe le resolve youtubei côté API (piste courante + suivantes). */
     fun warmStreamUrl(trackId: String): String =
-        BuildConfig.API_BASE_URL.trimEnd('/') + "/api/stream/$trackId/url"
+        resolvedApiBase() + "/api/stream/$trackId/url"
+
+    /** Ping /api/health sur l’URL courante (ou une URL candidate). */
+    suspend fun probeApiHealth(baseUrl: String? = null): Result<String> {
+        val base = (baseUrl ?: resolvedApiBase()).trimEnd('/')
+        return runCatching {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val probeClient = OkHttpClient.Builder()
+                    .connectTimeout(8, TimeUnit.SECONDS)
+                    .readTimeout(8, TimeUnit.SECONDS)
+                    .build()
+                val req = okhttp3.Request.Builder()
+                    .url("$base/api/health")
+                    .get()
+                    .build()
+                probeClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) error("HTTP ${resp.code}")
+                    resp.body?.string()?.take(180) ?: "ok"
+                }
+            }
+        }
+    }
 
     /**
      * Refresh JWT via client « plain » (pas d’Authenticator).
