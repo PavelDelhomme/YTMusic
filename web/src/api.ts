@@ -195,11 +195,34 @@ async function req<T>(url: string, init?: RequestInit, retried = false): Promise
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(fullUrl, {
-    ...init,
-    headers,
-    credentials: 'include',
-  });
+  const ctrl = new AbortController();
+  const timeoutMs = 25_000;
+  const timer = window.setTimeout(() => ctrl.abort(), timeoutMs);
+  // Respect caller abort if any
+  const onAbort = () => ctrl.abort();
+  init?.signal?.addEventListener('abort', onAbort);
+
+  let res: Response;
+  try {
+    res = await fetch(fullUrl, {
+      ...init,
+      headers,
+      credentials: 'include',
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    window.clearTimeout(timer);
+    init?.signal?.removeEventListener('abort', onAbort);
+    if ((e as Error)?.name === 'AbortError') {
+      throw new Error('API ne répond pas (timeout) — vérifie que le serveur :8787 tourne (make ensure-api)');
+    }
+    throw new Error(
+      `Impossible de joindre l’API (${(e as Error)?.message || e}). Lance make ensure-api.`,
+    );
+  }
+  window.clearTimeout(timer);
+  init?.signal?.removeEventListener('abort', onAbort);
+
   if (res.status === 401 && !retried && !fullUrl.includes('/auth/')) {
     const refreshed = await tryRefresh();
     if (refreshed) return req<T>(url, init, true);
@@ -347,6 +370,12 @@ export const api = {
   adminStatus: () => req<any>('/api/admin/status'),
   adminBuild: () => req<any>('/api/admin/build', { method: 'POST', body: '{}' }),
   adminBuildStatus: () => req<any>('/api/admin/build'),
+  adminApk: () => req<any>('/api/admin/apk'),
+  adminApkBuild: (target: string = 'auto') =>
+    req<any>('/api/admin/apk/build', {
+      method: 'POST',
+      body: JSON.stringify({ target }),
+    }),
 
   home: () =>
     req<{

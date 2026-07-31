@@ -71,9 +71,22 @@ type PlayerState = {
   hydrate: () => Promise<void>;
   applyRemoteState: (state: Partial<PlayerState> & { current?: Track | null }, playAudio?: boolean) => Promise<void>;
   loadRelated: (trackId: string) => Promise<void>;
+  sleepLabel: string | null;
+  sleepUntilEnd: boolean;
+  /** Timer actif : pause auto après délai, ou à la fin de la piste. */
+  setSleepTimer: (delayMs: number | 'end' | null, label: string | null) => void;
   audioEl: HTMLAudioElement | null;
   bindAudio: (el: HTMLAudioElement | null) => void;
 };
+
+let sleepTimerHandle: number | null = null;
+
+function clearSleepTimerInternal() {
+  if (sleepTimerHandle != null) {
+    window.clearTimeout(sleepTimerHandle);
+    sleepTimerHandle = null;
+  }
+}
 
 function isPlayable(t: Track) {
   return /^[a-zA-Z0-9_-]{11}$/.test(t.id);
@@ -96,8 +109,8 @@ function mergeArtists(
 
 const PLAYER_STORAGE_KEY = 'ytm_player_v1';
 /** Conserve un historique court + une longue suite (évite de saturer localStorage). */
-const QUEUE_KEEP_BEFORE = 8;
-const QUEUE_KEEP_AFTER = 72;
+const QUEUE_KEEP_BEFORE = 48;
+const QUEUE_KEEP_AFTER = 80;
 
 type PersistedPlayer = {
   v?: number;
@@ -193,15 +206,20 @@ function persistPlayer() {
     try {
       localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(payload));
     } catch {
-      // Quota : garder seulement le titre en cours + 24 suivants
+      // Quota : garder un historique avant + la suite (pas seulement le titre courant)
       const qi = Math.max(0, s.queueIndex || 0);
-      const q = (s.queue || []).slice(qi, qi + 25).map(slimTrack);
+      const full = s.queue || [];
+      const start = Math.max(0, qi - 24);
+      const end = Math.min(full.length, qi + 40);
+      const q = full.slice(start, end).map(slimTrack);
+      const newQi = qi - start;
+      const oldEnd = typeof s.userQueueEnd === 'number' ? s.userQueueEnd : full.length;
       const compact: PersistedPlayer = {
         v: 3,
-        current: s.current ? slimTrack(s.current) : q[0] || null,
+        current: s.current ? slimTrack(s.current) : q[newQi] || q[0] || null,
         queue: q.length ? q : s.current ? [slimTrack(s.current)] : [],
-        queueIndex: 0,
-        userQueueEnd: Math.min(typeof s.userQueueEnd === 'number' ? s.userQueueEnd : q.length, q.length),
+        queueIndex: q.length ? newQi : 0,
+        userQueueEnd: Math.max(0, Math.min(oldEnd, end) - start),
         autoplay: s.autoplay !== false,
         volume: s.volume,
         shuffle: s.shuffle,
@@ -626,6 +644,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   related: [],
   hydrated: false,
   audioEl: null,
+  sleepLabel: null,
+  sleepUntilEnd: false,
 
   bindAudio: (el) => {
     set({ audioEl: el });
@@ -633,11 +653,38 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       const sync = () => refreshMediaSession();
       el.addEventListener('play', sync);
       el.addEventListener('pause', sync);
-      el.addEventListener('ended', sync);
+      el.addEventListener('ended', () => {
+        sync();
+        const s = get();
+        if (s.sleepUntilEnd) {
+          clearSleepTimerInternal();
+          el.pause();
+          set({ isPlaying: false });
+        }
+      });
     }
     if (el && get().hydrated && get().current) {
       void restoreAudioFromPersisted();
     }
+  },
+
+  setSleepTimer: (delayMs, label) => {
+    clearSleepTimerInternal();
+    if (delayMs == null || label == null) {
+      set({ sleepLabel: null, sleepUntilEnd: false });
+      return;
+    }
+    if (delayMs === 'end') {
+      set({ sleepLabel: label, sleepUntilEnd: true });
+      return;
+    }
+    set({ sleepLabel: label, sleepUntilEnd: false });
+    sleepTimerHandle = window.setTimeout(() => {
+      const audio = get().audioEl;
+      audio?.pause();
+      clearSleepTimerInternal();
+      set({ isPlaying: false, sleepLabel: null, sleepUntilEnd: false });
+    }, delayMs);
   },
 
   hydrate: async () => {

@@ -32,6 +32,9 @@ export const useAuth = create<AuthState>((set) => ({
   loaded: false,
 
   init: async () => {
+    const failSafe = window.setTimeout(() => {
+      set((s) => (s.loaded ? s : { ...s, loaded: true, user: s.user }));
+    }, 12_000);
     try {
       const cfg = await api.authConfig();
       set({
@@ -65,6 +68,8 @@ export const useAuth = create<AuthState>((set) => ({
       }
     } catch {
       set({ loaded: true, user: null });
+    } finally {
+      window.clearTimeout(failSafe);
     }
   },
 

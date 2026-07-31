@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { db, getTrackPayload, upsertTrack } from './db.js';
+import { sanitizeTrack, sanitizeLibraryItem } from './mappers.js';
 import type { Track } from './types.js';
 
 export type LibraryPlaylist = {
@@ -13,15 +14,24 @@ export type LibraryPlaylist = {
 };
 
 function parseTrack(row: { payload?: string; track_id?: string }): Track | null {
-  if (row.payload) return JSON.parse(row.payload) as Track;
-  if (row.track_id) return getTrackPayload(row.track_id);
+  if (row.payload) {
+    try {
+      return sanitizeTrack(JSON.parse(row.payload) as Track);
+    } catch {
+      /* fallthrough */
+    }
+  }
+  if (row.track_id) {
+    const t = getTrackPayload(row.track_id);
+    return t ? sanitizeTrack(t) : null;
+  }
   return null;
 }
 
 function trackFromRow(r: { track_id: string; payload: string | null }): Track {
   if (r.payload) {
     try {
-      return JSON.parse(r.payload) as Track;
+      return sanitizeTrack(JSON.parse(r.payload) as Track);
     } catch {
       /* fallthrough */
     }
@@ -69,13 +79,13 @@ export function getFullLibrary(userId: string) {
     db
       .prepare(`SELECT payload FROM library_albums WHERE user_id = ? ORDER BY created_at DESC`)
       .all(userId) as { payload: string }[]
-  ).map((r) => JSON.parse(r.payload));
+  ).map((r) => sanitizeLibraryItem(JSON.parse(r.payload)));
 
   const artists = (
     db
       .prepare(`SELECT payload FROM library_artists WHERE user_id = ? ORDER BY created_at DESC`)
       .all(userId) as { payload: string }[]
-  ).map((r) => JSON.parse(r.payload));
+  ).map((r) => sanitizeLibraryItem(JSON.parse(r.payload)));
 
   const playlists = listPlaylists(userId);
 

@@ -6,6 +6,7 @@ import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -28,20 +29,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import ovh.delhomme.ytmusic.BuildConfig
 import ovh.delhomme.ytmusic.MainActivity
 import ovh.delhomme.ytmusic.R
 import ovh.delhomme.ytmusic.YtMusicApp
 import ovh.delhomme.ytmusic.data.TrackDto
-import ovh.delhomme.ytmusic.BuildConfig
 
 /**
  * Lecture arrière-plan + notification média persistante (style YTM) :
- * précédent / play-pause / suivant, artwork, titre/artiste,
+ * précédent / play-pause / suivant (toujours actifs), artwork, like, boucle,
  * clic → ouvre le lecteur plein écran + file.
  */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
     private var player: ExoPlayer? = null
+    private var sessionPlayer: Player? = null
     private var session: MediaSession? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -100,14 +102,16 @@ class PlaybackService : MediaSessionService() {
             .build()
         exo.addListener(playerListener)
         player = exo
+        val forwarding = YtmForwardingPlayer(exo)
+        sessionPlayer = forwarding
 
         val openPlayer = sessionActivityPendingIntent()
 
-        session = MediaSession.Builder(this, exo)
+        session = MediaSession.Builder(this, forwarding)
             .setCallback(SessionCallback())
             .setSessionActivity(openPlayer)
             .setBitmapLoader(CacheBitmapLoader(DataSourceBitmapLoader(this)))
-            .setMediaButtonPreferences(buildMediaButtons(exo))
+            .setMediaButtonPreferences(buildMediaButtons(forwarding))
             .build()
 
         val notificationProvider = DefaultMediaNotificationProvider.Builder(this)
@@ -159,7 +163,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun refreshMediaButtons() {
-        val p = player ?: return
+        val p = sessionPlayer ?: player ?: return
         session?.setMediaButtonPreferences(buildMediaButtons(p))
     }
 
@@ -178,20 +182,21 @@ class PlaybackService : MediaSessionService() {
             else -> "Boucle désactivée"
         }
 
+        // Compact notif = prev / play / next (player). Like + boucle en secondaires / overflow.
         return listOf(
             CommandButton.Builder(if (liked) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED)
                 .setDisplayName(if (liked) "Retirer des J'aime" else "J'aime")
                 .setSessionCommand(cmdLike)
-                .setSlots(CommandButton.SLOT_OVERFLOW)
-                .build(),
-            CommandButton.Builder(if (shuffleOn) CommandButton.ICON_SHUFFLE_ON else CommandButton.ICON_SHUFFLE_OFF)
-                .setDisplayName(if (shuffleOn) "Aléatoire activé" else "Aléatoire")
-                .setSessionCommand(cmdToggleShuffle)
-                .setSlots(CommandButton.SLOT_OVERFLOW)
+                .setSlots(CommandButton.SLOT_BACK_SECONDARY, CommandButton.SLOT_OVERFLOW)
                 .build(),
             CommandButton.Builder(repeatIcon)
                 .setDisplayName(repeatName)
                 .setSessionCommand(cmdCycleRepeat)
+                .setSlots(CommandButton.SLOT_FORWARD_SECONDARY, CommandButton.SLOT_OVERFLOW)
+                .build(),
+            CommandButton.Builder(if (shuffleOn) CommandButton.ICON_SHUFFLE_ON else CommandButton.ICON_SHUFFLE_OFF)
+                .setDisplayName(if (shuffleOn) "Aléatoire activé" else "Aléatoire")
+                .setSessionCommand(cmdToggleShuffle)
                 .setSlots(CommandButton.SLOT_OVERFLOW)
                 .build(),
         )
@@ -207,7 +212,13 @@ class PlaybackService : MediaSessionService() {
                 .add(cmdCycleRepeat)
                 .add(cmdToggleShuffle)
                 .build()
-            val playerCommands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
+            // Force next/prev toujours dispo (sinon Samsung grise « suivant » sans item suivant)
+            val playerCommands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
+                .add(Player.COMMAND_SEEK_TO_NEXT)
+                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
                 .setAvailablePlayerCommands(playerCommands)
@@ -265,7 +276,7 @@ class PlaybackService : MediaSessionService() {
     private fun warmUpcoming(fromIndex: Int) {
         val queue = Holder.queue
         if (queue.isEmpty()) return
-        val base = BuildConfig.API_BASE_URL.trimEnd('/')
+        val base = resolvedApiBase()
         StreamPrefetcher.warmAround(
             base,
             queue.map { it.id },
@@ -274,6 +285,14 @@ class PlaybackService : MediaSessionService() {
             behind = 1,
         )
         CoverPrefetcher.warmCovers(queue, fromIndex, ahead = 3, behind = 1)
+    }
+
+    private fun resolvedApiBase(): String {
+        val override = getSharedPreferences("ytm_api", MODE_PRIVATE)
+            .getString("base_url", null)
+            ?.trim()
+            ?.trimEnd('/')
+        return if (!override.isNullOrBlank()) override else BuildConfig.API_BASE_URL.trimEnd('/')
     }
 
     object Holder {
@@ -298,13 +317,73 @@ class PlaybackService : MediaSessionService() {
     }
 }
 
+/**
+ * Expose toujours next/prev à la notification système, avec wrap de file
+ * (comme [PlayerController.skipNext] / skipPrev).
+ */
+@OptIn(UnstableApi::class)
+private class YtmForwardingPlayer(
+    private val exo: ExoPlayer,
+) : ForwardingPlayer(exo) {
+    override fun getAvailableCommands(): Player.Commands =
+        super.getAvailableCommands().buildUpon()
+            .add(COMMAND_SEEK_TO_NEXT)
+            .add(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+            .add(COMMAND_SEEK_TO_PREVIOUS)
+            .add(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+            .build()
+
+    override fun isCommandAvailable(command: @Player.Command Int): Boolean =
+        when (command) {
+            COMMAND_SEEK_TO_NEXT,
+            COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+            COMMAND_SEEK_TO_PREVIOUS,
+            COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+            -> true
+            else -> super.isCommandAvailable(command)
+        }
+
+    override fun seekToNext() = seekToNextMediaItem()
+
+    override fun seekToNextMediaItem() {
+        val wasOne = exo.repeatMode == Player.REPEAT_MODE_ONE
+        if (wasOne) exo.repeatMode = Player.REPEAT_MODE_OFF
+        when {
+            exo.hasNextMediaItem() -> exo.seekToNextMediaItem()
+            exo.repeatMode == Player.REPEAT_MODE_ALL && exo.mediaItemCount > 0 ->
+                exo.seekTo(/* mediaItemIndex */ 0, /* positionMs */ 0L)
+            exo.mediaItemCount > 1 -> {
+                val next = (exo.currentMediaItemIndex + 1) % exo.mediaItemCount
+                exo.seekTo(next, 0L)
+            }
+            else -> exo.seekTo(0L)
+        }
+        exo.play()
+        if (wasOne) exo.repeatMode = Player.REPEAT_MODE_ONE
+    }
+
+    override fun seekToPrevious() = seekToPreviousMediaItem()
+
+    override fun seekToPreviousMediaItem() {
+        when {
+            exo.currentPosition > 3_000L -> exo.seekTo(0L)
+            exo.hasPreviousMediaItem() -> exo.seekToPreviousMediaItem()
+            exo.mediaItemCount > 1 -> exo.seekTo(exo.mediaItemCount - 1, 0L)
+            else -> exo.seekTo(0L)
+        }
+    }
+}
+
 fun ExoPlayer.playTracks(baseStreamUrl: (String) -> String, tracks: List<TrackDto>, startIndex: Int) {
     val playable = tracks.filter { it.isPlayable() }
     if (playable.isEmpty()) return
     val idx = startIndex.coerceIn(0, playable.lastIndex)
     PlaybackService.Holder.queue = playable
     PlaybackService.Holder.index = idx
-    val base = BuildConfig.API_BASE_URL.trimEnd('/')
+    val sample = baseStreamUrl("_")
+    val base = sample.substringBefore("/api/stream/").ifBlank {
+        BuildConfig.API_BASE_URL.trimEnd('/')
+    }
     StreamPrefetcher.warmAround(
         base,
         playable.map { it.id },

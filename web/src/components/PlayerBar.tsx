@@ -73,6 +73,7 @@ export function PlayerBar({
   const [muted, setMuted] = useState(false);
   const [uiPlaying, setUiPlaying] = useState(isPlaying);
   const prevVol = useRef(volume);
+  const footerRef = useRef<HTMLElement | null>(null);
 
   // Icône play/pause = état réel de l’élément <audio> (touches média / MPRIS)
   useEffect(() => {
@@ -94,6 +95,30 @@ export function PlayerBar({
       el.removeEventListener('ended', sync);
     };
   }, [audioEl, isPlaying, queueIndex]);
+
+  /** Publie la hauteur réelle du lecteur pour positionner la nav bas (évite chevauchement). */
+  useEffect(() => {
+    const clear = () => document.documentElement.style.setProperty('--ytm-player-h', '0px');
+    if (!current) {
+      clear();
+      return;
+    }
+    const el = footerRef.current;
+    if (!el) {
+      clear();
+      return;
+    }
+    const publish = () => {
+      document.documentElement.style.setProperty('--ytm-player-h', `${el.offsetHeight}px`);
+    };
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      clear();
+    };
+  }, [current, isActivePlayer, activeName]);
 
   if (!current) {
     if (compactEmpty) {
@@ -155,6 +180,7 @@ export function PlayerBar({
 
   return (
     <footer
+      ref={footerRef}
       className="fixed bottom-0 left-0 right-0 z-50 border-t border-yt-border bg-[#0a0a0a]/95 backdrop-blur-md"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       onClick={() => expand('queue')}

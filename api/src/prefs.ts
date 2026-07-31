@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { db } from './db.js';
+import { isJunkArtistName } from './mappers.js';
 
 export function ensureRecoSchema() {
   db.exec(`
@@ -271,14 +272,104 @@ export function listPins(userId: string) {
     db
       .prepare('SELECT * FROM pins WHERE user_id = ? ORDER BY position ASC, created_at DESC')
       .all(userId) as any[]
-  ).map((p) => ({
-    id: p.id,
-    kind: p.kind,
-    targetId: p.target_id,
-    payload: JSON.parse(p.payload),
-    position: p.position,
-    createdAt: p.created_at,
-  }));
+  ).map((p) => {
+    const raw = JSON.parse(p.payload) as Record<string, unknown>;
+    const enriched = enrichPinPayload(userId, String(p.kind || 'song'), String(p.target_id), raw);
+    // Persiste un payload pauvre (ex. title « U ») pour les prochaines lectures
+    if (pinPayloadWeak(raw) && !pinPayloadWeak(enriched)) {
+      try {
+        db.prepare('UPDATE pins SET payload = ? WHERE id = ? AND user_id = ?').run(
+          JSON.stringify(enriched),
+          p.id,
+          userId,
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+    return {
+      id: p.id,
+      kind: p.kind,
+      targetId: p.target_id,
+      payload: enriched,
+      position: p.position,
+      createdAt: p.created_at,
+    };
+  });
+}
+
+function pinPayloadWeak(payload: Record<string, unknown> | null | undefined): boolean {
+  if (!payload || typeof payload !== 'object') return true;
+  const title = String(payload.title || payload.name || '').trim();
+  const thumbs = payload.thumbnails;
+  const hasThumbs = Array.isArray(thumbs) && thumbs.length > 0;
+  return title.length <= 2 || !hasThumbs;
+}
+
+/** Complète titre / artistes / covers depuis la biblio ou le cache titres. */
+export function enrichPinPayload(
+  userId: string,
+  kind: string,
+  targetId: string,
+  payload: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  const base = { ...(payload && typeof payload === 'object' ? payload : {}) };
+  const id = String(base.id || targetId || '').trim();
+  const type = String(base.type || kind || 'song');
+  let title = String(base.title || base.name || '').trim();
+  let artists = Array.isArray(base.artists) ? (base.artists as unknown[]) : [];
+  let thumbnails = Array.isArray(base.thumbnails) ? (base.thumbnails as unknown[]) : [];
+
+  const tryMerge = (raw: Record<string, unknown> | null) => {
+    if (!raw) return;
+    if ((!title || title.length <= 2) && (raw.title || raw.name)) {
+      title = String(raw.title || raw.name || title).trim();
+    }
+    if (!artists.length && Array.isArray(raw.artists) && raw.artists.length) {
+      artists = raw.artists as unknown[];
+    }
+    if (!thumbnails.length && Array.isArray(raw.thumbnails) && raw.thumbnails.length) {
+      thumbnails = raw.thumbnails as unknown[];
+    }
+  };
+
+  if (id && (title.length <= 2 || !thumbnails.length || !artists.length)) {
+    if (type === 'album' || kind === 'album') {
+      const row = db
+        .prepare('SELECT payload FROM library_albums WHERE user_id = ? AND album_id = ?')
+        .get(userId, id) as { payload: string } | undefined;
+      if (row?.payload) tryMerge(JSON.parse(row.payload) as Record<string, unknown>);
+    } else if (type === 'artist' || kind === 'artist') {
+      const row = db
+        .prepare('SELECT payload FROM library_artists WHERE user_id = ? AND artist_id = ?')
+        .get(userId, id) as { payload: string } | undefined;
+      if (row?.payload) {
+        const a = JSON.parse(row.payload) as Record<string, unknown>;
+        tryMerge({ ...a, title: a.name || a.title });
+      }
+    } else if (type === 'playlist' || kind === 'playlist') {
+      const row = db
+        .prepare('SELECT payload FROM liked_playlists WHERE user_id = ? AND playlist_id = ?')
+        .get(userId, id) as { payload: string } | undefined;
+      if (row?.payload) tryMerge(JSON.parse(row.payload) as Record<string, unknown>);
+    } else {
+      const row = db.prepare('SELECT payload FROM tracks_cache WHERE id = ?').get(id) as
+        | { payload: string }
+        | undefined;
+      if (row?.payload) tryMerge(JSON.parse(row.payload) as Record<string, unknown>);
+    }
+  }
+
+  return {
+    ...base,
+    id: id || targetId,
+    type,
+    title: title || String(base.title || base.name || targetId),
+    artists: (artists as { name?: string; id?: string }[]).filter(
+      (a) => a?.name && !isJunkArtistName(String(a.name)),
+    ),
+    thumbnails,
+  };
 }
 
 export function addPin(
@@ -293,11 +384,17 @@ export function addPin(
       m: number;
     }
   ).m;
+  const enriched = enrichPinPayload(
+    userId,
+    kind,
+    targetId,
+    (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>,
+  );
   db.prepare(
     `INSERT INTO pins (id, user_id, kind, target_id, payload, position, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(user_id, kind, target_id) DO UPDATE SET payload = excluded.payload`,
-  ).run(id, userId, kind, targetId, JSON.stringify(payload), max + 1, Date.now());
+  ).run(id, userId, kind, targetId, JSON.stringify(enriched), max + 1, Date.now());
   return listPins(userId);
 }
 

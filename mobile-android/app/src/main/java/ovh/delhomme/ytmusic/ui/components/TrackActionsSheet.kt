@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
@@ -87,6 +88,7 @@ import ovh.delhomme.ytmusic.data.RecoFeedbackBody
 import ovh.delhomme.ytmusic.data.TrackDto
 import ovh.delhomme.ytmusic.data.buildRadioQueue
 import ovh.delhomme.ytmusic.data.resolveArtistId
+import ovh.delhomme.ytmusic.debug.AppLog
 import ovh.delhomme.ytmusic.player.PlayerController
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -101,6 +103,7 @@ fun TrackActionsSheet(
     onOpenAddToPlaylist: () -> Unit,
     onOpenAlbum: ((String) -> Unit)? = null,
     onOpenArtist: ((String) -> Unit)? = null,
+    onCast: (() -> Unit)? = null,
     playlistId: String? = null,
     onRemovedFromPlaylist: (() -> Unit)? = null,
 ) {
@@ -250,6 +253,7 @@ fun TrackActionsSheet(
                     onClick = {
                         scope.launch {
                             runCatching {
+                                AppLog.breadcrumb("like", enriched.id)
                                 val r = container.api.like(enriched)
                                 liked = r.liked
                                 onLikedChanged(
@@ -262,7 +266,7 @@ fun TrackActionsSheet(
                                         "actions_like",
                                     ),
                                 )
-                            }
+                            }.onFailure { AppLog.e("like", "échec like ${enriched.id}", it) }
                         }
                     },
                 ) {
@@ -331,6 +335,12 @@ fun TrackActionsSheet(
         }
 
         if (enriched.isPlayable()) {
+            if (onCast != null) {
+                SheetAction(Icons.Default.Cast, "Caster", "Écouter sur un autre appareil") {
+                    onDismiss()
+                    onCast()
+                }
+            }
             SheetAction(Icons.Default.AutoAwesome, "En rapport", "Mix · similaires + découverte") {
                 scope.launch {
                     runCatching {

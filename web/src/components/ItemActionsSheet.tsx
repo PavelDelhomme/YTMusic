@@ -10,6 +10,7 @@ import {
   ListMusic,
   ListPlus,
   Mic2,
+  Moon,
   Pin,
   PinOff,
   Share2,
@@ -27,6 +28,7 @@ import { downloadAndCache, listCachedIds } from '../lib/offlineCache';
 import { formatTrackDuration } from '../lib/time';
 import { useItemActions } from '../store/itemActions';
 import { useLibrary } from '../store/library';
+import { usePins } from '../store/pins';
 import { usePlayer } from '../store/player';
 import { ArtistLinks } from './ArtistLinks';
 import { CoverImage } from './CoverImage';
@@ -73,28 +75,26 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
   const queueIndex = usePlayer((s) => s.queueIndex);
   const { isLiked, isInLibrary, toggleLike, toggleLibrarySong, playlists, addToPlaylist, hasAlbum, hasArtist, isPlaylistLiked, applyLibrary, downloaded, refresh } =
     useLibrary();
+  const pinId = usePins((s) => (item ? s.pinIdFor(item.id) : null));
+  const togglePin = usePins((s) => s.togglePin);
+  const refreshPins = usePins((s) => s.refresh);
+  const sleepLabel = usePlayer((s) => s.sleepLabel);
+  const setSleepTimer = usePlayer((s) => s.setSleepTimer);
   const [busy, setBusy] = useState(false);
   const [showPlaylists, setShowPlaylists] = useState(false);
-  const [pinId, setPinId] = useState<string | null>(null);
+  const [showSleep, setShowSleep] = useState(false);
   const [onDevice, setOnDevice] = useState(false);
 
   useEffect(() => {
     if (!item) return;
     setShowPlaylists(false);
+    setShowSleep(false);
     void refresh().catch(() => undefined);
-    void api
-      .pins()
-      .then((r) => {
-        const hit = (r.pins || []).find(
-          (p: { targetId?: string; id?: string }) => p.targetId === item.id || p.id === item.id,
-        );
-        setPinId(hit?.id || null);
-      })
-      .catch(() => setPinId(null));
+    void refreshPins();
     void listCachedIds()
       .then((ids) => setOnDevice(ids.includes(item.id) || downloaded.includes(item.id)))
       .catch(() => setOnDevice(downloaded.includes(item.id)));
-  }, [item?.id, downloaded, refresh]);
+  }, [item?.id, downloaded, refresh, refreshPins]);
 
   useEffect(() => {
     if (!item) return;
@@ -121,9 +121,15 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
   const isCurrent = inQueue && absQueueIndex === queueIndex;
   const duration = formatTrackDuration(item);
   const albumId = item.album?.id;
-  const artistsAll = (item.artists || []).filter(
-    (a) => a?.name && !/^(inconnu|unknown|n\/a)$/i.test(a.name.trim()),
-  );
+  const artistsAll = (item.artists || []).filter((a) => {
+    const n = a?.name?.trim() || '';
+    if (!n) return false;
+    if (/^(inconnu|unknown|n\/a)$/i.test(n)) return false;
+    if (/^\d+\s*songs?$/i.test(n) || /^\d+\s*titres?$/i.test(n)) return false;
+    if (/^\d+\s*(min|mins|minutes?|sec|secs|seconds?|h|hr|hrs|hours?)$/i.test(n)) return false;
+    if (/^(song|album|playlist|video|ep|single)$/i.test(n)) return false;
+    return true;
+  });
   const collectionInLibrary =
     (item.type === 'album' && hasAlbum(item.id)) ||
     (item.type === 'artist' && hasArtist(item.id)) ||
@@ -471,32 +477,52 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
 
           <Row
             icon={pinId ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
-            label={pinId ? "Retirer de l'accès rapide" : "Épingler à l'accès rapide"}
+            label={pinId ? 'Épinglé — retirer' : "Épingler à l'accès rapide"}
+            sub={pinId ? 'Sur l’accueil' : undefined}
             onClick={() =>
               after(async () => {
-                if (pinId) {
-                  await api.removePin(pinId).catch(() => undefined);
-                } else {
-                  await api
-                    .addPin({
-                      kind: item.type || 'song',
-                      targetId: item.id,
-                      payload: item,
-                      id: item.id,
-                    })
-                    .catch(() => undefined);
+                try {
+                  await togglePin(item);
+                } catch {
+                  /* ignore */
                 }
               })
             }
           />
 
           <Row
-            icon={<Sparkles className="h-4 w-4 opacity-40" />}
+            icon={<Moon className="h-4 w-4" />}
             label="Mise en veille"
-            sub="Bientôt — 5 / 15 / 30 min, 1 h, fin de chanson"
-            disabled
-            onClick={() => undefined}
+            sub={sleepLabel || '5 / 15 / 30 min, 1 h, fin de chanson'}
+            onClick={() => setShowSleep((v) => !v)}
           />
+          {showSleep && (
+            <div className="border-t border-white/10 px-2 py-1">
+              {(
+                [
+                  [5 * 60_000, '5 minutes'],
+                  [15 * 60_000, '15 minutes'],
+                  [30 * 60_000, '30 minutes'],
+                  [60 * 60_000, '1 heure'],
+                  [-1, 'Fin de la chanson'],
+                  [0, 'Annuler'],
+                ] as const
+              ).map(([ms, label]) => (
+                <Row
+                  key={label}
+                  icon={<Moon className="h-4 w-4" />}
+                  label={label}
+                  onClick={() =>
+                    after(() => {
+                      if (ms === 0) setSleepTimer(null, null);
+                      else if (ms === -1) setSleepTimer('end', 'Fin de la chanson');
+                      else setSleepTimer(ms, label);
+                    })
+                  }
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

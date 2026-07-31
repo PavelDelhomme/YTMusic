@@ -286,18 +286,23 @@ export function NowPlaying({
 
   const boundary = Math.min(Math.max(userQueueEnd || 0, 0), queue.length);
   const playingUser = queueIndex < boundary;
+  /** Titres déjà joués dans la file (cliquables pour y revenir). */
+  const playedBefore = queueIndex > 0 ? queue.slice(0, queueIndex) : [];
   const userUpcomingAll = playingUser ? queue.slice(queueIndex + 1, boundary) : [];
   const autoList = autoplay
     ? playingUser
       ? queue.slice(boundary)
-      : queue.slice(queueIndex)
+      : queue.slice(queueIndex + 1)
     : [];
-  const autoVisible = autoList.slice(0, Math.min(queueVisible + (playingUser ? 0 : 1), QUEUE_MAX));
+  const autoVisible = autoList.slice(0, Math.min(queueVisible, QUEUE_MAX));
   const canLoadMoreQueue = autoVisible.length < Math.min(autoList.length, QUEUE_MAX);
   const relatedArtists = uniqueArtists(related);
   const relatedForQueue = related.filter((t) => !queue.some((q) => q.id === t.id)).slice(0, 20);
   const userRemaining = playingUser ? 1 + userUpcomingAll.length : 0;
-  const saveTracks = queue.slice(0, Math.max(boundary, playingUser ? queueIndex + 1 : boundary));
+  const saveTracks = queue.slice(
+    0,
+    Math.max(boundary, playingUser ? queueIndex + 1 : Math.max(boundary, queueIndex + 1)),
+  );
 
   const onQueueScroll = () => {
     const el = queueScrollRef.current;
@@ -394,7 +399,8 @@ export function NowPlaying({
                     <p className="min-w-0 truncate text-xs text-yt-muted">
                       <span className="font-medium text-white">File d&apos;attente</span>
                       <span className="ml-2 tabular-nums text-yt-muted">
-                        {userRemaining} titre{userRemaining > 1 ? 's' : ''}
+                        {playedBefore.length > 0 ? `${playedBefore.length} avant · ` : ''}
+                        {userRemaining} restant{userRemaining > 1 ? 's' : ''}
                       </span>
                     </p>
                     <button
@@ -408,18 +414,48 @@ export function NowPlaying({
                       Enregistrer
                     </button>
                   </div>
-                  {playingUser ? (
-                    <>
-                      <div className="mb-1 rounded-md bg-[#ff0033]/18 ring-1 ring-[#ff0033]/55">
-                        <TrackRow
-                          track={current}
-                          queue={queue}
-                          queueIndex={queueIndex}
-                          hideIndex
-                          draggable
-                          alwaysActions
-                        />
+
+                  {playedBefore.length > 0 && (
+                    <div className="mb-3">
+                      <p className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide text-yt-muted">
+                        Déjà joués
+                      </p>
+                      <div className="opacity-70">
+                        {playedBefore.map((t, i) => (
+                          <TrackRow
+                            key={`played-${t.id}-${i}`}
+                            track={t}
+                            queue={queue}
+                            queueIndex={i}
+                            hideIndex
+                            draggable
+                            alwaysActions
+                            onPlay={() => void playAt(i)}
+                          />
+                        ))}
                       </div>
+                    </div>
+                  )}
+
+                  <p className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide text-yt-muted">
+                    En cours
+                  </p>
+                  <div className="mb-1 rounded-md bg-[#ff0033]/18 ring-1 ring-[#ff0033]/55">
+                    <TrackRow
+                      track={current}
+                      queue={queue}
+                      queueIndex={queueIndex}
+                      hideIndex
+                      draggable
+                      alwaysActions
+                    />
+                  </div>
+
+                  {userUpcomingAll.length > 0 && (
+                    <div className="mt-3">
+                      <p className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide text-yt-muted">
+                        Ensuite dans ta file
+                      </p>
                       {userUpcomingAll.map((t, i) => {
                         const abs = queueIndex + 1 + i;
                         return (
@@ -435,10 +471,12 @@ export function NowPlaying({
                           />
                         );
                       })}
-                    </>
-                  ) : (
+                    </div>
+                  )}
+
+                  {!playingUser && userUpcomingAll.length === 0 && playedBefore.length === 0 && (
                     <p className="px-2 py-3 text-center text-xs text-yt-muted">
-                      Ta file est terminée — suite en lecture auto.
+                      Ta file manuelle est vide — suite en lecture auto.
                     </p>
                   )}
                 </section>
@@ -480,27 +518,18 @@ export function NowPlaying({
 
                   {autoplay &&
                     autoVisible.map((t, i) => {
-                      const abs = (playingUser ? boundary : queueIndex) + i;
-                      const isCurrent = abs === queueIndex;
+                      const abs = (playingUser ? boundary : queueIndex + 1) + i;
                       return (
-                        <div
+                        <TrackRow
                           key={`auto-${t.id}-${abs}`}
-                          className={
-                            isCurrent
-                              ? 'mb-1 rounded-md bg-[#ff0033]/18 ring-1 ring-[#ff0033]/55'
-                              : undefined
-                          }
-                        >
-                          <TrackRow
-                            track={t}
-                            queue={queue}
-                            queueIndex={abs}
-                            hideIndex
-                            draggable
-                            alwaysActions
-                            onPlay={() => void playAt(abs)}
-                          />
-                        </div>
+                          track={t}
+                          queue={queue}
+                          queueIndex={abs}
+                          hideIndex
+                          draggable
+                          alwaysActions
+                          onPlay={() => void playAt(abs)}
+                        />
                       );
                     })}
 

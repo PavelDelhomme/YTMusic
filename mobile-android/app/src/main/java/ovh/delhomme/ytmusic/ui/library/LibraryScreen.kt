@@ -69,6 +69,8 @@ fun LibraryScreen(
     onOpenDetail: (TrackDto) -> Unit,
     onOpenArtist: ((String?, String) -> Unit)? = null,
     onOpenRecoPrefs: () -> Unit,
+    onOpenDebugLogs: () -> Unit = {},
+    onOpenYtmImport: () -> Unit = {},
     onLoggedOut: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -143,7 +145,39 @@ fun LibraryScreen(
                 ) { CircularProgressIndicator() }
             }
             error != null && lib == null -> {
-                Text(error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        "Impossible de joindre l’API",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        error!!,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "API : ${container.resolvedApiBase()}\nMême Wi‑Fi que le PC, API démarrée (make ensure-api), ou Compte → API & logs.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Button(onClick = { scope.launch { reloadLibrary(force = true, showSpinner = true) } }) {
+                        Text("Réessayer")
+                    }
+                    TextButton(onClick = onOpenDebugLogs) {
+                        Text("Régler l’URL API")
+                    }
+                }
             }
             else -> {
                 PullToRefreshBox(
@@ -269,6 +303,8 @@ fun LibraryScreen(
             onDismiss = { showAccount = false },
             onOpenRecoPrefs = onOpenRecoPrefs,
             onOpenHistory = { showHistory = true },
+            onOpenDebugLogs = onOpenDebugLogs,
+            onOpenYtmImport = onOpenYtmImport,
             onLoggedOut = onLoggedOut,
         )
     }

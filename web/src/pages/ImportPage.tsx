@@ -1,8 +1,24 @@
 import { useEffect, useState } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api';
 import { useAuth } from '../store/auth';
 import { useLibrary } from '../store/library';
 import { Download, Link2, Loader2, RefreshCw, Unplug, Music2 } from 'lucide-react';
+
+function formatSyncMsg(stats: {
+  songs: number;
+  librarySongs?: number;
+  albums: number;
+  artists: number;
+  playlists: number;
+  history?: number;
+}) {
+  return (
+    `Sync OK — ${stats.songs} likes, ${stats.librarySongs ?? 0} titres, ` +
+    `${stats.albums} albums, ${stats.artists} artistes, ${stats.playlists} playlists` +
+    (stats.history ? `, ${stats.history} récents` : '')
+  );
+}
 
 export function ImportPage() {
   const [input, setInput] = useState('');
@@ -40,7 +56,9 @@ export function ImportPage() {
         if (s.status === 'connected') {
           setOauthCode('');
           setOauthUrl('');
-          setYtmMsg('Compte YouTube Music lié — tu peux synchroniser.');
+          setYtmMsg(
+            'OAuth OK — mais la biblio YTM exige des cookies. Colle-les ci-dessous pour synchroniser.',
+          );
           refreshStatus();
         }
         if (s.status === 'error') {
@@ -75,11 +93,38 @@ export function ImportPage() {
     }
   };
 
+  const saveCookiesAndSync = () => {
+    setYtmBusy(true);
+    setYtmErr('');
+    setYtmMsg('');
+    void api
+      .ytmConnectCookie(cookie)
+      .then((r) => {
+        setAccount(r.account);
+        setCookie('');
+        setYtmMsg('Cookies enregistrés — synchronisation…');
+        return api.ytmSync();
+      })
+      .then((r) => {
+        if (!r) return;
+        applyLibrary(r.library);
+        setAccount(r.account);
+        setYtmMsg(formatSyncMsg(r.stats));
+      })
+      .catch((e) => setYtmErr(String(e.message || e)))
+      .finally(() => setYtmBusy(false));
+  };
+
+  const deviceUrl = oauthUrl || 'https://www.google.com/device';
+  const canSync = Boolean(account?.canSyncLibrary);
+  const needsCookies = account?.connected && !canSync;
+
   return (
     <div className="animate-fade-up mx-auto max-w-2xl">
       <h1 className="mb-2 font-display text-3xl font-semibold tracking-tight">Importer</h1>
       <p className="mb-6 text-sm text-yt-muted">
-        Synchronise ta vraie bibliothèque YouTube Music, ou importe un lien / une recherche.
+        Récupère ta vraie bibliothèque YouTube Music (likes, titres, albums, artistes, playlists,
+        récents) — sans Google Cloud Console. Ou importe un lien / une recherche.
       </p>
 
       {!isGuest && (
@@ -89,14 +134,21 @@ export function ImportPage() {
             <h2 className="font-display text-lg font-semibold">Compte YouTube Music</h2>
           </div>
           <p className="mb-4 text-sm text-yt-muted">
-            Lie ton compte YTM pour récupérer titres aimés, albums, artistes et playlists dans
-            cette app (stockage local sécurisé, cookies chiffrés).
+            Google bloque OAuth pour la bibliothèque YTM. Il faut coller les{' '}
+            <span className="text-white">cookies</span> de ta session{' '}
+            <span className="text-white">music.youtube.com</span> (chiffrés côté serveur).
           </p>
 
-          {account?.connected ? (
+          {account?.hint && (
+            <p className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+              {account.hint}
+            </p>
+          )}
+
+          {canSync ? (
             <div className="mb-4 space-y-3">
               <p className="text-sm text-emerald-400">
-                Connecté
+                Cookies OK — prêt à synchroniser
                 {account.lastSyncAt
                   ? ` · dernière sync ${new Date(account.lastSyncAt).toLocaleString('fr-FR')}`
                   : ''}
@@ -118,9 +170,7 @@ export function ImportPage() {
                       .then((r) => {
                         applyLibrary(r.library);
                         setAccount(r.account);
-                        setYtmMsg(
-                          `Sync OK — ${r.stats.songs} titres, ${r.stats.albums} albums, ${r.stats.artists} artistes, ${r.stats.playlists} playlists`,
-                        );
+                        setYtmMsg(formatSyncMsg(r.stats));
                       })
                       .catch((e) => setYtmErr(String(e.message || e)))
                       .finally(() => setYtmBusy(false));
@@ -143,81 +193,135 @@ export function ImportPage() {
                   <Unplug className="h-4 w-4" /> Déconnecter
                 </button>
               </div>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <button
-                type="button"
-                disabled={ytmBusy}
-                className="rounded-full bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-50"
-                onClick={() => {
-                  setYtmBusy(true);
-                  setYtmErr('');
-                  void api
-                    .ytmConnectOauth()
-                    .then((r) => {
-                      setOauthCode(r.userCode);
-                      setOauthUrl(r.verificationUrl);
-                      setYtmMsg('Ouvre le lien Google, entre le code, puis attends la confirmation.');
-                    })
-                    .catch((e) => setYtmErr(String(e.message || e)))
-                    .finally(() => setYtmBusy(false));
-                }}
-              >
-                Lier via Google (code appareil)
-              </button>
-              {oauthCode && (
-                <div className="rounded-xl bg-yt-elevated px-3 py-3 text-sm">
-                  <p>
-                    Va sur{' '}
-                    <a
-                      href={oauthUrl || 'https://www.google.com/device'}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-yt-red underline"
-                    >
-                      {oauthUrl || 'google.com/device'}
-                    </a>
-                  </p>
-                  <p className="mt-2 font-mono text-lg tracking-widest text-white">{oauthCode}</p>
-                  <p className="mt-1 text-xs text-yt-muted">En attente de validation…</p>
-                </div>
-              )}
-
               <details className="rounded-xl border border-yt-border bg-yt-bg p-3 text-sm">
-                <summary className="cursor-pointer text-yt-muted">Ou coller les cookies (avancé)</summary>
-                <p className="mt-2 text-xs text-yt-muted">
-                  Sur music.youtube.com connecté → F12 → Réseau → une requête → en-tête Cookie →
-                  copie (SID, SAPISID…).
-                </p>
+                <summary className="cursor-pointer text-yt-muted">Renouveler les cookies</summary>
                 <textarea
                   value={cookie}
                   onChange={(e) => setCookie(e.target.value)}
                   rows={3}
                   className="mt-2 w-full rounded-xl border border-yt-border bg-yt-elevated px-3 py-2 text-xs outline-none"
-                  placeholder="SID=…; HSID=…; SSID=…; APISID=…; SAPISID=…"
+                  placeholder="Cookie: SID=…; …; SAPISID=…"
                 />
                 <button
                   type="button"
                   disabled={ytmBusy || cookie.length < 20}
                   className="mt-2 rounded-full bg-yt-elevated px-4 py-2 text-xs disabled:opacity-50"
+                  onClick={saveCookiesAndSync}
+                >
+                  Mettre à jour & synchroniser
+                </button>
+              </details>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {needsCookies && (
+                <p className="text-sm text-amber-300">
+                  Compte partiellement lié (OAuth) — ajoute les cookies pour importer la biblio.
+                </p>
+              )}
+
+              <div className="rounded-xl border border-yt-border bg-yt-bg p-4">
+                <h3 className="mb-2 text-sm font-medium text-white">1. Coller les cookies (requis)</h3>
+                <ol className="mb-3 list-decimal space-y-1 pl-4 text-xs text-yt-muted">
+                  <li>
+                    Ouvre{' '}
+                    <a
+                      href="https://music.youtube.com"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-yt-red underline"
+                    >
+                      music.youtube.com
+                    </a>{' '}
+                    connecté à ton compte Google
+                  </li>
+                  <li>F12 → onglet Réseau → recharge la page</li>
+                  <li>Clique une requête vers music.youtube.com (ex. browse)</li>
+                  <li>En-têtes → copie toute la valeur de Cookie (SAPISID / __Secure-1PSID…)</li>
+                </ol>
+                <textarea
+                  value={cookie}
+                  onChange={(e) => setCookie(e.target.value)}
+                  rows={4}
+                  className="w-full rounded-xl border border-yt-border bg-yt-elevated px-3 py-2 text-xs outline-none"
+                  placeholder="SID=…; HSID=…; SSID=…; APISID=…; SAPISID=…; __Secure-1PSID=…"
+                />
+                <button
+                  type="button"
+                  disabled={ytmBusy || cookie.length < 20}
+                  className="mt-2 inline-flex items-center gap-2 rounded-full bg-yt-red px-4 py-2 text-sm font-medium disabled:opacity-50"
+                  onClick={saveCookiesAndSync}
+                >
+                  {ytmBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Enregistrer & synchroniser
+                </button>
+              </div>
+
+              <details className="rounded-xl border border-yt-border bg-yt-bg p-3 text-sm">
+                <summary className="cursor-pointer text-yt-muted">
+                  Optionnel : code appareil Google (ne suffit pas pour la biblio)
+                </summary>
+                <p className="mt-2 text-xs text-yt-muted">
+                  Utile pour d’autres actions, mais Google renvoie 400 sur getLibrary sans cookies.
+                </p>
+                <button
+                  type="button"
+                  disabled={ytmBusy}
+                  className="mt-2 rounded-full bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-50"
                   onClick={() => {
                     setYtmBusy(true);
                     setYtmErr('');
                     void api
-                      .ytmConnectCookie(cookie)
+                      .ytmConnectOauth()
                       .then((r) => {
-                        setAccount(r.account);
-                        setCookie('');
-                        setYtmMsg('Cookies enregistrés — lance une synchronisation.');
+                        setOauthCode(r.userCode);
+                        setOauthUrl(r.verificationUrl);
+                        setYtmMsg('Ouvre le lien Google (ou scanne le QR), entre le code, puis attends.');
                       })
                       .catch((e) => setYtmErr(String(e.message || e)))
                       .finally(() => setYtmBusy(false));
                   }}
                 >
-                  Enregistrer les cookies
+                  Lier via Google (code appareil)
                 </button>
+                {oauthCode && (
+                  <div className="mt-3 flex flex-col gap-4 rounded-xl bg-yt-elevated px-3 py-3 text-sm sm:flex-row sm:items-center">
+                    <div className="flex-1">
+                      <p>
+                        Va sur{' '}
+                        <a
+                          href={deviceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-yt-red underline"
+                        >
+                          {deviceUrl.replace(/^https?:\/\//, '')}
+                        </a>
+                      </p>
+                      <p className="mt-2 font-mono text-lg tracking-widest text-white">{oauthCode}</p>
+                    </div>
+                    <div className="mx-auto rounded-2xl bg-white p-3">
+                      <QRCodeSVG value={deviceUrl} size={120} level="M" />
+                    </div>
+                  </div>
+                )}
               </details>
+
+              {account?.connected && (
+                <button
+                  type="button"
+                  disabled={ytmBusy}
+                  className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-4 py-2 text-sm text-yt-muted hover:text-white"
+                  onClick={() => {
+                    void api.ytmDisconnect().then((r) => {
+                      setAccount(r.account);
+                      setYtmMsg('Compte YTM déconnecté');
+                    });
+                  }}
+                >
+                  <Unplug className="h-4 w-4" /> Déconnecter
+                </button>
+              )}
             </div>
           )}
 

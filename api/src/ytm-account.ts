@@ -45,11 +45,14 @@ ensureYtmAccountSchema();
 
 export type YtmAccountPublic = {
   connected: boolean;
+  /** true seulement si cookies navigateur présents (requis pour getLibrary YTM). */
+  canSyncLibrary: boolean;
   hasCookie: boolean;
   hasOauth: boolean;
   connectedAt: number | null;
   lastSyncAt: number | null;
   lastSyncSummary: string | null;
+  hint: string | null;
 };
 
 export function getYtmAccountPublic(userId: string): YtmAccountPublic {
@@ -65,20 +68,29 @@ export function getYtmAccountPublic(userId: string): YtmAccountPublic {
   if (!row) {
     return {
       connected: false,
+      canSyncLibrary: false,
       hasCookie: false,
       hasOauth: false,
       connectedAt: null,
       lastSyncAt: null,
       lastSyncSummary: null,
+      hint: null,
     };
   }
+  const hasCookie = Boolean(row.cookie_enc);
+  const hasOauth = Boolean(row.oauth_enc);
   return {
-    connected: Boolean(row.cookie_enc || row.oauth_enc),
-    hasCookie: Boolean(row.cookie_enc),
-    hasOauth: Boolean(row.oauth_enc),
+    connected: hasCookie || hasOauth,
+    canSyncLibrary: hasCookie,
+    hasCookie,
+    hasOauth,
     connectedAt: row.connected_at,
     lastSyncAt: row.last_sync_at,
     lastSyncSummary: row.last_sync_summary,
+    hint:
+      hasOauth && !hasCookie
+        ? 'OAuth seul ne suffit plus pour la bibliothèque YouTube Music (Google renvoie 400). Colle les cookies depuis music.youtube.com.'
+        : null,
   };
 }
 
@@ -96,30 +108,80 @@ export function getYtmCredentials(userId: string): {
   };
 }
 
+/**
+ * Accepte une ligne Cookie=… ou un collage d’en-têtes HTTP (ytmusicapi style).
+ */
+export function normalizeYtmCookiePaste(raw: string): string {
+  let text = raw.replace(/\r/g, '').trim();
+  if (!text) return '';
+
+  // Bloc d’en-têtes : extraire la ligne Cookie
+  const headerMatch = text.match(/^[Cc]ookie:\s*(.+)$/m);
+  if (headerMatch) {
+    text = headerMatch[1].trim();
+  } else if (/^[A-Za-z0-9-]+:\s*/m.test(text) && /cookie\s*:/i.test(text)) {
+    const line = text
+      .split('\n')
+      .map((l) => l.trim())
+      .find((l) => /^cookie\s*:/i.test(l));
+    if (line) text = line.replace(/^cookie\s*:\s*/i, '').trim();
+  }
+
+  // Une seule ligne, espaces → ;
+  text = text.replace(/\n+/g, ' ').replace(/\s*;\s*/g, '; ').trim();
+  if (
+    (text.startsWith('"') && text.endsWith('"')) ||
+    (text.startsWith("'") && text.endsWith("'"))
+  ) {
+    text = text.slice(1, -1).trim();
+  }
+  return text;
+}
+
 export function saveYtmCookie(userId: string, cookie: string) {
-  const cleaned = cookie.replace(/\r?\n/g, ' ').trim();
-  if (!cleaned || cleaned.length < 20) throw new Error('Cookie YTM invalide ou trop court');
-  const needed = ['SID', 'HSID', 'SSID', 'APISID', 'SAPISID'];
-  const missing = needed.filter((k) => !cleaned.includes(`${k}=`));
-  if (missing.length >= 3) {
+  const cleaned = normalizeYtmCookiePaste(cookie);
+  if (!cleaned || cleaned.length < 20) {
+    throw new Error('Cookie YTM invalide ou trop court');
+  }
+
+  const hasSapisid = /(?:^|;\s*)SAPISID=/.test(cleaned);
+  const hasSecurePsId =
+    /(?:^|;\s*)__Secure-1PSID=/.test(cleaned) || /(?:^|;\s*)__Secure-3PSID=/.test(cleaned);
+  const classic = ['SID', 'HSID', 'SSID', 'APISID'].filter((k) =>
+    new RegExp(`(?:^|;\\s*)${k}=`).test(cleaned),
+  );
+
+  if (!hasSapisid && !hasSecurePsId) {
     throw new Error(
-      `Cookie incomplet (manque souvent ${missing.join(', ')}). Depuis music.youtube.com connecté → F12 → Application → Cookies → copie la chaîne Cookie.`,
+      'Cookie incomplet : il faut SAPISID (ou __Secure-1PSID). Sur music.youtube.com connecté → F12 → Réseau → filtre « browse » → Requête → En-tête Cookie → copie toute la valeur.',
     );
   }
+  if (!hasSapisid && classic.length < 2 && !hasSecurePsId) {
+    throw new Error(
+      'Cookie incomplet. Copie l’en-tête Cookie entier d’une requête browse sur music.youtube.com (pas seulement un fragment).',
+    );
+  }
+
   const now = Date.now();
+  // Garde l’oauth éventuel : les cookies priment pour la sync biblio
   db.prepare(
     `INSERT INTO ytm_accounts (user_id, cookie_enc, oauth_enc, connected_at)
-     VALUES (?, ?, NULL, ?)
-     ON CONFLICT(user_id) DO UPDATE SET cookie_enc = excluded.cookie_enc, oauth_enc = NULL, connected_at = excluded.connected_at`,
-  ).run(userId, encrypt(cleaned), now);
+     VALUES (?, ?, COALESCE((SELECT oauth_enc FROM ytm_accounts WHERE user_id = ?), NULL), ?)
+     ON CONFLICT(user_id) DO UPDATE SET
+       cookie_enc = excluded.cookie_enc,
+       connected_at = excluded.connected_at`,
+  ).run(userId, encrypt(cleaned), userId, now);
 }
 
 export function saveYtmOauth(userId: string, tokens: Record<string, unknown>) {
   const now = Date.now();
+  // Ne pas écraser un cookie déjà présent (utile pour la biblio)
   db.prepare(
     `INSERT INTO ytm_accounts (user_id, cookie_enc, oauth_enc, connected_at)
      VALUES (?, NULL, ?, ?)
-     ON CONFLICT(user_id) DO UPDATE SET oauth_enc = excluded.oauth_enc, cookie_enc = NULL, connected_at = excluded.connected_at`,
+     ON CONFLICT(user_id) DO UPDATE SET
+       oauth_enc = excluded.oauth_enc,
+       connected_at = excluded.connected_at`,
   ).run(userId, encrypt(JSON.stringify(tokens)), now);
 }
 

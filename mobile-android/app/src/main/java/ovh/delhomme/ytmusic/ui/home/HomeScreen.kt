@@ -69,6 +69,8 @@ fun HomeScreen(
     onOpenDetail: (TrackDto) -> Unit,
     onOpenArtist: ((String?, String) -> Unit)? = null,
     onOpenRecoPrefs: () -> Unit = {},
+    onOpenDebugLogs: () -> Unit = {},
+    onOpenYtmImport: () -> Unit = {},
     onLoggedOut: () -> Unit = {},
     vm: HomeViewModel = viewModel(factory = HomeViewModel.factory(container)),
 ) {
@@ -304,6 +306,8 @@ fun HomeScreen(
             onDismiss = { showAccount = false },
             onOpenRecoPrefs = onOpenRecoPrefs,
             onOpenHistory = { showHistory = true },
+            onOpenDebugLogs = onOpenDebugLogs,
+            onOpenYtmImport = onOpenYtmImport,
             onLoggedOut = onLoggedOut,
         )
     }
@@ -397,12 +401,34 @@ private fun QuickAccessHomeCard(
                         MediaCover(track, 100.dp, circle = track.isArtist())
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            track.title,
+                            track.title.ifBlank { "Sans titre" },
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Medium,
                         )
+                        val subtitle = when {
+                            track.isArtist() -> "Artiste"
+                            else ->
+                                track.artists
+                                    ?.mapNotNull { it.name?.trim()?.takeIf { n -> n.isNotEmpty() } }
+                                    ?.joinToString(", ")
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: when {
+                                        track.isAlbum() -> "Album"
+                                        track.isPlaylist() -> "Playlist"
+                                        else -> null
+                                    }
+                        }
+                        if (!subtitle.isNullOrBlank()) {
+                            Text(
+                                subtitle,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }

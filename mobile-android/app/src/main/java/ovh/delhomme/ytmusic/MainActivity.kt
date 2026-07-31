@@ -73,8 +73,11 @@ import ovh.delhomme.ytmusic.ui.components.AddToPlaylistSheet
 import ovh.delhomme.ytmusic.ui.components.CastSheet
 import ovh.delhomme.ytmusic.ui.components.MiniPlayerBar
 import ovh.delhomme.ytmusic.ui.components.TrackActionsSheet
+import ovh.delhomme.ytmusic.ui.debug.DebugLogsScreen
 import ovh.delhomme.ytmusic.ui.detail.ArtistDetailScreen
+import ovh.delhomme.ytmusic.debug.AppLog
 import ovh.delhomme.ytmusic.ui.detail.ArtistSongsScreen
+import ovh.delhomme.ytmusic.ui.importytm.YtmImportScreen
 import ovh.delhomme.ytmusic.ui.detail.CollectionDetailScreen
 import ovh.delhomme.ytmusic.ui.detail.DetailKind
 import ovh.delhomme.ytmusic.ui.home.HomeScreen
@@ -199,6 +202,8 @@ fun YtMusicAppContent(
                 onOpenPlayer = { showNowPlaying = true },
                 onClosePlayer = { showNowPlaying = false },
                 onPlayTracks = { tracks, idx ->
+                    val t = tracks.getOrNull(idx)
+                    AppLog.breadcrumb("play", "${t?.id ?: "?"} idx=$idx n=${tracks.size}")
                     scope.launch {
                         runCatching {
                             container.api.setSessionActive(mapOf("targetId" to container.deviceId))
@@ -208,6 +213,8 @@ fun YtMusicAppContent(
                     showNowPlaying = false
                 },
                 onPlayNamed = { tracks, idx, title ->
+                    val t = tracks.getOrNull(idx)
+                    AppLog.breadcrumb("play", "$title · ${t?.id ?: "?"} n=${tracks.size}")
                     val radioish =
                         title.contains("radio", ignoreCase = true) ||
                             title.equals("Mix", ignoreCase = true) ||
@@ -257,6 +264,10 @@ private fun MainTabs(
     val playerUi by player.state.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    LaunchedEffect(current) {
+        if (!current.isNullOrBlank()) AppLog.breadcrumb("nav", current)
+    }
 
     fun openDetail(item: TrackDto) {
         val kind = when {
@@ -594,7 +605,6 @@ private fun MainTabs(
                                 suppressSessionPublishUntil = 0L
                                 player.skipNext()
                             },
-                            onCast = { showCast = true },
                             onOpen = onOpenPlayer,
                             onSeek = { ratio ->
                                 val dur = playerUi.durationMs
@@ -651,6 +661,8 @@ private fun MainTabs(
                     onOpenDetail = ::openDetail,
                     onOpenArtist = ::openArtist,
                     onOpenRecoPrefs = { nav.navigate("reco_prefs") },
+                    onOpenDebugLogs = { nav.navigate("debug_logs") },
+                    onOpenYtmImport = { nav.navigate("ytm_import") },
                     onLoggedOut = onLoggedOut,
                 )
             }
@@ -671,7 +683,18 @@ private fun MainTabs(
                     onOpenDetail = ::openDetail,
                     onOpenArtist = ::openArtist,
                     onOpenRecoPrefs = { nav.navigate("reco_prefs") },
+                    onOpenDebugLogs = { nav.navigate("debug_logs") },
+                    onOpenYtmImport = { nav.navigate("ytm_import") },
                     onLoggedOut = onLoggedOut,
+                )
+            }
+            composable("debug_logs") {
+                DebugLogsScreen(container = container, onBack = { nav.popBackStack() })
+            }
+            composable("ytm_import") {
+                YtmImportScreen(
+                    container = container,
+                    onBack = { nav.popBackStack() },
                 )
             }
             composable("reco_prefs") {
@@ -775,6 +798,7 @@ private fun MainTabs(
             onOpenArtist = { id ->
                 openArtist(id, "")
             },
+            onCast = { showCast = true },
             playlistId = menuPlaylistId,
             onRemovedFromPlaylist = { detailReloadToken++ },
         )

@@ -45,9 +45,8 @@ object NowPlayingChrome {
         ChromeSlot(PlayerChromeAction.Repeat, "Boucle"),
     )
 
-    /** Barre du haut (plein écran). */
+    /** Barre du haut (plein écran) — Cast est dans le menu ⋮. */
     val topBarActions: List<ChromeSlot> = listOf(
-        ChromeSlot(PlayerChromeAction.Cast, "Cast"),
         ChromeSlot(PlayerChromeAction.More, "Plus"),
     )
 }

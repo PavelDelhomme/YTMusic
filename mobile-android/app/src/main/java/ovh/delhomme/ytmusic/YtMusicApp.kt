@@ -6,6 +6,7 @@ import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import ovh.delhomme.ytmusic.data.AppContainer
+import ovh.delhomme.ytmusic.debug.CrashReporter
 
 class YtMusicApp : Application(), ImageLoaderFactory {
     lateinit var container: AppContainer
@@ -14,6 +15,7 @@ class YtMusicApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        CrashReporter.install(this)
         container = AppContainer(this)
     }
 

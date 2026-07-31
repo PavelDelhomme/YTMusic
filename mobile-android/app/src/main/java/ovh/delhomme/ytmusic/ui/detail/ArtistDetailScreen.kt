@@ -44,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -163,34 +164,94 @@ fun ArtistDetailScreen(
             else -> {
                 LazyColumn(contentPadding = PaddingValues(bottom = 32.dp)) {
                     item {
-                        Row(
-                            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.Bottom,
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            cover?.let { MediaCover(it, 140.dp, circle = true) }
-                            Spacer(Modifier.width(16.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    name,
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 3,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    subscribers ?: "Artiste",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Spacer(Modifier.height(12.dp))
+                            cover?.let {
+                                MediaCover(it, 168.dp, circle = true)
+                                Spacer(Modifier.height(16.dp))
+                            }
+                            Text(
+                                name,
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                subscribers ?: "Artiste",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(14.dp))
+                            if (songs.isNotEmpty()) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Button(
+                                        onClick = { onPlay(songs, 0) },
+                                        modifier = Modifier.weight(1f),
+                                    ) {
+                                        Icon(Icons.Default.PlayArrow, null, Modifier.size(20.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Lecture")
+                                    }
+                                    OutlinedButton(
+                                        onClick = { onPlay(songs.shuffled(), 0) },
+                                        modifier = Modifier.weight(1f),
+                                    ) {
+                                        Icon(Icons.Default.Shuffle, null, Modifier.size(18.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Aléatoire")
+                                    }
+                                }
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        radioBusy = true
+                                        scope.launch {
+                                            val mix = buildRadioQueue(
+                                                container.api,
+                                                "artist",
+                                                artistId,
+                                                songs.firstOrNull(),
+                                            )
+                                            radioBusy = false
+                                            if (mix.isEmpty()) {
+                                                Toast.makeText(context, "Radio indisponible", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                onPlayNamed(mix, 0, "Radio")
+                                            }
+                                        }
+                                    },
+                                    enabled = !radioBusy,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Icon(Icons.Default.Radio, null, Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(if (radioBusy) "Radio…" else "Radio")
+                                }
+                                Spacer(Modifier.height(8.dp))
+                            }
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
                                 OutlinedButton(
                                     onClick = {
                                         scope.launch {
                                             runCatching {
                                                 if (inLib) {
-                                                    // pas d'endpoint remove dédié toujours sûr — re-save noop
                                                     Toast.makeText(context, "Déjà dans la bibliothèque", Toast.LENGTH_SHORT).show()
                                                 } else {
                                                     container.api.saveArtist(
@@ -209,13 +270,16 @@ fun ArtistDetailScreen(
                                             }
                                         }
                                     },
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier.weight(1f),
                                 ) {
                                     Icon(Icons.Default.LibraryMusic, null, Modifier.size(18.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(if (inLib) "Dans la bibliothèque" else "Enregistrer l'artiste")
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        if (inLib) "Enregistré" else "Biblio",
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
                                 }
-                                Spacer(Modifier.height(8.dp))
                                 OutlinedButton(
                                     onClick = {
                                         scope.launch {
@@ -235,65 +299,19 @@ fun ArtistDetailScreen(
                                             }
                                         }
                                     },
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier.weight(1f),
                                 ) {
                                     Icon(
                                         if (following) Icons.Default.PersonRemove else Icons.Default.PersonAdd,
                                         null,
                                         Modifier.size(18.dp),
                                     )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(if (following) "Abonné" else "Suivre")
-                                }
-                                if (songs.isNotEmpty()) {
-                                    Spacer(Modifier.height(8.dp))
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    ) {
-                                        Button(
-                                            onClick = { onPlay(songs, 0) },
-                                            modifier = Modifier.weight(1f),
-                                        ) {
-                                            Icon(Icons.Default.PlayArrow, null, Modifier.size(20.dp))
-                                            Spacer(Modifier.width(4.dp))
-                                            Text("Lecture")
-                                        }
-                                        OutlinedButton(
-                                            onClick = { onPlay(songs.shuffled(), 0) },
-                                            modifier = Modifier.weight(1f),
-                                        ) {
-                                            Icon(Icons.Default.Shuffle, null, Modifier.size(18.dp))
-                                            Spacer(Modifier.width(4.dp))
-                                            Text("Aléatoire")
-                                        }
-                                    }
-                                    Spacer(Modifier.height(8.dp))
-                                    OutlinedButton(
-                                        onClick = {
-                                            radioBusy = true
-                                            scope.launch {
-                                                val mix = buildRadioQueue(
-                                                    container.api,
-                                                    "artist",
-                                                    artistId,
-                                                    songs.firstOrNull(),
-                                                )
-                                                radioBusy = false
-                                                if (mix.isEmpty()) {
-                                                    Toast.makeText(context, "Radio indisponible", Toast.LENGTH_SHORT).show()
-                                                } else {
-                                                    onPlayNamed(mix, 0, "Radio")
-                                                }
-                                            }
-                                        },
-                                        enabled = !radioBusy,
-                                        modifier = Modifier.fillMaxWidth(),
-                                    ) {
-                                        Icon(Icons.Default.Radio, null, Modifier.size(18.dp))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(if (radioBusy) "Radio…" else "Radio")
-                                    }
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        if (following) "Abonné" else "Suivre",
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
                                 }
                             }
                         }

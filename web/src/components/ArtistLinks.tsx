@@ -14,15 +14,24 @@ export function ArtistLinks({
   className?: string;
   separator?: string;
   onArtistClick?: (id: string) => void;
-  emptyLabel?: string;
+  /** null / '' = rien si pas d’artiste (évite « Artiste2023 » collé à l’année). */
+  emptyLabel?: string | null;
 }) {
   const navigate = useNavigate();
   const [busyName, setBusyName] = useState<string | null>(null);
-  const artists = (track.artists || []).filter(
-    (a) => a?.name && !/^(inconnu|unknown|n\/a)$/i.test(a.name.trim()),
-  );
+  const artists = (track.artists || []).filter((a) => {
+    const n = a?.name?.trim() || '';
+    if (!n) return false;
+    if (/^(inconnu|unknown|n\/a)$/i.test(n)) return false;
+    if (/^\d+\s*songs?$/i.test(n) || /^\d+\s*titres?$/i.test(n)) return false;
+    if (/^\d+\s*(min|mins|minutes?|sec|secs|seconds?|h|hr|hrs|hours?)$/i.test(n)) return false;
+    if (/^\d+\s*hours?(?:,?\s*\d+\s*minutes?)?$/i.test(n)) return false;
+    if (/^(song|album|playlist|video|ep|single)$/i.test(n)) return false;
+    return true;
+  });
   if (!artists.length) {
-    return emptyLabel ? <span className={className}>{emptyLabel}</span> : null;
+    if (!emptyLabel) return null;
+    return <span className={className}>{emptyLabel}</span>;
   }
 
   const go = async (a: { name: string; id?: string }) => {

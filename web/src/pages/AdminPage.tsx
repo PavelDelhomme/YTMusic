@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Construction,
   Copy,
+  Download,
   Mail,
   Monitor,
   Radar,
@@ -22,6 +23,9 @@ export function AdminPage() {
   const [err, setErr] = useState('');
   const [selectedUrl, setSelectedUrl] = useState('');
   const [copied, setCopied] = useState(false);
+  const [mobileTab, setMobileTab] = useState<'pwa' | 'apk'>('apk');
+  const [apkTarget, setApkTarget] = useState('auto');
+  const [apkCustom, setApkCustom] = useState('');
   const [telemetry, setTelemetry] = useState<{ stats: any; events: any[] } | null>(null);
   const [mails, setMails] = useState<any[]>([]);
   const [levelFilter, setLevelFilter] = useState('');
@@ -434,59 +438,211 @@ export function AdminPage() {
       </section>
 
       <section className="mb-6 overflow-hidden rounded-3xl border border-yt-border bg-gradient-to-br from-[#1a1a1a] via-yt-surface to-[#0d0d0d] p-6">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-center">
-          <div className="flex-1">
-            <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-yt-red/20 px-3 py-1 text-xs font-medium text-yt-red">
-              <Rocket className="h-3.5 w-3.5" /> Déploiement mobile
-            </div>
-            <h2 className="font-display text-2xl font-semibold">Installe YTMusic sur ton téléphone</h2>
-            <p className="mt-2 max-w-md text-sm text-yt-muted">
-              Même Wi‑Fi que cet ordinateur. Scanne le QR, ouvre le lien, puis installe en PWA
-              (plein écran, icône, offline).
-            </p>
-            <div className="mt-4 space-y-2">
-              {(status?.urls || []).map((u: string) => (
-                <button
-                  key={u}
-                  type="button"
-                  onClick={() => setSelectedUrl(u)}
-                  className={`block w-full rounded-xl px-3 py-2 text-left text-sm transition ${
-                    selectedUrl === u ? 'bg-white text-black' : 'bg-yt-elevated text-yt-muted hover:text-white'
-                  }`}
-                >
-                  {u}
-                </button>
-              ))}
-            </div>
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <div className="inline-flex items-center gap-2 rounded-full bg-yt-red/20 px-3 py-1 text-xs font-medium text-yt-red">
+            <Rocket className="h-3.5 w-3.5" /> Déploiement mobile
+          </div>
+          <div className="flex rounded-full bg-black/40 p-1 text-xs">
             <button
               type="button"
-              className="mt-3 inline-flex items-center gap-2 text-xs text-yt-muted hover:text-white"
-              onClick={() => {
-                void navigator.clipboard.writeText(selectedUrl).then(() => {
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 1500);
-                });
-              }}
+              onClick={() => setMobileTab('apk')}
+              className={`rounded-full px-3 py-1 ${mobileTab === 'apk' ? 'bg-white text-black' : 'text-yt-muted'}`}
             >
-              <Copy className="h-3.5 w-3.5" />
-              {copied ? 'Copié !' : 'Copier le lien'}
+              APK natif
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileTab('pwa')}
+              className={`rounded-full px-3 py-1 ${mobileTab === 'pwa' ? 'bg-white text-black' : 'text-yt-muted'}`}
+            >
+              PWA
             </button>
           </div>
-          <div className="mx-auto rounded-3xl bg-white p-4 shadow-2xl">
-            <QRCodeSVG value={selectedUrl || 'https://localhost'} size={200} level="M" />
-          </div>
         </div>
-        <ol className="mt-6 grid gap-3 text-sm text-yt-muted sm:grid-cols-3">
-          <li className="rounded-2xl bg-black/30 p-3">
-            <span className="text-white">1.</span> Scanne le QR sur le téléphone
-          </li>
-          <li className="rounded-2xl bg-black/30 p-3">
-            <span className="text-white">2.</span> Connecte-toi avec ton compte (obligatoire)
-          </li>
-          <li className="rounded-2xl bg-black/30 p-3">
-            <span className="text-white">3.</span> « Installer l&apos;app » dans le navigateur
-          </li>
-        </ol>
+
+        {mobileTab === 'apk' ? (
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+            <div className="flex-1">
+              <h2 className="font-display text-2xl font-semibold">APK Android (Kotlin)</h2>
+              <p className="mt-2 max-w-lg text-sm text-yt-muted">
+                L’URL API est figée dans l’APK au build. Hors Wi‑Fi local → utilise{' '}
+                <code className="text-white">APP_URL</code> /{' '}
+                <code className="text-white">ANDROID_API_BASE_URL</code> (prod / préprod).
+              </p>
+
+              <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+                <div className="rounded-xl bg-black/30 px-3 py-2">
+                  <dt className="text-xs text-yt-muted">APP_ENV</dt>
+                  <dd className="font-medium">{status?.apk?.appEnv || '—'}</dd>
+                </div>
+                <div className="rounded-xl bg-black/30 px-3 py-2">
+                  <dt className="text-xs text-yt-muted">Cible auto</dt>
+                  <dd className="truncate font-medium">{status?.apk?.targetApiBaseUrl || '—'}</dd>
+                </div>
+                <div className="rounded-xl bg-black/30 px-3 py-2">
+                  <dt className="text-xs text-yt-muted">APP_URL</dt>
+                  <dd className="truncate font-medium">{status?.apk?.appUrl || '—'}</dd>
+                </div>
+                <div className="rounded-xl bg-black/30 px-3 py-2">
+                  <dt className="text-xs text-yt-muted">Dernière APK</dt>
+                  <dd className="font-medium">
+                    {status?.apk?.ready
+                      ? `${status.apk.versionName || '?'} → ${status.apk.apiBaseUrl || '?'}`
+                      : 'pas encore publiée'}
+                  </dd>
+                </div>
+              </dl>
+
+              <label className="mt-4 block text-xs text-yt-muted">URL API à figer</label>
+              <select
+                value={apkTarget}
+                onChange={(e) => setApkTarget(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-yt-border bg-yt-elevated px-3 py-2 text-sm"
+              >
+                <option value="auto">Auto (env · ANDROID_API_BASE_URL · APP_URL · LAN)</option>
+                <option value="lan">LAN (même Wi‑Fi) — {status?.apk?.presets?.lan || '…'}</option>
+                <option value="app_url">APP_URL — {status?.apk?.presets?.app_url || '…'}</option>
+                <option value="production">Production — https://ytmusic.delhomme.ovh</option>
+                <option value="preprod">Préprod — https://ytmusic-preprod.delhomme.ovh</option>
+                <option value="custom">URL personnalisée…</option>
+              </select>
+              {apkTarget === 'custom' && (
+                <input
+                  value={apkCustom}
+                  onChange={(e) => setApkCustom(e.target.value)}
+                  placeholder="https://ytmusic.delhomme.ovh"
+                  className="mt-2 w-full rounded-xl border border-yt-border bg-yt-elevated px-3 py-2 text-sm"
+                />
+              )}
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={status?.apk?.job?.status === 'running' || !status?.apk?.sdkReady}
+                  onClick={() => {
+                    const target =
+                      apkTarget === 'custom'
+                        ? apkCustom.trim()
+                        : apkTarget === 'production' || apkTarget === 'preprod'
+                          ? status?.apk?.presets?.[apkTarget]
+                          : apkTarget;
+                    if (!target) return;
+                    void api.adminApkBuild(target).then(() => refresh());
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full bg-yt-red px-5 py-2 text-sm font-medium disabled:opacity-50"
+                >
+                  <Smartphone className="h-4 w-4" />
+                  {status?.apk?.job?.status === 'running' ? 'Compilation…' : 'Compiler & publier l’APK'}
+                </button>
+                {status?.apk?.ready && (
+                  <a
+                    href={status.apk.downloadUrl}
+                    className="inline-flex items-center gap-2 rounded-full border border-yt-border px-5 py-2 text-sm hover:bg-yt-elevated"
+                  >
+                    <Download className="h-4 w-4" /> Télécharger
+                  </a>
+                )}
+              </div>
+              {!status?.apk?.sdkReady && (
+                <p className="mt-2 text-xs text-amber-300">
+                  Gradle Android introuvable sur cette machine — utilise{' '}
+                  <code className="text-white">make android-publish</code> en local puis resers le fichier.
+                </p>
+              )}
+              {status?.apk?.job?.status === 'ok' && (
+                <p className="mt-2 inline-flex items-center gap-1 text-sm text-emerald-400">
+                  <CheckCircle2 className="h-4 w-4" /> APK publiée
+                </p>
+              )}
+              {status?.apk?.job?.status === 'error' && (
+                <p className="mt-2 text-sm text-red-400">Échec compilation — voir le log</p>
+              )}
+              {status?.apk?.job?.log && (
+                <pre className="mt-3 max-h-40 overflow-auto rounded-xl bg-black/50 p-3 text-[11px] leading-relaxed text-yt-muted">
+                  {String(status.apk.job.log).slice(-3500)}
+                </pre>
+              )}
+              <ol className="mt-4 grid gap-2 text-sm text-yt-muted sm:grid-cols-3">
+                <li className="rounded-2xl bg-black/30 p-3">
+                  <span className="text-white">1.</span> Choisis prod / LAN / APP_URL
+                </li>
+                <li className="rounded-2xl bg-black/30 p-3">
+                  <span className="text-white">2.</span> Compile (ou make android-publish)
+                </li>
+                <li className="rounded-2xl bg-black/30 p-3">
+                  <span className="text-white">3.</span> Scanne le QR → installe l’APK
+                </li>
+              </ol>
+            </div>
+            <div className="mx-auto text-center">
+              <div className="rounded-3xl bg-white p-4 shadow-2xl">
+                <QRCodeSVG
+                  value={status?.apk?.downloadUrl || 'https://localhost'}
+                  size={200}
+                  level="M"
+                />
+              </div>
+              <p className="mt-2 max-w-[220px] truncate text-xs text-yt-muted">
+                {status?.apk?.downloadUrl || 'Compile d’abord'}
+              </p>
+              <button
+                type="button"
+                className="mt-2 inline-flex items-center gap-2 text-xs text-yt-muted hover:text-white"
+                onClick={() => {
+                  const u = status?.apk?.downloadUrl;
+                  if (!u) return;
+                  void navigator.clipboard.writeText(u).then(() => {
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  });
+                }}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                {copied ? 'Copié !' : 'Copier le lien APK'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-center">
+            <div className="flex-1">
+              <h2 className="font-display text-2xl font-semibold">Installe YTMusic (PWA)</h2>
+              <p className="mt-2 max-w-md text-sm text-yt-muted">
+                Même Wi‑Fi que cet ordinateur. Scanne le QR, ouvre le lien, puis installe en PWA
+                (plein écran, icône, offline).
+              </p>
+              <div className="mt-4 space-y-2">
+                {(status?.urls || []).map((u: string) => (
+                  <button
+                    key={u}
+                    type="button"
+                    onClick={() => setSelectedUrl(u)}
+                    className={`block w-full rounded-xl px-3 py-2 text-left text-sm transition ${
+                      selectedUrl === u ? 'bg-white text-black' : 'bg-yt-elevated text-yt-muted hover:text-white'
+                    }`}
+                  >
+                    {u}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="mt-3 inline-flex items-center gap-2 text-xs text-yt-muted hover:text-white"
+                onClick={() => {
+                  void navigator.clipboard.writeText(selectedUrl).then(() => {
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  });
+                }}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                {copied ? 'Copié !' : 'Copier le lien'}
+              </button>
+            </div>
+            <div className="mx-auto rounded-3xl bg-white p-4 shadow-2xl">
+              <QRCodeSVG value={selectedUrl || 'https://localhost'} size={200} level="M" />
+            </div>
+          </div>
+        )}
       </section>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -541,7 +697,10 @@ export function AdminPage() {
           </div>
           <ul className="space-y-3 text-sm text-yt-muted">
             <li>
-              <strong className="text-white">Mobile / tablette</strong> — PWA via QR ci-dessus.
+              <strong className="text-white">Mobile / tablette</strong> — APK natif (QR Admin) ou
+              PWA. Hors Wi‑Fi : figer{' '}
+              <code className="text-white">APP_URL</code> /{' '}
+              <code className="text-white">ANDROID_API_BASE_URL</code>.
             </li>
             <li>
               <strong className="text-white">Ordinateur</strong> — Chrome/Edge propose « Installer

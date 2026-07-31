@@ -343,6 +343,8 @@ export function ArtistSongsPage() {
 export function AlbumPage() {
   const { id = '' } = useParams();
   const [data, setData] = useState<Awaited<ReturnType<typeof api.album>> | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
   const [radio, setRadio] = useState<Track[]>([]);
   const playQueue = usePlayer((s) => s.playQueue);
   const startRadio = usePlayer((s) => s.startRadio);
@@ -351,15 +353,46 @@ export function AlbumPage() {
 
   useEffect(() => {
     if (!id) return;
-    api.album(id).then(setData).catch(console.error);
+    setLoading(true);
+    setError('');
+    setData(null);
+    api
+      .album(id)
+      .then(setData)
+      .catch((e) => setError(String(e.message || e)))
+      .finally(() => setLoading(false));
     api.albumRadio(id).then((r) => setRadio(r.tracks)).catch(() => setRadio([]));
   }, [id]);
 
-  if (!data) {
+  if (loading && !data) {
     return (
       <div>
         <BackButton />
         <p className="text-yt-muted">Chargement…</p>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div>
+        <BackButton />
+        <p className="mb-3 text-red-400">{error || 'Album introuvable'}</p>
+        <button
+          type="button"
+          className="rounded-full bg-yt-elevated px-4 py-2 text-sm"
+          onClick={() => {
+            setLoading(true);
+            setError('');
+            void api
+              .album(id)
+              .then(setData)
+              .catch((e) => setError(String(e.message || e)))
+              .finally(() => setLoading(false));
+          }}
+        >
+          Réessayer
+        </button>
       </div>
     );
   }
@@ -373,7 +406,7 @@ export function AlbumPage() {
           <>
             <ArtistLinks
               track={{ artists: data.album.artists }}
-              emptyLabel={data.album.year ? undefined : 'Album'}
+              emptyLabel={data.album.year ? null : 'Album'}
             />
             {data.album.year ? (
               <>
