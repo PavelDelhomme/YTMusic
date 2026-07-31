@@ -19,6 +19,9 @@ data class HomeUiState(
     val error: String? = null,
     val shelves: List<ShelfDto> = emptyList(),
     val radios: List<RadioCategoryDto> = emptyList(),
+    /** Previews 4 covers pour mosaïque « Mixés pour toi ». */
+    val radioPreviews: Map<String, List<TrackDto>> = emptyMap(),
+    val savedMixIds: Set<String> = emptySet(),
     val needsOnboarding: Boolean = false,
     val radioLoadingId: String? = null,
     val seeds: List<String> = emptyList(),
@@ -43,16 +46,32 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
                 container.ensureFreshToken()
                 runCatching { container.quickAccess.syncFromApi(container.api) }
                 val home = container.api.home()
+                val savedMixes = runCatching {
+                    container.api.library().mixes.map { it.id }.toSet()
+                }.getOrDefault(emptySet())
                 _state.value = HomeUiState(
                     loading = false,
                     refreshing = false,
                     shelves = home.shelves.filter { it.items.isNotEmpty() },
                     radios = home.radios,
+                    savedMixIds = savedMixes,
                     needsOnboarding = home.needsOnboarding == true,
                     seeds = home.seeds.orEmpty(),
                     hasMore = home.hasMore == true,
                     page = 0,
                 )
+                // Mosaïques mix (preview) en arrière-plan
+                val previews = mutableMapOf<String, List<TrackDto>>()
+                home.radios.take(8).forEach { radio ->
+                    runCatching {
+                        container.api.recoRadio(radio.id, preview = 1).tracks.take(4)
+                    }.onSuccess { tracks ->
+                        if (tracks.isNotEmpty()) previews[radio.id] = tracks
+                    }
+                }
+                if (previews.isNotEmpty()) {
+                    _state.value = _state.value.copy(radioPreviews = previews)
+                }
             } catch (e: Exception) {
                 _state.value = _state.value.copy(
                     loading = false,
@@ -102,6 +121,25 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
                 }
             }
             _state.value = _state.value.copy(radioLoadingId = null)
+        }
+    }
+
+    fun saveMix(categoryId: String, title: String, covers: List<TrackDto>) {
+        viewModelScope.launch {
+            runCatching {
+                container.ensureFreshToken()
+                container.api.saveMix(
+                    mapOf(
+                        "id" to categoryId,
+                        "title" to title,
+                        "covers" to covers,
+                        "tracks" to covers,
+                    ),
+                )
+                _state.value = _state.value.copy(
+                    savedMixIds = _state.value.savedMixIds + categoryId,
+                )
+            }
         }
     }
 

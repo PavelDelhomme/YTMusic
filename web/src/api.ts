@@ -33,6 +33,8 @@ export type LibraryData = {
   likedPlaylists: any[];
   albums: any[];
   artists: any[];
+  /** Mix radios enregistrés. */
+  mixes: Track[];
   playlists: LibraryPlaylist[];
   history: Track[];
   downloaded: string[];
@@ -570,6 +572,13 @@ export const api = {
     }),
   removeArtist: (id: string) =>
     req<{ library: LibraryData }>(`/api/library/artists/${id}`, { method: 'DELETE' }),
+  saveMix: (mix: { id: string; title: string; tracks?: Track[]; covers?: Track[] }) =>
+    req<{ mix: Track; saved: boolean; library: LibraryData }>('/api/library/mixes', {
+      method: 'POST',
+      body: JSON.stringify(mix),
+    }),
+  removeMix: (id: string) =>
+    req<{ ok: boolean; library: LibraryData }>(`/api/library/mixes/${id}`, { method: 'DELETE' }),
   createPlaylist: (name: string, description = '') =>
     req<LibraryPlaylist>('/api/library/playlists', {
       method: 'POST',

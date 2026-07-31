@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.material.icons.filled.LibraryAddCheck
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlaylistRemove
 import androidx.compose.material.icons.filled.PushPin
@@ -159,6 +160,9 @@ fun TrackActionsSheet(
             }
             val albumId = enriched.album?.id ?: enriched.id.takeIf { enriched.isAlbum() }
             albumInLibrary = albumId != null && lib.albums.any { it.id == albumId }
+            if (track.type?.equals("mix", ignoreCase = true) == true) {
+                songInLibrary = lib.mixes.any { it.id == track.id }
+            }
         }
     }
 
@@ -280,6 +284,48 @@ fun TrackActionsSheet(
             IconButton(onClick = onDismiss) {
                 Icon(Icons.Default.Close, contentDescription = "Fermer", tint = onSurface)
             }
+        }
+
+        if (enriched.type?.equals("mix", ignoreCase = true) == true) {
+            SheetAction(Icons.Default.PlayArrow, "Lire le mix") {
+                scope.launch {
+                    runCatching {
+                        container.ensureFreshToken()
+                        val mix = container.api.recoRadio(enriched.id)
+                        val tracks = mix.tracks.filter { it.isPlayable() }
+                        if (tracks.isNotEmpty()) {
+                            player.play(tracks, 0, enriched.title, userQueueEnd = 1)
+                        }
+                    }
+                    onDismiss()
+                }
+            }
+            SheetAction(
+                if (songInLibrary) Icons.Default.LibraryAddCheck else Icons.Default.LibraryAdd,
+                if (songInLibrary) "Retirer de la bibliothèque" else "Enregistrer le mix",
+            ) {
+                scope.launch {
+                    runCatching {
+                        container.ensureFreshToken()
+                        if (songInLibrary) {
+                            container.api.removeMix(enriched.id)
+                            songInLibrary = false
+                            Toast.makeText(context, "Mix retiré", Toast.LENGTH_SHORT).show()
+                        } else {
+                            container.api.saveMix(
+                                mapOf(
+                                    "id" to enriched.id,
+                                    "title" to enriched.title,
+                                ),
+                            )
+                            songInLibrary = true
+                            Toast.makeText(context, "Mix enregistré", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    onDismiss()
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
         }
 
         if (enriched.isPlayable()) {

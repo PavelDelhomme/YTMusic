@@ -38,7 +38,7 @@ import ovh.delhomme.ytmusic.data.TrackDto
 /**
  * Lecture arrière-plan + notification média persistante (style YTM) :
  * précédent / play-pause / suivant (toujours actifs), artwork, like, boucle,
- * clic → ouvre le lecteur plein écran + file.
+ * clic → ouvre le lecteur plein écran (zone média, pas la file).
  */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -65,7 +65,12 @@ class PlaybackService : MediaSessionService() {
             if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
                 warmUpcoming(player.currentMediaItemIndex)
             }
-            if (events.contains(Player.EVENT_IS_PLAYING_CHANGED) && !player.isPlaying) {
+            // Pause volontaire uniquement — pas pendant rebuffer / skip
+            // (sinon on tue le prefetch du titre suivant).
+            if (
+                events.contains(Player.EVENT_PLAY_WHEN_READY_CHANGED) &&
+                !player.playWhenReady
+            ) {
                 StreamPrefetcher.cancelIdle()
             }
         }
@@ -76,10 +81,10 @@ class PlaybackService : MediaSessionService() {
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs */ 15_000,
-                /* maxBufferMs */ 60_000,
-                /* bufferForPlaybackMs */ 750,
-                /* bufferForPlaybackAfterRebufferMs */ 1_500,
+                /* minBufferMs */ 12_000,
+                /* maxBufferMs */ 50_000,
+                /* bufferForPlaybackMs */ 400,
+                /* bufferForPlaybackAfterRebufferMs */ 1_000,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -287,13 +292,7 @@ class PlaybackService : MediaSessionService() {
         CoverPrefetcher.warmCovers(queue, fromIndex, ahead = 3, behind = 1)
     }
 
-    private fun resolvedApiBase(): String {
-        val override = getSharedPreferences("ytm_api", MODE_PRIVATE)
-            .getString("base_url", null)
-            ?.trim()
-            ?.trimEnd('/')
-        return if (!override.isNullOrBlank()) override else BuildConfig.API_BASE_URL.trimEnd('/')
-    }
+    private fun resolvedApiBase(): String = Holder.resolvedApiBase()
 
     object Holder {
         @Volatile var player: ExoPlayer? = null
@@ -303,6 +302,15 @@ class PlaybackService : MediaSessionService() {
         @Volatile var queueTitle: String = "File d'attente"
         @Volatile var likedIds: Set<String> = emptySet()
         @Volatile var onLikedIdsChanged: ((Set<String>) -> Unit)? = null
+
+        fun resolvedApiBase(): String {
+            val override = service
+                ?.getSharedPreferences("ytm_api", android.content.Context.MODE_PRIVATE)
+                ?.getString("base_url", null)
+                ?.trim()
+                ?.trimEnd('/')
+            return if (!override.isNullOrBlank()) override else BuildConfig.API_BASE_URL.trimEnd('/')
+        }
 
         fun syncLikedIds(ids: Set<String>) {
             likedIds = ids
@@ -348,18 +356,32 @@ private class YtmForwardingPlayer(
     override fun seekToNextMediaItem() {
         val wasOne = exo.repeatMode == Player.REPEAT_MODE_ONE
         if (wasOne) exo.repeatMode = Player.REPEAT_MODE_OFF
+        val cur = exo.currentMediaItemIndex
+        val nextIdx = when {
+            exo.hasNextMediaItem() -> cur + 1
+            exo.repeatMode == Player.REPEAT_MODE_ALL && exo.mediaItemCount > 0 -> 0
+            exo.mediaItemCount > 1 -> (cur + 1) % exo.mediaItemCount
+            else -> cur
+        }
+        // Chauffe le titre cible + le suivant avant / pendant le seek (notif + UI)
+        warmAroundIndex(nextIdx)
         when {
             exo.hasNextMediaItem() -> exo.seekToNextMediaItem()
             exo.repeatMode == Player.REPEAT_MODE_ALL && exo.mediaItemCount > 0 ->
                 exo.seekTo(/* mediaItemIndex */ 0, /* positionMs */ 0L)
-            exo.mediaItemCount > 1 -> {
-                val next = (exo.currentMediaItemIndex + 1) % exo.mediaItemCount
-                exo.seekTo(next, 0L)
-            }
+            exo.mediaItemCount > 1 -> exo.seekTo(nextIdx, 0L)
             else -> exo.seekTo(0L)
         }
         exo.play()
         if (wasOne) exo.repeatMode = Player.REPEAT_MODE_ONE
+    }
+
+    private fun warmAroundIndex(index: Int) {
+        val queue = PlaybackService.Holder.queue
+        if (queue.isEmpty()) return
+        val api = PlaybackService.Holder.resolvedApiBase()
+        StreamPrefetcher.warmAround(api, queue.map { it.id }, index, ahead = 3, behind = 0)
+        CoverPrefetcher.warmCovers(queue, index, ahead = 2, behind = 0)
     }
 
     override fun seekToPrevious() = seekToPreviousMediaItem()
@@ -417,7 +439,6 @@ fun mediaItemFor(
                 .setArtist(t.artistLine())
                 .setAlbumTitle(album)
                 .setSubtitle(t.artistLine())
-                .setDescription(queueTitle)
                 .setArtworkUri(cover?.let { android.net.Uri.parse(it) })
                 .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
                 .setIsPlayable(true)

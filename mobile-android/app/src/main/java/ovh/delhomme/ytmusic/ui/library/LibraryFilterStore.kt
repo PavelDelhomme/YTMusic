@@ -13,6 +13,7 @@ private val Context.libraryFilterStore by preferencesDataStore("library_filters"
 enum class LibraryFilter(val label: String) {
     Downloads("Téléchargés"),
     Playlists("Playlists"),
+    Mixes("Mixes"),
     Tracks("Titres"),
     Liked("J'aime"),
     Albums("Albums"),

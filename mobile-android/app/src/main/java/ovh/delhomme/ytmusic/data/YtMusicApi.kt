@@ -33,6 +33,7 @@ data class LibraryResponse(
     val likedPlaylists: List<TrackDto> = emptyList(),
     val albums: List<TrackDto> = emptyList(),
     val artists: List<TrackDto> = emptyList(),
+    val mixes: List<TrackDto> = emptyList(),
     val playlists: List<PlaylistDto> = emptyList(),
     val history: List<TrackDto> = emptyList(),
     val downloaded: List<String> = emptyList(),
@@ -374,6 +375,12 @@ interface YtMusicApi {
     @POST("api/library/artists")
     suspend fun saveArtist(@Body artist: TrackDto): Map<String, Any>
 
+    @POST("api/library/mixes")
+    suspend fun saveMix(@Body body: Map<String, @JvmSuppressWildcards Any>): Map<String, Any>
+
+    @DELETE("api/library/mixes/{id}")
+    suspend fun removeMix(@Path("id") id: String): Map<String, Any>
+
     @POST("api/library/playlists")
     suspend fun createPlaylist(@Body body: CreatePlaylistBody): PlaylistDto
 
@@ -468,7 +475,10 @@ interface YtMusicApi {
     suspend fun radios(): Map<String, Any>
 
     @GET("api/reco/radio/{category}")
-    suspend fun recoRadio(@Path("category") category: String): RadioMixResponse
+    suspend fun recoRadio(
+        @Path("category") category: String,
+        @Query("preview") preview: Int? = null,
+    ): RadioMixResponse
 
     @GET("api/pins")
     suspend fun pins(): PinsResponse

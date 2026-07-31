@@ -7,9 +7,13 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,11 +32,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -89,6 +95,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -131,6 +138,8 @@ fun NowPlayingScreen(
     onCast: (() -> Unit)? = null,
     onOpenAddToPlaylist: ((TrackDto) -> Unit)? = null,
     onOpenArtist: ((id: String?, name: String) -> Unit)? = null,
+    /** Incrémenté au clic notif → recentre sur la cover / contrôles. */
+    focusPlayerToken: Int = 0,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -303,11 +312,20 @@ fun NowPlayingScreen(
         runCatching { queueListState.animateScrollToItem(target) }
     }
 
-    LaunchedEffect(ui.queueIndex, queueInteractive) {
+    // Ne pas auto-scroller vers la file quand on est sur le lecteur (notif / ouverture).
+    // Seulement suivre le titre courant si l’utilisateur a déjà scrollé dans la section file.
+    LaunchedEffect(ui.queueIndex) {
         if (queueInteractive || ui.queue.isEmpty()) return@LaunchedEffect
-        // item 0 = zone média, item 1 = header file, puis les titres
+        if (listState.firstVisibleItemIndex <= 1) return@LaunchedEffect
         val target = (ui.queueIndex + 2).coerceAtLeast(0)
         runCatching { listState.animateScrollToItem(target) }
+    }
+
+    // Clic notification / réouverture → zone média (pas la file)
+    LaunchedEffect(focusPlayerToken) {
+        if (focusPlayerToken <= 0) return@LaunchedEffect
+        queueProgress.snapTo(0f)
+        runCatching { listState.scrollToItem(0) }
     }
 
     val dragProgress = (dragOffset / (dismissPx * 2.2f)).coerceIn(0f, 1f)
@@ -478,9 +496,15 @@ fun NowPlayingScreen(
                                     style = MaterialTheme.typography.headlineSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = PlayerFg,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                    textAlign = TextAlign.Center,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Clip,
+                                    textAlign = TextAlign.Start,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .basicMarquee(
+                                            iterations = Int.MAX_VALUE,
+                                            initialDelayMillis = 1200,
+                                        ),
                                 )
                                 if (onOpenArtist != null) {
                                     ArtistLinksText(
@@ -488,30 +512,45 @@ fun NowPlayingScreen(
                                         onOpenArtist = onOpenArtist,
                                         color = PlayerMuted,
                                         style = MaterialTheme.typography.bodyLarge,
-                                        maxLines = 2,
+                                        maxLines = 1,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .basicMarquee(
+                                                iterations = Int.MAX_VALUE,
+                                                initialDelayMillis = 1600,
+                                            ),
                                     )
                                 } else {
                                     Text(
                                         track.artistLine(),
                                         color = PlayerMuted,
                                         maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
+                                        overflow = TextOverflow.Clip,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .basicMarquee(
+                                                iterations = Int.MAX_VALUE,
+                                                initialDelayMillis = 1600,
+                                            ),
                                     )
                                 }
                             }
                             Spacer(Modifier.height(10.dp))
                             Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 NowPlayingChrome.secondaryActions.forEach { slot ->
                                     if (!slot.enabled) return@forEach
                                     when (slot.id) {
-                                        PlayerChromeAction.Like -> SecondaryIcon(
-                                            if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                                            slot.label,
-                                            if (liked) MaterialTheme.colorScheme.primary else PlayerFg,
+                                        PlayerChromeAction.Like -> SecondaryChip(
+                                            icon = if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                            label = slot.label,
+                                            tint = if (liked) MaterialTheme.colorScheme.primary else PlayerFg,
+                                            showLabel = false,
                                         ) {
                                             scope.launch {
                                                 runCatching {
@@ -531,14 +570,14 @@ fun NowPlayingScreen(
                                                 }.onFailure { AppLog.e("like", "échec like ${track.id}", it) }
                                             }
                                         }
-                                        PlayerChromeAction.Lyrics -> SecondaryIcon(
-                                            Icons.Default.Lyrics, slot.label, PlayerFg,
+                                        PlayerChromeAction.Lyrics -> SecondaryChip(
+                                            Icons.Default.Lyrics, slot.label, PlayerFg, showLabel = false,
                                         ) { showLyrics = true }
-                                        PlayerChromeAction.AddToPlaylist -> SecondaryIcon(
-                                            Icons.Default.PlaylistAdd, slot.label, PlayerFg,
+                                        PlayerChromeAction.AddToPlaylist -> SecondaryChip(
+                                            Icons.Default.PlaylistAdd, slot.label, PlayerFg, showLabel = true,
                                         ) { onOpenAddToPlaylist?.invoke(track) }
-                                        PlayerChromeAction.Download -> SecondaryIcon(
-                                            Icons.Default.Download, slot.label, PlayerFg,
+                                        PlayerChromeAction.Download -> SecondaryChip(
+                                            Icons.Default.Download, slot.label, PlayerFg, showLabel = false,
                                         ) {
                                             scope.launch {
                                                 runCatching { container.api.download(track.id) }
@@ -550,8 +589,8 @@ fun NowPlayingScreen(
                                                     }
                                             }
                                         }
-                                        PlayerChromeAction.Mix -> SecondaryIcon(
-                                            Icons.Default.Radio, slot.label, PlayerFg,
+                                        PlayerChromeAction.Mix -> SecondaryChip(
+                                            Icons.Default.Radio, slot.label, PlayerFg, showLabel = true,
                                         ) {
                                             scope.launch {
                                                 val mix = buildRadioQueue(container.api, "track", track.id, track)
@@ -565,7 +604,13 @@ fun NowPlayingScreen(
                                     }
                                 }
                             }
-                            Spacer(Modifier.height(12.dp))
+                            Spacer(Modifier.height(8.dp))
+                            val seekInteraction = remember { MutableInteractionSource() }
+                            val seekColors = SliderDefaults.colors(
+                                thumbColor = SeekRed,
+                                activeTrackColor = SeekRed,
+                                inactiveTrackColor = PlayerFg.copy(alpha = 0.22f),
+                            )
                             Slider(
                                 value = progress,
                                 onValueChange = { scrub = it },
@@ -573,12 +618,29 @@ fun NowPlayingScreen(
                                     player.seek((scrub * duration).toLong())
                                     scrub = -1f
                                 },
-                                colors = SliderDefaults.colors(
-                                    thumbColor = SeekRed,
-                                    activeTrackColor = SeekRed,
-                                    inactiveTrackColor = PlayerFg.copy(alpha = 0.25f),
-                                ),
-                                modifier = Modifier.fillMaxWidth(),
+                                colors = seekColors,
+                                interactionSource = seekInteraction,
+                                thumb = {
+                                    SliderDefaults.Thumb(
+                                        interactionSource = seekInteraction,
+                                        colors = seekColors,
+                                        enabled = true,
+                                        thumbSize = DpSize(10.dp, 10.dp),
+                                    )
+                                },
+                                track = { sliderState ->
+                                    SliderDefaults.Track(
+                                        sliderState = sliderState,
+                                        colors = seekColors,
+                                        enabled = true,
+                                        modifier = Modifier.height(2.dp),
+                                        thumbTrackGapSize = 0.dp,
+                                        drawStopIndicator = null,
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(28.dp),
                             )
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text(
@@ -683,6 +745,7 @@ fun NowPlayingScreen(
                             onClick = { player.playAt(index) },
                             onLongClick = { onMore?.invoke(item) },
                             onMove = { from, to -> player.moveInQueue(from, to) },
+                            onMore = onMore?.let { { it(item) } },
                         )
                     }
                     item {
@@ -723,6 +786,7 @@ fun NowPlayingScreen(
                                 onClick = { player.playAt(abs) },
                                 onLongClick = { onMore?.invoke(item) },
                                 onMove = { from, to -> player.moveInQueue(from, to) },
+                                onMore = onMore?.let { { it(item) } },
                             )
                         }
                     }
@@ -776,17 +840,34 @@ fun NowPlayingScreen(
 }
 
 @Composable
-private fun SecondaryIcon(
+private fun SecondaryChip(
     icon: ImageVector,
     label: String,
     tint: Color,
+    showLabel: Boolean,
     onClick: () -> Unit,
 ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        IconButton(onClick = onClick) {
-            Icon(icon, label, tint = tint)
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(PlayerFg.copy(alpha = 0.08f))
+            .clickable(onClick = onClick)
+            .padding(
+                horizontal = if (showLabel) 12.dp else 10.dp,
+                vertical = 8.dp,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
+        if (showLabel) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                color = PlayerFg,
+                maxLines = 1,
+            )
         }
-        Text(label, style = MaterialTheme.typography.labelSmall, color = PlayerMuted, maxLines = 1)
     }
 }
 
@@ -928,16 +1009,38 @@ private fun QueueExpandedHeader(
             MediaCover(track, 48.dp)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, color = PlayerFg, fontWeight = FontWeight.SemiBold)
+                Text(
+                    track.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
+                    color = PlayerFg,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 1000),
+                )
                 if (onOpenArtist != null) {
                     ArtistLinksText(
                         track = track,
                         onOpenArtist = onOpenArtist,
                         color = PlayerMuted,
                         style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 1400),
                     )
                 } else {
-                    Text(track.artistLine(), maxLines = 1, overflow = TextOverflow.Ellipsis, color = PlayerMuted, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        track.artistLine(),
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                        color = PlayerMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 1400),
+                    )
                 }
             }
             IconButton(onClick = onToggle) {
@@ -1007,6 +1110,7 @@ private fun QueueExpandedBody(
                     onClick = { onPlayAt(index) },
                     onLongClick = { onMore?.invoke(item) },
                     onMove = onMove,
+                    onMore = onMore?.let { { it(item) } },
                 )
             }
             item {
@@ -1057,6 +1161,7 @@ private fun QueueExpandedBody(
                     onClick = { onPlayAt(abs) },
                     onLongClick = { onMore?.invoke(item) },
                     onMove = onMove,
+                    onMore = onMore?.let { { it(item) } },
                 )
             }
             item { Spacer(Modifier.height(48.dp)) }
@@ -1137,6 +1242,7 @@ private fun QueueTrackRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onMove: (from: Int, to: Int) -> Unit,
+    onMore: (() -> Unit)? = null,
 ) {
     var dragAccum by remember { mutableFloatStateOf(0f) }
     Row(
@@ -1147,23 +1253,25 @@ private fun QueueTrackRow(
                 else Color.Transparent,
             )
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 4.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        MediaCover(track, 48.dp)
-        Spacer(Modifier.width(12.dp))
-        Column(
-            Modifier
-                .weight(1f)
+        // Poignée drag (style YTM) — scroll de la liste reste libre ailleurs
+        Icon(
+            Icons.Default.DragHandle,
+            contentDescription = "Déplacer",
+            tint = PlayerMuted,
+            modifier = Modifier
+                .size(40.dp)
+                .padding(6.dp)
                 .pointerInput(index) {
-                    // Réordonner sans poignée visible : glisser verticalement sur le titre
                     detectDragGestures(
                         onDragEnd = { dragAccum = 0f },
                         onDragCancel = { dragAccum = 0f },
                         onDrag = { change, amount ->
                             change.consume()
                             dragAccum += amount.y
-                            val threshold = 48.dp.toPx()
+                            val threshold = 40.dp.toPx()
                             when {
                                 dragAccum > threshold -> {
                                     onMove(index, index + 1)
@@ -1177,26 +1285,43 @@ private fun QueueTrackRow(
                         },
                     )
                 },
-        ) {
-            Text(
-                track.title,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = if (highlighted) MaterialTheme.colorScheme.primary else PlayerFg,
-                fontWeight = FontWeight.Medium,
-            )
-            Row {
+        )
+        MediaCover(track, 48.dp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
                 Text(
-                    track.artistLine(),
+                    track.title,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = PlayerMuted,
-                    modifier = Modifier.weight(1f, fill = false),
+                    overflow = TextOverflow.Clip,
+                    color = if (highlighted) MaterialTheme.colorScheme.primary else PlayerFg,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 900),
                 )
-                track.duration?.takeIf { it.isNotBlank() }?.let {
-                    Text(" · $it", style = MaterialTheme.typography.bodySmall, color = PlayerMuted)
+                Row {
+                    Text(
+                        track.artistLine(),
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = PlayerMuted,
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 1200),
+                    )
+                    track.duration?.takeIf { it.isNotBlank() }?.let {
+                        Text(" · $it", style = MaterialTheme.typography.bodySmall, color = PlayerMuted)
+                    }
                 }
+        }
+        if (onMore != null) {
+            IconButton(onClick = onMore) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "Options",
+                    tint = PlayerMuted,
+                )
             }
         }
     }

@@ -6,7 +6,9 @@ import { Heart, Play, Plus, Shuffle, Trash2 } from 'lucide-react';
 import { usePlayer } from '../store/player';
 import { MediaCard } from '../components/MediaCard';
 import { CoverImage } from '../components/CoverImage';
-import type { Track } from '../api';
+import { MixCollageCard } from '../components/MixCollageCard';
+import { useItemActions } from '../store/itemActions';
+import { api, type Track } from '../api';
 
 function shuffleTracks(tracks: Track[]) {
   const copy = [...tracks];
@@ -18,10 +20,11 @@ function shuffleTracks(tracks: Track[]) {
 }
 
 export function LibraryPage() {
-  const { songs, liked, playlists, history, albums, artists, likedPlaylists, createPlaylist, deletePlaylist } =
+  const { songs, liked, playlists, history, albums, artists, mixes, likedPlaylists, createPlaylist, deletePlaylist, hasMix } =
     useLibrary();
   const playQueue = usePlayer((s) => s.playQueue);
-  const [tab, setTab] = useState<'titres' | 'liked' | 'playlists' | 'albums' | 'artists' | 'history'>('titres');
+  const openActions = useItemActions((s) => s.open);
+  const [tab, setTab] = useState<'titres' | 'liked' | 'playlists' | 'albums' | 'artists' | 'mixes' | 'history'>('titres');
   const [name, setName] = useState('');
 
   const tabs = [
@@ -29,6 +32,7 @@ export function LibraryPage() {
     ['liked', "J'aime"],
     ['playlists', 'Playlists'],
     ['albums', 'Albums'],
+    ['mixes', mixes.length ? `Mixes (${mixes.length})` : 'Mixes'],
     ['artists', 'Artistes'],
     ['history', 'Historique'],
   ] as const;
@@ -171,6 +175,51 @@ export function LibraryPage() {
                       thumbnails: a.thumbnails || [],
                       type: 'album',
                     }}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {tab === 'mixes' && (
+        <div>
+          {mixes.length === 0 ? (
+            <p className="text-yt-muted">
+              Aucun mix enregistré. Sur Accueil → Mixés pour toi, appuie sur + ou ⋮ pour en sauver.
+            </p>
+          ) : (
+            <>
+              <p className="mb-4 text-sm text-yt-muted">
+                {mixes.length} mix{mixes.length > 1 ? 'es' : ''} · lecture depuis ta bibliothèque.
+              </p>
+              <div className="shelf-scroll">
+                {mixes.map((m: any) => (
+                  <MixCollageCard
+                    key={m.id}
+                    title={m.title}
+                    tracks={(m.covers || m.tracks || []) as Track[]}
+                    subtitle="Mix enregistré"
+                    saved={hasMix(m.id)}
+                    onClick={() => {
+                      const tracks = (m.tracks || m.covers || []).filter((t: Track) =>
+                        /^[a-zA-Z0-9_-]{11}$/.test(t.id),
+                      );
+                      if (tracks.length) void playQueue(tracks, 0);
+                      else {
+                        void api.recoRadio(m.id).then((r) => {
+                          if (r.tracks?.length) void playQueue(r.tracks, 0);
+                        });
+                      }
+                    }}
+                    onMore={() =>
+                      openActions({
+                        ...m,
+                        type: 'mix',
+                        artists: [{ name: 'Mix radio' }],
+                      } as Track)
+                    }
                   />
                 ))}
               </div>

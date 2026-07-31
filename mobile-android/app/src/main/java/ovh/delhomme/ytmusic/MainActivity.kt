@@ -40,6 +40,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -142,6 +143,9 @@ fun YtMusicAppContent(
     val scope = rememberCoroutineScope()
     var loggedIn by remember { mutableStateOf<Boolean?>(null) }
     var showNowPlaying by remember { mutableStateOf(openPlayerFromIntent) }
+    var playerFocusToken by remember {
+        mutableIntStateOf(if (openPlayerFromIntent) 1 else 0)
+    }
 
     val player = remember(container) {
         PlayerController(
@@ -161,6 +165,7 @@ fun YtMusicAppContent(
         val listener = androidx.core.util.Consumer<Intent> { intent ->
             if (intent.getBooleanExtra(MainActivity.EXTRA_OPEN_PLAYER, false)) {
                 showNowPlaying = true
+                playerFocusToken++
                 intent.removeExtra(MainActivity.EXTRA_OPEN_PLAYER)
             }
         }
@@ -169,7 +174,10 @@ fun YtMusicAppContent(
     }
 
     LaunchedEffect(openPlayerFromIntent) {
-        if (openPlayerFromIntent) showNowPlaying = true
+        if (openPlayerFromIntent) {
+            showNowPlaying = true
+            if (playerFocusToken == 0) playerFocusToken = 1
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -199,7 +207,11 @@ fun YtMusicAppContent(
                 container = container,
                 player = player,
                 expanded = showNowPlaying,
-                onOpenPlayer = { showNowPlaying = true },
+                playerFocusToken = playerFocusToken,
+                onOpenPlayer = {
+                    showNowPlaying = true
+                    playerFocusToken++
+                },
                 onClosePlayer = { showNowPlaying = false },
                 onPlayTracks = { tracks, idx ->
                     val t = tracks.getOrNull(idx)
@@ -250,6 +262,7 @@ private fun MainTabs(
     container: AppContainer,
     player: PlayerController,
     expanded: Boolean,
+    playerFocusToken: Int = 0,
     onOpenPlayer: () -> Unit,
     onClosePlayer: () -> Unit,
     onPlayTracks: (List<TrackDto>, Int) -> Unit,
@@ -270,6 +283,17 @@ private fun MainTabs(
     }
 
     fun openDetail(item: TrackDto) {
+        if (item.type?.equals("mix", ignoreCase = true) == true) {
+            scope.launch {
+                runCatching {
+                    container.ensureFreshToken()
+                    val mix = container.api.recoRadio(item.id)
+                    val tracks = mix.tracks.filter { it.isPlayable() }
+                    if (tracks.isNotEmpty()) onPlayNamed(tracks, 0, item.title)
+                }
+            }
+            return
+        }
         val kind = when {
             item.isAlbum() -> "album"
             item.isArtist() -> "artist"
@@ -610,7 +634,6 @@ private fun MainTabs(
                                 val dur = playerUi.durationMs
                                 if (dur > 0) player.seek((ratio * dur).toLong())
                             },
-                            onOpenArtist = ::openArtist,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .background(MaterialTheme.colorScheme.surfaceVariant),
@@ -664,6 +687,16 @@ private fun MainTabs(
                     onOpenDebugLogs = { nav.navigate("debug_logs") },
                     onOpenYtmImport = { nav.navigate("ytm_import") },
                     onLoggedOut = onLoggedOut,
+                    onMoreMix = { id, title, covers ->
+                        menuTrack = TrackDto(
+                            id = id,
+                            title = title,
+                            artists = listOf(ovh.delhomme.ytmusic.data.ArtistRef("Mix radio")),
+                            thumbnails = covers.firstOrNull()?.thumbnails,
+                            type = "mix",
+                        )
+                        menuPlaylistId = null
+                    },
                 )
             }
             composable(Tab.Search.route) {
@@ -831,6 +864,7 @@ private fun MainTabs(
             onCast = { showCast = true },
             onOpenAddToPlaylist = { addToPlaylistTrack = it },
             onOpenArtist = ::openArtist,
+            focusPlayerToken = playerFocusToken,
         )
     }
 

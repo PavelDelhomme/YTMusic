@@ -400,6 +400,7 @@ private fun buildLibraryContent(data: LibraryResponse, filter: LibraryFilter): L
             val recent = buildList {
                 addAll(libSongs.take(40))
                 addAll(data.albums.take(20).map { it.copy(type = it.type ?: "album") })
+                addAll(data.mixes.take(10).map { it.copy(type = "mix") })
                 addAll(data.playlists.take(20).map { playlistAsTrack(it) })
                 addAll(data.likedPlaylists.take(10).map { likedPlaylistAsTrack(it) })
             }.distinctBy { it.id }
@@ -460,6 +461,22 @@ private fun buildLibraryContent(data: LibraryResponse, filter: LibraryFilter): L
                 } else {
                     null
                 },
+            )
+        }
+        LibraryFilter.Mixes -> {
+            val rows = data.mixes.map { m ->
+                m.copy(
+                    type = "mix",
+                    artists = listOf(ArtistRef("Mix radio")),
+                )
+            }.sortedBy { it.title.lowercase() }
+            LibraryContent(
+                headline = if (rows.isEmpty()) "Mixes" else "Mixes · ${rows.size}",
+                rows = rows,
+                playableQueue = emptyList(),
+                emptyMessage = "Aucun mix. Sur Accueil → Mixés pour toi, enregistre un mix (+).",
+                showPlayAll = false,
+                collectionHint = if (rows.isNotEmpty()) "Ouvre un mix pour le lancer" else null,
             )
         }
         LibraryFilter.Albums -> {
