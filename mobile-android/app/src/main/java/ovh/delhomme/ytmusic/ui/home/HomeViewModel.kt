@@ -33,12 +33,25 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
     private val _state = MutableStateFlow(HomeUiState())
     val state: StateFlow<HomeUiState> = _state.asStateFlow()
 
-    init { refresh() }
+    init {
+        // Cache-first : contenu immédiat au cold start, refresh réseau derrière
+        container.homeCache.read()?.let { cached ->
+            _state.value = HomeUiState(
+                loading = false,
+                shelves = cached.shelves,
+                radios = cached.radios,
+                seeds = cached.seeds,
+                hasMore = cached.hasMore,
+            )
+        }
+        refresh()
+    }
 
     fun refresh(fromUser: Boolean = false) {
         viewModelScope.launch {
+            val hadContent = _state.value.shelves.isNotEmpty()
             _state.value = _state.value.copy(
-                loading = !fromUser && _state.value.shelves.isEmpty(),
+                loading = !fromUser && !hadContent,
                 refreshing = fromUser,
                 error = null,
             )
@@ -49,6 +62,7 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
                 val savedMixes = runCatching {
                     container.api.library().mixes.map { it.id }.toSet()
                 }.getOrDefault(emptySet())
+                container.homeCache.write(home)
                 _state.value = HomeUiState(
                     loading = false,
                     refreshing = false,
@@ -59,6 +73,7 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
                     seeds = home.seeds.orEmpty(),
                     hasMore = home.hasMore == true,
                     page = 0,
+                    radioPreviews = _state.value.radioPreviews,
                 )
                 // Mosaïques mix (preview) en arrière-plan
                 val previews = mutableMapOf<String, List<TrackDto>>()
@@ -76,7 +91,7 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
                 _state.value = _state.value.copy(
                     loading = false,
                     refreshing = false,
-                    error = e.message ?: "Erreur accueil",
+                    error = if (hadContent) null else (e.message ?: "Erreur accueil"),
                 )
             }
         }

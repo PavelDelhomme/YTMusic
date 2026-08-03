@@ -19,8 +19,12 @@ import java.util.concurrent.TimeUnit
 
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext
+    /** Pour caches locaux (home, recherche…) hors DataStore. */
+    fun sharedPrefs(name: String) =
+        appContext.getSharedPreferences(name, Context.MODE_PRIVATE)
     val tokenStore = TokenStore(appContext)
     val quickAccess = QuickAccessStore(appContext)
+    val homeCache = HomeCacheStore(appContext)
     private val apiPrefs = appContext.getSharedPreferences("ytm_api", Context.MODE_PRIVATE)
 
     val deviceId: String by lazy {
