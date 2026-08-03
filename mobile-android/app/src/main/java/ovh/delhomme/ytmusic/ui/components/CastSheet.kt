@@ -13,6 +13,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.SyncDisabled
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -52,6 +54,7 @@ fun CastSheet(
     var devices by remember { mutableStateOf<List<DeviceDto>>(emptyList()) }
     var activeId by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var receiveRemoteSync by remember { mutableStateOf(container.receiveRemoteSync()) }
 
     LaunchedEffect(Unit) {
         runCatching {
@@ -124,12 +127,53 @@ fun CastSheet(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
         )
         Text(
-            "Choisir où lire la musique — file d’attente synchronisée",
+            "Choisir où lire la musique — le cast reste disponible même sans sync titre",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 20.dp),
         )
         Spacer(Modifier.height(12.dp))
+
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable {
+                    val next = !receiveRemoteSync
+                    container.setReceiveRemoteSync(next)
+                    receiveRemoteSync = next
+                    Toast.makeText(
+                        context,
+                        if (next) "Sync lecture activée" else "Sync lecture désactivée — file locale",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (receiveRemoteSync) Icons.Default.Sync else Icons.Default.SyncDisabled,
+                null,
+                tint = if (receiveRemoteSync) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (receiveRemoteSync) "Sync lecture activée" else "Sync lecture désactivée",
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    if (receiveRemoteSync) {
+                        "File, titre et position partagés entre tes appareils"
+                    } else {
+                        "Chaque appareil a sa propre file — le compte reste partagé"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
 
         Row(

@@ -34,14 +34,11 @@ suspend fun buildRadioQueue(
         else -> {
             val trackId = id
             val related = runCatching { api.related(trackId) }.getOrNull()
-            val up = runCatching { api.upNext(trackId).tracks }.getOrDefault(emptyList())
-            val sim = runCatching { api.similar(trackId).tracks }.getOrDefault(emptyList())
+            // related = ranked style côté API — pas besoin de similar + upNext en plus
             var candidates = (
-                up +
-                    (related?.radio.orEmpty()) +
+                (related?.tracks.orEmpty()) +
                     (related?.related.orEmpty()) +
-                    (related?.tracks.orEmpty()) +
-                    sim
+                    (related?.radio.orEmpty())
                 )
                 .filter { it.isPlayable() && it.id != trackId }
 
@@ -60,11 +57,10 @@ suspend fun buildRadioQueue(
                         (a.id ?: a.name).lowercase() == key
                     }
                 }
-                candidates = if (close.size >= 8) {
-                    close.take(24) + far.take(40)
-                } else {
-                    close + far
-                }
+                // stayClose : un peu du même artiste, majorité voisins de style
+                candidates = close.take(10) + far
+            } else {
+                candidates = diversifyByArtist(candidates, seedPlayable)
             }
             pool += candidates
             start = start ?: TrackDto(
@@ -88,4 +84,48 @@ suspend fun buildRadioQueue(
 
     val head = start?.takeIf { it.isPlayable() } ?: uniq.firstOrNull() ?: return emptyList()
     return listOf(head) + uniq.filter { it.id != head.id }
+}
+
+/** Round-robin par artiste — même style, pas une rafale du même auteur. */
+private fun diversifyByArtist(tracks: List<TrackDto>, seed: TrackDto?): List<TrackDto> {
+    val seedKey = (
+        seed?.artists?.firstOrNull()?.id
+            ?: seed?.artists?.firstOrNull()?.name
+            ?: ""
+        ).lowercase()
+    val buckets = linkedMapOf<String, ArrayDeque<TrackDto>>()
+    for (t in tracks) {
+        if (!t.isPlayable()) continue
+        val key = (t.artists?.firstOrNull()?.id ?: t.artists?.firstOrNull()?.name ?: t.id).lowercase()
+        buckets.getOrPut(key) { ArrayDeque() }.add(t)
+    }
+    val keys = buckets.keys.sortedWith { a, b ->
+        when {
+            a == seedKey -> 1
+            b == seedKey -> -1
+            else -> (buckets[b]?.size ?: 0).compareTo(buckets[a]?.size ?: 0)
+        }
+    }
+    val out = ArrayList<TrackDto>(80)
+    val seen = HashSet<String>()
+    var seedHits = 0
+    var guard = 0
+    while (out.size < 80 && guard++ < 400) {
+        var added = false
+        for (k in keys) {
+            val bucket = buckets[k] ?: continue
+            if (bucket.isEmpty()) continue
+            if (seedKey.isNotEmpty() && k == seedKey && seedHits >= maxOf(1, out.size / 4 + 1)) {
+                continue
+            }
+            val t = bucket.removeFirst()
+            if (!seen.add(t.id)) continue
+            out += t
+            if (seedKey.isNotEmpty() && k == seedKey) seedHits += 1
+            added = true
+            if (out.size >= 80) break
+        }
+        if (!added) break
+    }
+    return out
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, type Track } from '../api';
 import { TrackRow } from '../components/TrackRow';
@@ -13,6 +13,8 @@ import { BackButton } from '../components/BackButton';
 export function ArtistPage() {
   const { id = '' } = useParams();
   const [data, setData] = useState<Awaited<ReturnType<typeof api.artist>> | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
   const [radio, setRadio] = useState<Track[]>([]);
   const playQueue = usePlayer((s) => s.playQueue);
   const startRadio = usePlayer((s) => s.startRadio);
@@ -23,12 +25,18 @@ export function ArtistPage() {
   const [followBusy, setFollowBusy] = useState(false);
   const [showBio, setShowBio] = useState(false);
 
-  useEffect(() => {
+  const loadArtist = useCallback(() => {
     if (!id) return;
+    setLoading(true);
+    setError('');
     setData(null);
     setFollowing(false);
     setShowBio(false);
-    api.artist(id).then(setData).catch(console.error);
+    api
+      .artist(id)
+      .then(setData)
+      .catch((e) => setError(String(e?.message || e || 'Artiste introuvable')))
+      .finally(() => setLoading(false));
     api.artistRadio(id).then((r) => setRadio(r.tracks)).catch(() => setRadio([]));
     api
       .prefs()
@@ -43,11 +51,31 @@ export function ArtistPage() {
       .catch(() => undefined);
   }, [id]);
 
-  if (!data) {
+  useEffect(() => {
+    loadArtist();
+  }, [loadArtist]);
+
+  if (loading && !data) {
     return (
       <div>
         <BackButton />
         <p className="text-yt-muted">Chargement…</p>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div>
+        <BackButton />
+        <p className="mb-3 text-red-400">{error || 'Artiste introuvable'}</p>
+        <button
+          type="button"
+          className="rounded-full bg-yt-elevated px-4 py-2 text-sm"
+          onClick={() => loadArtist()}
+        >
+          Réessayer
+        </button>
       </div>
     );
   }
@@ -102,7 +130,15 @@ export function ArtistPage() {
             {data.songs[0] && (
               <button
                 type="button"
-                onClick={() => void playQueue(data.songs, 0)}
+                onClick={() => {
+                  void useLibrary.getState().recordEntityPlay({
+                    id: data.artist.id,
+                    kind: 'artist',
+                    title: data.artist.name || data.artist.title,
+                    thumbnails: data.artist.thumbnails,
+                  });
+                  void playQueue(data.songs, 0);
+                }}
                 className="inline-flex items-center gap-2 rounded-full bg-yt-red px-5 py-2.5 text-sm font-medium"
               >
                 <Play className="h-4 w-4 fill-white" /> Lecture
@@ -419,8 +455,24 @@ export function AlbumPage() {
         cover={data.album}
         tracks={data.tracks}
         inLibrary={hasAlbum(data.album.id)}
-        onPlay={() => void playQueue(data.tracks, 0)}
+        onPlay={() => {
+          void useLibrary.getState().recordEntityPlay({
+            id: data.album.id,
+            kind: 'album',
+            title: data.album.title,
+            thumbnails: data.album.thumbnails,
+            artists: data.album.artists,
+          });
+          void playQueue(data.tracks, 0);
+        }}
         onShuffle={() => {
+          void useLibrary.getState().recordEntityPlay({
+            id: data.album.id,
+            kind: 'album',
+            title: data.album.title,
+            thumbnails: data.album.thumbnails,
+            artists: data.album.artists,
+          });
           const shuffled = [...data.tracks].sort(() => Math.random() - 0.5);
           void playQueue(shuffled, 0);
         }}
@@ -466,19 +518,48 @@ export function AlbumPage() {
 export function PlaylistPage() {
   const { id = '' } = useParams();
   const [data, setData] = useState<Awaited<ReturnType<typeof api.playlist>> | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
   const playQueue = usePlayer((s) => s.playQueue);
   const { isPlaylistLiked, applyLibrary } = useLibrary();
 
-  useEffect(() => {
+  const loadPlaylist = useCallback(() => {
     if (!id) return;
-    api.playlist(id).then(setData).catch(console.error);
+    setLoading(true);
+    setError('');
+    setData(null);
+    api
+      .playlist(id)
+      .then(setData)
+      .catch((e) => setError(String(e?.message || e || 'Playlist introuvable')))
+      .finally(() => setLoading(false));
   }, [id]);
 
-  if (!data) {
+  useEffect(() => {
+    loadPlaylist();
+  }, [loadPlaylist]);
+
+  if (loading && !data) {
     return (
       <div>
         <BackButton />
         <p className="text-yt-muted">Chargement…</p>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div>
+        <BackButton />
+        <p className="mb-3 text-red-400">{error || 'Playlist introuvable'}</p>
+        <button
+          type="button"
+          className="rounded-full bg-yt-elevated px-4 py-2 text-sm"
+          onClick={() => loadPlaylist()}
+        >
+          Réessayer
+        </button>
       </div>
     );
   }
@@ -491,8 +572,22 @@ export function PlaylistPage() {
       cover={data.playlist}
       tracks={data.tracks}
       liked={isPlaylistLiked(data.playlist.id)}
-      onPlay={() => void playQueue(data.tracks, 0)}
+      onPlay={() => {
+        void useLibrary.getState().recordEntityPlay({
+          id: data.playlist.id,
+          kind: 'playlist',
+          title: data.playlist.title,
+          thumbnails: data.playlist.thumbnails,
+        });
+        void playQueue(data.tracks, 0);
+      }}
       onShuffle={() => {
+        void useLibrary.getState().recordEntityPlay({
+          id: data.playlist.id,
+          kind: 'playlist',
+          title: data.playlist.title,
+          thumbnails: data.playlist.thumbnails,
+        });
         const shuffled = [...data.tracks].sort(() => Math.random() - 0.5);
         void playQueue(shuffled, 0);
       }}

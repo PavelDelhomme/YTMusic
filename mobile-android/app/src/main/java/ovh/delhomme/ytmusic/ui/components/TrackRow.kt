@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -171,6 +172,8 @@ fun MiniPlayerBar(
     track: TrackDto,
     playing: Boolean,
     progress: Float,
+    /** Durée totale (ms) pour afficher le temps restant `-3:45`. */
+    durationMs: Long = 0L,
     onToggle: () -> Unit,
     onOpen: () -> Unit,
     onCast: (() -> Unit)? = null,
@@ -183,6 +186,9 @@ fun MiniPlayerBar(
     val shown = if (scrub >= 0f) scrub else progress.coerceIn(0f, 1f)
     var barWidthPx by remember { mutableFloatStateOf(1f) }
     val thumbPx = with(LocalDensity.current) { 8.dp.toPx() }
+    val remainingLabel = remember(shown, durationMs) {
+        formatRemainingMs(durationMs, shown)
+    }
 
     fun seekFromX(x: Float) {
         if (onSeek == null || barWidthPx <= 0f) return
@@ -192,56 +198,71 @@ fun MiniPlayerBar(
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        Box(
-            modifier = Modifier
+        Row(
+            Modifier
                 .fillMaxWidth()
-                .height(14.dp)
-                .onSizeChanged { barWidthPx = it.width.toFloat().coerceAtLeast(1f) }
-                .pointerInput(track.id, onSeek) {
-                    detectTapGestures { offset ->
-                        seekFromX(offset.x)
-                        scrub = -1f
-                    }
-                }
-                .pointerInput(track.id, onSeek) {
-                    detectHorizontalDragGestures(
-                        onDragStart = { offset -> seekFromX(offset.x) },
-                        onDragEnd = { scrub = -1f },
-                        onDragCancel = { scrub = -1f },
-                        onHorizontalDrag = { change, _ ->
-                            change.consume()
-                            seekFromX(change.position.x)
-                        },
-                    )
-                },
-            contentAlignment = Alignment.CenterStart,
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(2.dp)
-                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f)),
+            Text(
+                remainingLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFBDBDBD),
+                maxLines = 1,
+                modifier = Modifier.widthIn(min = 36.dp),
             )
             Box(
-                Modifier
-                    .fillMaxWidth(shown)
-                    .height(2.dp)
-                    .background(SeekRed),
-            )
-            Box(
-                Modifier
-                    .offset {
-                        IntOffset(
-                            x = ((shown * barWidthPx) - thumbPx / 2f).roundToInt()
-                                .coerceIn(0, (barWidthPx - thumbPx).roundToInt().coerceAtLeast(0)),
-                            y = 0,
-                        )
+                modifier = Modifier
+                    .weight(1f)
+                    .height(14.dp)
+                    .onSizeChanged { barWidthPx = it.width.toFloat().coerceAtLeast(1f) }
+                    .pointerInput(track.id, onSeek) {
+                        detectTapGestures { offset ->
+                            seekFromX(offset.x)
+                            scrub = -1f
+                        }
                     }
-                    .size(8.dp)
-                    .align(Alignment.CenterStart)
-                    .clip(CircleShape)
-                    .background(SeekRed),
-            )
+                    .pointerInput(track.id, onSeek) {
+                        detectHorizontalDragGestures(
+                            onDragStart = { offset -> seekFromX(offset.x) },
+                            onDragEnd = { scrub = -1f },
+                            onDragCancel = { scrub = -1f },
+                            onHorizontalDrag = { change, _ ->
+                                change.consume()
+                                seekFromX(change.position.x)
+                            },
+                        )
+                    },
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(2.dp)
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f)),
+                )
+                Box(
+                    Modifier
+                        .fillMaxWidth(shown)
+                        .height(2.dp)
+                        .background(SeekRed),
+                )
+                Box(
+                    Modifier
+                        .offset {
+                            IntOffset(
+                                x = ((shown * barWidthPx) - thumbPx / 2f).roundToInt()
+                                    .coerceIn(0, (barWidthPx - thumbPx).roundToInt().coerceAtLeast(0)),
+                                y = 0,
+                            )
+                        }
+                        .size(8.dp)
+                        .align(Alignment.CenterStart)
+                        .clip(CircleShape)
+                        .background(SeekRed),
+                )
+            }
         }
         Row(
             modifier = Modifier
@@ -335,4 +356,16 @@ fun MiniPlayerBar(
             }
         }
     }
+}
+
+/** Temps restant compact : `-3:45` (progressRatio 0..1). */
+private fun formatRemainingMs(durationMs: Long, progressRatio: Float): String {
+    if (durationMs <= 0L) return "-0:00"
+    val leftMs = ((1f - progressRatio.coerceIn(0f, 1f)) * durationMs).toLong().coerceAtLeast(0L)
+    val totalSec = (leftMs + 999) / 1000 // ceil secondes
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
+    val s = totalSec % 60
+    val clock = if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+    return "-$clock"
 }

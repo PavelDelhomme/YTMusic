@@ -15,14 +15,20 @@ import { createEmailToken, createRefreshToken, markEmailVerified } from './platf
 import { sendVerificationEmail } from './mail.js';
 import { checkUserTotp, userRequiresTotp } from './totp.js';
 
-const JWT_SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET || 'ytmusic-dev-secret-change-me',
-);
+const rawJwtSecret = process.env.JWT_SECRET || '';
+const appEnv = process.env.APP_ENV || 'local';
+if (
+  (appEnv === 'production' || appEnv === 'preprod') &&
+  (!rawJwtSecret || rawJwtSecret === 'ytmusic-dev-secret-change-me')
+) {
+  throw new Error('JWT_SECRET fort requis quand APP_ENV=production|preprod');
+}
+const JWT_SECRET = new TextEncoder().encode(rawJwtSecret || 'ytmusic-dev-secret-change-me');
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 
 /** Access token court ; refresh token très long (mobile / desktop / web) */
-const ACCESS_TTL = process.env.JWT_ACCESS_TTL || '14d';
+const ACCESS_TTL = process.env.JWT_ACCESS_TTL || (appEnv === 'local' ? '14d' : '24h');
 const COOKIE_MAX_MS = Number(process.env.AUTH_COOKIE_MS || 400 * 24 * 3600 * 1000);
 
 export type AuthUser = ReturnType<typeof publicUser>;

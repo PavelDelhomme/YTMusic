@@ -25,10 +25,11 @@ import java.util.concurrent.TimeUnit
  * Annulé uniquement sur pause volontaire (pas pendant un rebuffer / skip).
  */
 object StreamPrefetcher {
-    private const val HEAD_WIFI = 768 * 1024L
-    private const val HEAD_METERED = 256 * 1024L
-    private const val MAX_WARM = 8
-    private const val DISK_CACHE_MB = 80L
+    private const val HEAD_WIFI = 1_200 * 1024L
+    private const val HEAD_METERED = 320 * 1024L
+    private const val HEAD_NEXT_WIFI = 2_400 * 1024L // prochain titre : plus d’octets → skip fluide
+    private const val MAX_WARM = 6
+    private const val DISK_CACHE_MB = 24L // warm JSON / resolve — octets audio = SimpleCache Exo
     private val JSON = "application/json; charset=utf-8".toMediaType()
 
     private val client: OkHttpClient by lazy {
@@ -145,9 +146,13 @@ object StreamPrefetcher {
     }
 
     private fun exoPrefetch(baseApi: String, trackId: String, priority: Boolean) {
-        val bytes = if (isUnmetered()) HEAD_WIFI else HEAD_METERED
-        // Sur data : seulement le prochain titre prioritaire
-        if (!isUnmetered() && !priority) return
+        val unmetered = isUnmetered()
+        val bytes = when {
+            priority && unmetered -> HEAD_NEXT_WIFI
+            unmetered -> HEAD_WIFI
+            priority -> HEAD_METERED
+            else -> return
+        }
         val url = "${baseApi.trimEnd('/')}/api/stream/$trackId"
         PlayerCache.prefetchHead(YtMusicApp.instance, url, trackId, bytes)
     }

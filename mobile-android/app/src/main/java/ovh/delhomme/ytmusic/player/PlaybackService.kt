@@ -9,6 +9,7 @@ import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSourceBitmapLoader
@@ -28,12 +29,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.BuildConfig
 import ovh.delhomme.ytmusic.MainActivity
 import ovh.delhomme.ytmusic.R
 import ovh.delhomme.ytmusic.YtMusicApp
 import ovh.delhomme.ytmusic.data.TrackDto
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Lecture arrière-plan + notification média persistante (style YTM) :
@@ -50,6 +53,8 @@ class PlaybackService : MediaSessionService() {
     private val cmdLike = SessionCommand(ACTION_TOGGLE_LIKE, Bundle.EMPTY)
     private val cmdCycleRepeat = SessionCommand(ACTION_CYCLE_REPEAT, Bundle.EMPTY)
     private val cmdToggleShuffle = SessionCommand(ACTION_TOGGLE_SHUFFLE, Bundle.EMPTY)
+
+    private val recoverGen = AtomicInteger(0)
 
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
@@ -74,6 +79,31 @@ class PlaybackService : MediaSessionService() {
                 StreamPrefetcher.cancelIdle()
             }
         }
+
+        override fun onPlayerError(error: PlaybackException) {
+            val exo = player ?: return
+            val item = exo.currentMediaItem ?: return
+            val id = item.mediaId
+            if (id.isBlank()) return
+            val attempt = recoverGen.incrementAndGet()
+            scope.launch {
+                // 1) purge cache + reprepare (URL CDN / proxy expirée)
+                runCatching { PlayerCache.invalidate(this@PlaybackService, id) }
+                delay(200)
+                if (attempt != recoverGen.get()) return@launch
+                if (exo.currentMediaItem?.mediaId != id) return@launch
+                runCatching {
+                    val pos = exo.currentPosition.coerceAtLeast(0L)
+                    exo.setMediaItem(item, pos)
+                    exo.prepare()
+                    exo.playWhenReady = true
+                }.onFailure {
+                    // 2) skip si toujours mort
+                    if (exo.hasNextMediaItem()) exo.seekToNextMediaItem()
+                    else exo.stop()
+                }
+            }
+        }
     }
 
     override fun onCreate() {
@@ -82,9 +112,9 @@ class PlaybackService : MediaSessionService() {
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 /* minBufferMs */ 12_000,
-                /* maxBufferMs */ 50_000,
-                /* bufferForPlaybackMs */ 400,
-                /* bufferForPlaybackAfterRebufferMs */ 1_000,
+                /* maxBufferMs */ 45_000,
+                /* bufferForPlaybackMs */ 1_200,
+                /* bufferForPlaybackAfterRebufferMs */ 2_500,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -429,20 +459,19 @@ fun mediaItemFor(
 ): MediaItem {
     val cover = t.coverUrl(sizeHint = 600)
     val album = t.album?.name?.takeIf { it.isNotBlank() } ?: queueTitle
+    val meta = MediaMetadata.Builder()
+        .setTitle(t.title)
+        .setArtist(t.artistLine())
+        .setAlbumTitle(album)
+        .setSubtitle(t.artistLine())
+        .setArtworkUri(cover?.let { android.net.Uri.parse(it) })
+        .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+        .setIsPlayable(true)
+    t.durationMsOrNull()?.let { meta.setDurationMs(it) }
     return MediaItem.Builder()
         .setMediaId(t.id)
         .setUri(baseStreamUrl(t.id))
         .setCustomCacheKey(t.id)
-        .setMediaMetadata(
-            MediaMetadata.Builder()
-                .setTitle(t.title)
-                .setArtist(t.artistLine())
-                .setAlbumTitle(album)
-                .setSubtitle(t.artistLine())
-                .setArtworkUri(cover?.let { android.net.Uri.parse(it) })
-                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
-                .setIsPlayable(true)
-                .build(),
-        )
+        .setMediaMetadata(meta.build())
         .build()
 }

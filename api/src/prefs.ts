@@ -87,15 +87,23 @@ export function ensureRecoSchema() {
   `);
 
   const defaults: Array<[string, number, number, number, number, number]> = [
-    ['radio', 0.35, 0.25, 0.2, 0.1, 0.1],
-    ['discover', 0.2, 0.15, 0.15, 0.35, 0.15],
+    ['radio', 0.28, 0.32, 0.18, 0.14, 0.08],
+    ['style', 0.2, 0.38, 0.14, 0.2, 0.08],
+    ['discover', 0.18, 0.2, 0.12, 0.38, 0.12],
     ['focus', 0.4, 0.3, 0.2, 0.05, 0.05],
   ];
   const now = Date.now();
   for (const [mode, w1, w2, w3, w4, w5] of defaults) {
     db.prepare(
-      `INSERT OR IGNORE INTO reco_weights (mode, w_content, w_seq, w_ctx, w_bandit, w_satisf, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO reco_weights (mode, w_content, w_seq, w_ctx, w_bandit, w_satisf, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(mode) DO UPDATE SET
+         w_content = excluded.w_content,
+         w_seq = excluded.w_seq,
+         w_ctx = excluded.w_ctx,
+         w_bandit = excluded.w_bandit,
+         w_satisf = excluded.w_satisf,
+         updated_at = excluded.updated_at`,
     ).run(mode, w1, w2, w3, w4, w5, now);
   }
 }
@@ -218,6 +226,15 @@ export function recordListenEvent(opts: {
     now.getDay() === 0 || now.getDay() === 6 ? 1 : 0,
     Date.now(),
   );
+  if (Math.random() < 0.02) {
+    try {
+      db.prepare(`DELETE FROM listen_events WHERE created_at < ?`).run(
+        Date.now() - 21 * 24 * 3600 * 1000,
+      );
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 export function listListenEvents(userId: string, limit = 200) {
@@ -441,7 +458,10 @@ export function getWeights(mode = 'radio') {
       }
     | undefined;
   if (!row) {
-    return { mode, w_content: 0.35, w_seq: 0.25, w_ctx: 0.2, w_bandit: 0.1, w_satisf: 0.1 };
+    if (mode === 'style') {
+      return { mode, w_content: 0.2, w_seq: 0.38, w_ctx: 0.14, w_bandit: 0.2, w_satisf: 0.08 };
+    }
+    return { mode, w_content: 0.28, w_seq: 0.32, w_ctx: 0.18, w_bandit: 0.14, w_satisf: 0.08 };
   }
   return row;
 }

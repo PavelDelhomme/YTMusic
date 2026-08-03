@@ -17,6 +17,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -72,6 +73,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,6 +82,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -159,27 +162,38 @@ fun NowPlayingScreen(
     val queueOpen = queueProgress.value > 0.55f
     val queueInteractive = queueProgress.value > 0.02f
 
-    // Remplit la zone « À suivre » (suggestions auto) sans toucher à la file user
-    LaunchedEffect(ui.track?.id, ui.autoplaySuggestions, ui.userQueueEnd, ui.queue.size) {
+    // Remplit la zone « À suivre » — 1 fetch par seed, pas de boucle sur queue.size
+    LaunchedEffect(ui.track?.id, ui.autoplaySuggestions) {
         if (!ui.autoplaySuggestions) return@LaunchedEffect
         val seed = ui.track?.id ?: return@LaunchedEffect
         val boundary = ui.userQueueEnd.coerceIn(0, ui.queue.size)
         val autoLen = (ui.queue.size - boundary).coerceAtLeast(0)
-        if (autoLen >= 40) return@LaunchedEffect
+        // Assez de marge → ne pas refetch (appendAutoTracks ne doit pas relancer l’effet)
+        if (autoLen >= 12) return@LaunchedEffect
+        // Un seul appel ranked (related = similarForUser côté API)
         val related = runCatching { container.api.related(seed) }.getOrNull()
-        val up = runCatching { container.api.upNext(seed).tracks }.getOrDefault(emptyList())
         val pool = (
-            up +
-                related?.radio.orEmpty() +
+            related?.tracks.orEmpty() +
                 related?.related.orEmpty() +
-                related?.tracks.orEmpty()
+                related?.radio.orEmpty()
             )
             .filter { it.isPlayable() && it.id != seed }
-        if (pool.isNotEmpty()) player.appendAutoTracks(pool)
+            .distinctBy { it.id }
+        if (pool.isNotEmpty() && ui.track?.id == seed) player.appendAutoTracks(pool)
     }
 
     fun settleOrClose() {
         scope.launch {
+            // File encore visible → ne jamais fermer le lecteur, juste replier la file
+            if (queueProgress.value > 0.02f) {
+                dragOffset = 0f
+                queueProgress.animateTo(
+                    0f,
+                    spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
+                )
+                dragOffset = 0f
+                return@launch
+            }
             if (dragOffset >= dismissPx) {
                 onClose()
                 dragOffset = 0f
@@ -207,6 +221,8 @@ fun NowPlayingScreen(
                 target,
                 spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
             )
+            // Évite qu’un swipe résiduel ferme le Now Playing juste après le collapse
+            if (target == 0f) dragOffset = 0f
         }
     }
 
@@ -221,10 +237,12 @@ fun NowPlayingScreen(
 
     fun collapseQueue() {
         scope.launch {
+            dragOffset = 0f
             queueProgress.animateTo(
                 0f,
                 spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
             )
+            dragOffset = 0f
         }
     }
 
@@ -247,10 +265,11 @@ fun NowPlayingScreen(
         player.skipPrevOrRestart(forcePrevious = true)
     }
 
-    val dismissScroll = remember(queueOpen, dismissPx) {
+    val dismissScroll = remember(queueInteractive, dismissPx) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (queueOpen) return Offset.Zero
+                // File ouverte / en transition → pas de dismiss du lecteur
+                if (queueProgress.value > 0.02f) return Offset.Zero
                 if (available.y < 0f && dragOffset > 0f) {
                     val next = (dragOffset + available.y).coerceAtLeast(0f)
                     val consumed = next - dragOffset
@@ -265,7 +284,7 @@ fun NowPlayingScreen(
                 available: Offset,
                 source: NestedScrollSource,
             ): Offset {
-                if (queueOpen) return Offset.Zero
+                if (queueProgress.value > 0.02f) return Offset.Zero
                 if (available.y > 0f) {
                     dragOffset += available.y
                     return Offset(0f, available.y)
@@ -274,7 +293,10 @@ fun NowPlayingScreen(
             }
 
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                if (queueOpen) return Velocity.Zero
+                if (queueProgress.value > 0.02f) {
+                    dragOffset = 0f
+                    return Velocity.Zero
+                }
                 if (dragOffset >= dismissPx || available.y > flingDismiss) {
                     onClose()
                     dragOffset = 0f
@@ -294,10 +316,16 @@ fun NowPlayingScreen(
         }
     }
 
-    LaunchedEffect(ui.playing) {
+    LaunchedEffect(ui.playing, showLyrics) {
         while (isActive) {
             player.tick()
-            delay(if (ui.playing) 200 else 800)
+            delay(
+                when {
+                    showLyrics && ui.playing -> 80L
+                    ui.playing -> 200L
+                    else -> 800L
+                },
+            )
         }
     }
 
@@ -342,6 +370,23 @@ fun NowPlayingScreen(
             .nestedScroll(dismissScroll),
     ) {
         val track = ui.track
+        // Ambient blur YTM
+        if (track != null) {
+            AsyncImage(
+                model = track.coverUrl(320),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .blur(56.dp)
+                    .alpha(0.42f),
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.72f)),
+            )
+        }
         if (track == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Rien en lecture", color = PlayerMuted)
@@ -358,15 +403,26 @@ fun NowPlayingScreen(
                     Modifier
                         .fillMaxWidth()
                         .graphicsLayer { alpha = (1f - qp * 1.2f).coerceIn(0f, 1f) }
-                        .pointerInput(Unit) {
+                        .pointerInput(queueInteractive) {
                             detectVerticalDragGestures(
                                 onVerticalDrag = { _, amount ->
+                                    if (queueProgress.value > 0.02f) {
+                                        // Replie la file, ne dismiss pas le lecteur
+                                        onQueueDrag(amount)
+                                        return@detectVerticalDragGestures
+                                    }
                                     if (amount > 0f || dragOffset > 0f) {
                                         dragOffset = (dragOffset + amount).coerceAtLeast(0f)
                                     }
                                 },
-                                onDragEnd = { settleOrClose() },
-                                onDragCancel = { settleOrClose() },
+                                onDragEnd = {
+                                    if (queueProgress.value > 0.02f) settleQueue(0f)
+                                    else settleOrClose()
+                                },
+                                onDragCancel = {
+                                    if (queueProgress.value > 0.02f) settleQueue(0f)
+                                    else settleOrClose()
+                                },
                             )
                         },
                 ) {
@@ -390,10 +446,15 @@ fun NowPlayingScreen(
                             .padding(horizontal = 8.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        IconButton(onClick = onClose) {
+                        IconButton(
+                            onClick = {
+                                if (queueInteractive) collapseQueue()
+                                else onClose()
+                            },
+                        ) {
                             Icon(
                                 Icons.Default.KeyboardArrowDown,
-                                contentDescription = "Replier",
+                                contentDescription = if (queueInteractive) "Replier la file" else "Replier",
                                 tint = PlayerFg,
                                 modifier = Modifier.size(32.dp),
                             )
@@ -464,9 +525,16 @@ fun NowPlayingScreen(
                                     .nowPlayingMediaGestures(
                                         key = track.id,
                                         onDismissDelta = { delta ->
-                                            dragOffset = (dragOffset + delta).coerceAtLeast(0f)
+                                            if (queueProgress.value > 0.02f) {
+                                                onQueueDrag(delta)
+                                            } else {
+                                                dragOffset = (dragOffset + delta).coerceAtLeast(0f)
+                                            }
                                         },
-                                        onDismissEnd = { settleOrClose() },
+                                        onDismissEnd = {
+                                            if (queueProgress.value > 0.02f) settleQueue(0f)
+                                            else settleOrClose()
+                                        },
                                         onHorizontalDelta = { dx ->
                                             mediaSlideX = (mediaSlideX + dx).coerceIn(-120f, 120f)
                                         },
@@ -481,15 +549,31 @@ fun NowPlayingScreen(
                                     ),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
-                                AsyncImage(
-                                    model = track.coverUrl(800),
-                                    contentDescription = track.title,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(260.dp)
-                                        .clip(RoundedCornerShape(12.dp)),
-                                )
+                                if (showLyrics) {
+                                    InlineSyncedLyrics(
+                                        container = container,
+                                        track = track,
+                                        positionMs = ui.positionMs,
+                                        onSeek = { player.seek(it) },
+                                        onClose = { showLyrics = false },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(320.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(Color.Black.copy(alpha = 0.35f)),
+                                    )
+                                } else {
+                                    AsyncImage(
+                                        model = track.coverUrl(800),
+                                        contentDescription = track.title,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(260.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .clickable { showLyrics = true },
+                                    )
+                                }
                                 Spacer(Modifier.height(18.dp))
                                 Text(
                                     track.title,
@@ -536,6 +620,32 @@ fun NowPlayingScreen(
                                 }
                             }
                             Spacer(Modifier.height(10.dp))
+                            ui.sleepLabel?.let { label ->
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(Color(0x33FFB300))
+                                        .clickable { /* ouvert via ⋮ */ }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text(
+                                        "Minuteur · $label",
+                                        color = PlayerFg,
+                                        style = MaterialTheme.typography.labelMedium,
+                                    )
+                                    Text(
+                                        "Annuler",
+                                        color = PlayerFg,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.clickable { player.clearSleepTimer() },
+                                    )
+                                }
+                                Spacer(Modifier.height(8.dp))
+                            }
                             Row(
                                 Modifier
                                     .fillMaxWidth()
@@ -572,7 +682,7 @@ fun NowPlayingScreen(
                                         }
                                         PlayerChromeAction.Lyrics -> SecondaryChip(
                                             Icons.Default.Lyrics, slot.label, PlayerFg, showLabel = false,
-                                        ) { showLyrics = true }
+                                        ) { showLyrics = !showLyrics }
                                         PlayerChromeAction.AddToPlaylist -> SecondaryChip(
                                             Icons.Default.PlaylistAdd, slot.label, PlayerFg, showLabel = true,
                                         ) { onOpenAddToPlaylist?.invoke(track) }
@@ -606,12 +716,34 @@ fun NowPlayingScreen(
                             }
                             Spacer(Modifier.height(8.dp))
                             val seekInteraction = remember { MutableInteractionSource() }
+                            val bufferedFrac = if (ui.durationMs > 0) {
+                                (ui.bufferedMs.toFloat() / ui.durationMs).coerceIn(0f, 1f)
+                            } else {
+                                0f
+                            }
                             val seekColors = SliderDefaults.colors(
-                                thumbColor = SeekRed,
+                                thumbColor = Color.White,
                                 activeTrackColor = SeekRed,
-                                inactiveTrackColor = PlayerFg.copy(alpha = 0.22f),
+                                inactiveTrackColor = PlayerFg.copy(alpha = 0.18f),
                             )
-                            Slider(
+                            Box(Modifier.fillMaxWidth()) {
+                                // Buffer gris derrière le slider
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .height(2.dp)
+                                        .align(Alignment.Center)
+                                        .clip(RoundedCornerShape(1.dp))
+                                        .background(PlayerFg.copy(alpha = 0.12f)),
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .fillMaxWidth(bufferedFrac)
+                                            .height(2.dp)
+                                            .background(PlayerFg.copy(alpha = 0.32f)),
+                                    )
+                                }
+                                Slider(
                                 value = progress,
                                 onValueChange = { scrub = it },
                                 onValueChangeFinished = {
@@ -625,7 +757,7 @@ fun NowPlayingScreen(
                                         interactionSource = seekInteraction,
                                         colors = seekColors,
                                         enabled = true,
-                                        thumbSize = DpSize(10.dp, 10.dp),
+                                        thumbSize = if (scrub >= 0f) DpSize(14.dp, 14.dp) else DpSize(10.dp, 10.dp),
                                     )
                                 },
                                 track = { sliderState ->
@@ -641,15 +773,14 @@ fun NowPlayingScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(28.dp),
-                            )
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text(
-                                    formatMs(if (scrub >= 0f) (scrub * duration).toLong() else ui.positionMs),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = PlayerMuted,
                                 )
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                                val remainingMs = (
+                                    ui.durationMs - (if (scrub >= 0f) (scrub * duration).toLong() else ui.positionMs)
+                                    ).coerceAtLeast(0L)
                                 Text(
-                                    formatMs(ui.durationMs),
+                                    "-${formatMs(remainingMs)}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = PlayerMuted,
                                 )
@@ -797,6 +928,8 @@ fun NowPlayingScreen(
                 if (queueInteractive) {
                     QueueExpandedBody(
                         ui = ui,
+                        container = container,
+                        player = player,
                         listState = queueListState,
                         onPlayAt = player::playAt,
                         onMore = onMore,
@@ -816,14 +949,6 @@ fun NowPlayingScreen(
         }
     }
 
-    if (showLyrics && ui.track != null) {
-        LyricsSheet(
-            container = container,
-            track = ui.track!!,
-            positionMs = ui.positionMs,
-            onDismiss = { showLyrics = false },
-        )
-    }
     if (showSaveQueue) {
         SaveQueueSheet(
             container = container,
@@ -1066,6 +1191,8 @@ private fun QueueExpandedHeader(
 @Composable
 private fun QueueExpandedBody(
     ui: PlayerUiState,
+    container: AppContainer,
+    player: PlayerController,
     listState: LazyListState,
     onPlayAt: (Int) -> Unit,
     onMore: ((TrackDto) -> Unit)?,
@@ -1074,98 +1201,242 @@ private fun QueueExpandedBody(
     onToggleAutoplay: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var panelTab by remember { mutableIntStateOf(0) } // 0 = file, 1 = similaires
     val boundary = ui.userQueueEnd.coerceIn(0, ui.queue.size)
     val userTracks = ui.queue.take(boundary)
     val autoTracks = if (ui.autoplaySuggestions) ui.queue.drop(boundary) else emptyList()
+
+    var similarTracks by remember { mutableStateOf<List<TrackDto>>(emptyList()) }
+    var similarLoading by remember { mutableStateOf(false) }
+    val seedId = ui.track?.id
+
+    LaunchedEffect(seedId, panelTab) {
+        if (panelTab != 1 || seedId.isNullOrBlank()) return@LaunchedEffect
+        similarLoading = true
+        // related API = déjà ranked style (évite double similar+related)
+        val pool = runCatching {
+            val rel = container.api.related(seedId)
+            (rel.tracks.orEmpty() + rel.related.orEmpty() + rel.radio.orEmpty())
+                .filter { it.isPlayable() && it.id != seedId }
+                .distinctBy { it.id }
+        }.getOrDefault(emptyList())
+        if (ui.track?.id == seedId) {
+            similarTracks = pool
+            similarLoading = false
+        }
+    }
 
     Column(modifier.fillMaxWidth()) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(
-                "File d'attente",
-                Modifier.weight(1f),
-                fontWeight = FontWeight.SemiBold,
-                color = PlayerFg,
+            QueuePanelTab(
+                label = "File d'attente",
+                selected = panelTab == 0,
+                onClick = { panelTab = 0 },
+                modifier = Modifier.weight(1f),
             )
-            Text(
-                "${userTracks.size}",
-                style = MaterialTheme.typography.labelMedium,
-                color = PlayerMuted,
-                modifier = Modifier.padding(end = 8.dp),
+            QueuePanelTab(
+                label = "Similaires",
+                selected = panelTab == 1,
+                onClick = { panelTab = 1 },
+                modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = onSave) {
-                Text("Enregistrer")
-            }
         }
-        LazyColumn(Modifier.fillMaxSize(), state = listState) {
-            itemsIndexed(userTracks, key = { i, t -> "u-${t.id}-$i" }) { index, item ->
-                QueueTrackRow(
-                    track = item,
-                    index = index,
-                    highlighted = index == ui.queueIndex,
-                    onClick = { onPlayAt(index) },
-                    onLongClick = { onMore?.invoke(item) },
-                    onMove = onMove,
-                    onMore = onMore?.let { { it(item) } },
+
+        if (panelTab == 0) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "${userTracks.size} titre${if (userTracks.size > 1) "s" else ""}",
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = PlayerMuted,
                 )
+                TextButton(onClick = onSave) {
+                    Text("Enregistrer")
+                }
             }
-            item {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "À suivre",
-                            fontWeight = FontWeight.SemiBold,
-                            color = PlayerFg,
+            LazyColumn(modifier.fillMaxSize(), state = listState) {
+                itemsIndexed(userTracks, key = { i, t -> "u-${t.id}-$i" }) { index, item ->
+                    QueueTrackRow(
+                        track = item,
+                        index = index,
+                        highlighted = index == ui.queueIndex,
+                        onClick = { onPlayAt(index) },
+                        onLongClick = { onMore?.invoke(item) },
+                        onMove = onMove,
+                        onMore = onMore?.let { { it(item) } },
+                    )
+                }
+                item {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "À suivre",
+                                fontWeight = FontWeight.SemiBold,
+                                color = PlayerFg,
+                            )
+                            Text(
+                                "Lecture automatique",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = PlayerMuted,
+                            )
+                        }
+                        Switch(
+                            checked = ui.autoplaySuggestions,
+                            onCheckedChange = { onToggleAutoplay() },
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = SeekRed,
+                                checkedThumbColor = Color.White,
+                            ),
                         )
+                    }
+                }
+                if (!ui.autoplaySuggestions) {
+                    item {
                         Text(
-                            "Lecture automatique",
-                            style = MaterialTheme.typography.labelSmall,
+                            "Lecture auto désactivée",
+                            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.bodySmall,
                             color = PlayerMuted,
                         )
                     }
-                    Switch(
-                        checked = ui.autoplaySuggestions,
-                        onCheckedChange = { onToggleAutoplay() },
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = SeekRed,
-                            checkedThumbColor = Color.White,
-                        ),
+                }
+                itemsIndexed(autoTracks, key = { i, t -> "a-${t.id}-${boundary + i}" }) { i, item ->
+                    val abs = boundary + i
+                    QueueTrackRow(
+                        track = item,
+                        index = abs,
+                        highlighted = abs == ui.queueIndex,
+                        onClick = { onPlayAt(abs) },
+                        onLongClick = { onMore?.invoke(item) },
+                        onMove = onMove,
+                        onMore = onMore?.let { { it(item) } },
                     )
                 }
+                item { Spacer(Modifier.height(48.dp)) }
             }
-            if (!ui.autoplaySuggestions) {
+        } else {
+            // Découverte type YTM — se met à jour à chaque titre
+            LazyColumn(Modifier.fillMaxSize()) {
                 item {
-                    Text(
-                        "Lecture auto désactivée",
-                        Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = PlayerMuted,
-                    )
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Découvrez également",
+                                fontWeight = FontWeight.SemiBold,
+                                color = PlayerFg,
+                            )
+                            Text(
+                                "Même style · se met à jour avec le titre",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = PlayerMuted,
+                            )
+                        }
+                        if (similarTracks.isNotEmpty()) {
+                            TextButton(
+                                onClick = {
+                                    similarTracks.take(30).forEach { player.addToQueue(it) }
+                                },
+                            ) {
+                                Text("Tout ajouter")
+                            }
+                        }
+                    }
                 }
+                when {
+                    similarLoading && similarTracks.isEmpty() -> {
+                        item {
+                            Text(
+                                "Chargement des similaires…",
+                                Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                color = PlayerMuted,
+                            )
+                        }
+                    }
+                    similarTracks.isEmpty() -> {
+                        item {
+                            Text(
+                                "Aucun titre similaire pour le moment.",
+                                Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                color = PlayerMuted,
+                            )
+                        }
+                    }
+                    else -> {
+                        itemsIndexed(similarTracks, key = { _, t -> "s-${t.id}" }) { _, item ->
+                            QueueTrackRow(
+                                track = item,
+                                index = -1,
+                                highlighted = false,
+                                onClick = {
+                                    val idx = similarTracks.indexOfFirst { it.id == item.id }
+                                        .coerceAtLeast(0)
+                                    player.play(
+                                        similarTracks,
+                                        startIndex = idx,
+                                        title = "Similaires",
+                                    )
+                                },
+                                onLongClick = { onMore?.invoke(item) },
+                                onMove = { _, _ -> },
+                                onMore = onMore?.let { { it(item) } },
+                            )
+                        }
+                    }
+                }
+                item { Spacer(Modifier.height(48.dp)) }
             }
-            itemsIndexed(autoTracks, key = { i, t -> "a-${t.id}-${boundary + i}" }) { i, item ->
-                val abs = boundary + i
-                QueueTrackRow(
-                    track = item,
-                    index = abs,
-                    highlighted = abs == ui.queueIndex,
-                    onClick = { onPlayAt(abs) },
-                    onLongClick = { onMore?.invoke(item) },
-                    onMove = onMove,
-                    onMore = onMore?.let { { it(item) } },
-                )
-            }
-            item { Spacer(Modifier.height(48.dp)) }
         }
+    }
+}
+
+@Composable
+private fun QueuePanelTab(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            label.uppercase(),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            color = if (selected) PlayerFg else PlayerMuted,
+            maxLines = 1,
+        )
+        Spacer(Modifier.height(6.dp))
+        Box(
+            Modifier
+                .fillMaxWidth(0.55f)
+                .height(2.dp)
+                .background(if (selected) Color.White else Color.Transparent),
+        )
     }
 }
 
@@ -1327,25 +1598,26 @@ private fun QueueTrackRow(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LyricsSheet(
+private fun InlineSyncedLyrics(
     container: AppContainer,
     track: TrackDto,
     positionMs: Long,
-    onDismiss: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var text by remember { mutableStateOf<String?>(null) }
-    var timed by remember { mutableStateOf<List<TimedLyricLine>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    var text by remember(track.id) { mutableStateOf<String?>(null) }
+    var timed by remember(track.id) { mutableStateOf<List<TimedLyricLine>>(emptyList()) }
+    var loading by remember(track.id) { mutableStateOf(true) }
 
     LaunchedEffect(track.id) {
         loading = true
         runCatching { container.api.lyrics(track.id) }
             .onSuccess {
                 text = it.lyrics
-                timed = it.timed.orEmpty()
+                val apiTimed = it.timed.orEmpty()
+                timed = if (apiTimed.isNotEmpty()) apiTimed else parseLrcLines(it.lyrics)
             }
             .onFailure {
                 text = null
@@ -1354,56 +1626,90 @@ private fun LyricsSheet(
         loading = false
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
-    ) {
-        Text(
-            "Paroles",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
-            color = PlayerFg,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-        )
+    // Lead ~280 ms : ligne allumée juste avant le chant
+    val leadMs = 280L
+    val active = if (timed.isEmpty()) -1
+    else timed.indexOfLast { it.startMs <= positionMs + leadMs }.coerceAtLeast(0)
+    val listState = rememberLazyListState()
+    LaunchedEffect(active) {
+        if (active < 0) return@LaunchedEffect
+        runCatching {
+            listState.animateScrollToItem(
+                index = active.coerceIn(0, timed.lastIndex),
+                scrollOffset = -120,
+            )
+        }
+    }
+
+    Column(modifier = modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Paroles",
+                style = MaterialTheme.typography.labelLarge,
+                color = PlayerMuted,
+            )
+            Text(
+                "Fermer",
+                color = PlayerFg,
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onClose)
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+        }
         when {
-            loading -> Text("Chargement…", color = PlayerMuted, modifier = Modifier.padding(20.dp))
+            loading -> Text(
+                "Chargement…",
+                color = PlayerMuted,
+                modifier = Modifier.padding(top = 24.dp),
+            )
             timed.isNotEmpty() -> {
-                val active = timed.indexOfLast { it.startMs <= positionMs }.coerceAtLeast(0)
-                val listState = rememberLazyListState()
-                LaunchedEffect(active) {
-                    runCatching {
-                        listState.animateScrollToItem(active.coerceIn(0, timed.lastIndex))
-                    }
-                }
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier
-                        .padding(horizontal = 20.dp)
-                        .height(420.dp),
+                    contentPadding = PaddingValues(vertical = 24.dp),
+                    modifier = Modifier.fillMaxSize(),
                 ) {
                     itemsIndexed(timed) { i, line ->
+                        val isActive = i == active
+                        val past = i < active
                         Text(
-                            line.text,
-                            color = when {
-                                i == active -> PlayerFg
-                                i < active -> PlayerMuted.copy(alpha = 0.45f)
-                                else -> PlayerMuted
+                            line.text.ifBlank { " " },
+                            style = if (isActive) {
+                                MaterialTheme.typography.headlineSmall
+                            } else {
+                                MaterialTheme.typography.titleMedium
                             },
-                            fontWeight = if (i == active) FontWeight.SemiBold else FontWeight.Normal,
-                            modifier = Modifier.padding(vertical = 6.dp),
+                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                            color = when {
+                                isActive -> PlayerFg
+                                past -> PlayerMuted.copy(alpha = 0.28f)
+                                else -> PlayerMuted.copy(alpha = 0.72f)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSeek(line.startMs.coerceAtLeast(0L)) }
+                                .padding(vertical = if (isActive) 12.dp else 7.dp)
+                                .graphicsLayer {
+                                    scaleX = if (isActive) 1.03f else 1f
+                                    scaleY = if (isActive) 1.03f else 1f
+                                },
                         )
                     }
                 }
             }
             !text.isNullOrBlank() -> {
-                LazyColumn(Modifier.padding(horizontal = 20.dp).height(420.dp)) {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
                     item {
                         Text(
                             text!!,
                             color = PlayerFg,
                             style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.padding(bottom = 32.dp),
+                            modifier = Modifier.padding(vertical = 16.dp),
                         )
                     }
                 }
@@ -1411,11 +1717,32 @@ private fun LyricsSheet(
             else -> Text(
                 "Paroles indisponibles pour ce titre.",
                 color = PlayerMuted,
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(top = 24.dp),
             )
         }
-        Spacer(Modifier.height(24.dp))
     }
+}
+
+/** Parse LRC `[mm:ss.xx] texte` si l’API ne renvoie que du texte. */
+private fun parseLrcLines(raw: String?): List<TimedLyricLine> {
+    if (raw.isNullOrBlank()) return emptyList()
+    val re = Regex("""^\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?]\s*(.*)$""")
+    val out = ArrayList<TimedLyricLine>()
+    for (row in raw.split('\n', '\r')) {
+        val m = re.matchEntire(row.trim()) ?: continue
+        val min = m.groupValues[1].toIntOrNull() ?: continue
+        val sec = m.groupValues[2].toIntOrNull() ?: continue
+        val fracRaw = m.groupValues[3]
+        val fracMs = when {
+            fracRaw.isBlank() -> 0
+            fracRaw.length <= 2 -> (fracRaw.padEnd(2, '0').toIntOrNull() ?: 0) * 10
+            else -> fracRaw.padEnd(3, '0').take(3).toIntOrNull() ?: 0
+        }
+        val text = m.groupValues[4].trim()
+        if (text.isEmpty()) continue
+        out += TimedLyricLine(startMs = (min * 60 + sec) * 1000L + fracMs, text = text)
+    }
+    return out
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

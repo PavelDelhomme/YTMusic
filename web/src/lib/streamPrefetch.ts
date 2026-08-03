@@ -3,11 +3,13 @@ import { apiUrl } from '../api';
 const FULL_CACHE = 'ytm-stream-full-v1';
 
 /** Nombre max de pistes dont on garde le début en mémoire */
-const MAX_HEAD = 24;
-/** Taille du début préchargé (~384 Ko ≈ quelques secondes d’audio) */
+const MAX_HEAD = 12;
+/** Tête générique (~384 Ko) */
 const HEAD_BYTES = 384 * 1024;
+/** Prochain titre : plus d’octets pour un skip fluide */
+const HEAD_NEXT_BYTES = 960 * 1024;
 /** Pistes complètes en Cache Storage (instant play) — rester léger sur navigateur */
-const MAX_FULL = 8;
+const MAX_FULL = 6;
 /** Warm format API en parallèle */
 const WARM_CONCURRENCY = 3;
 /** Prefetch tête en parallèle */
@@ -114,7 +116,7 @@ export async function warmFormats(ids: string[]): Promise<void> {
 }
 
 /** Précharge le début du flux (Range) en RAM — démarrage quasi immédiat. */
-export async function warmHead(id: string, gen?: number): Promise<void> {
+export async function warmHead(id: string, gen?: number, bytes = HEAD_BYTES): Promise<void> {
   if (!isVideoId(id)) return;
   if (gen !== undefined && gen !== prefetchGeneration) return;
   if (headCache.has(id)) {
@@ -131,7 +133,7 @@ export async function warmHead(id: string, gen?: number): Promise<void> {
       credentials: 'include',
       headers: {
         ...(await authHeaders()),
-        Range: `bytes=0-${HEAD_BYTES - 1}`,
+        Range: `bytes=0-${bytes - 1}`,
       },
     });
     if (gen !== undefined && gen !== prefetchGeneration) return;
@@ -260,7 +262,11 @@ export function prefetchAround(
       ids[idx + 4],
       ids[idx - 1],
     ].filter((id): id is string => Boolean(id) && unique.includes(id));
-    return runPool([...new Set(ordered)], HEAD_CONCURRENCY, (id) => warmHead(id, gen), gen);
+    return runPool([...new Set(ordered)], HEAD_CONCURRENCY, (id) => {
+      const nextId = ids[idx + 1];
+      const bytes = id === nextId ? HEAD_NEXT_BYTES : HEAD_BYTES;
+      return warmHead(id, gen, bytes);
+    }, gen);
   });
 
   const fullIds: string[] = [];
@@ -296,6 +302,15 @@ export async function resolvePrefetchedPlayUrl(trackId: string): Promise<string 
   } catch {
     return null;
   }
+}
+
+/** True si cette URL blob est encore gérée par le prefetch (ne pas révoquer). */
+export function isPrefetchBlobUrl(url: string): boolean {
+  if (!url?.startsWith('blob:')) return false;
+  for (const v of blobUrls.values()) {
+    if (v === url) return true;
+  }
+  return false;
 }
 
 export function prefetchStats() {

@@ -87,6 +87,7 @@ fun LibraryScreen(
     var userPicture by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf(LibraryFilter.defaultSelected) }
     var lastFetchAt by remember { mutableStateOf(0L) }
+    var downloadMeta by remember { mutableStateOf<Map<String, TrackDto>>(emptyMap()) }
 
     suspend fun reloadLibrary(force: Boolean = false, showSpinner: Boolean = false) {
         val now = System.currentTimeMillis()
@@ -115,8 +116,31 @@ fun LibraryScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            LibraryFilter.pendingSelect?.let { pending ->
+                selected = pending
+                LibraryFilter.pendingSelect = null
+            }
             reloadLibrary(force = false, showSpinner = true)
         }
+    }
+
+    // Enrichit les téléchargements dont on n’a que l’id
+    LaunchedEffect(lib?.downloaded, selected) {
+        if (selected != LibraryFilter.Downloads) return@LaunchedEffect
+        val data = lib ?: return@LaunchedEffect
+        val byId = (data.songs + data.liked + data.history).associateBy { it.id }
+        val missing = data.downloaded.filter { id ->
+            id.length == 11 && byId[id] == null && downloadMeta[id] == null
+        }.take(24)
+        if (missing.isEmpty()) return@LaunchedEffect
+        val fetched = mutableMapOf<String, TrackDto>()
+        for (id in missing) {
+            runCatching { container.api.track(id).track }
+                .getOrNull()
+                ?.takeIf { it.isPlayable() }
+                ?.let { fetched[id] = it }
+        }
+        if (fetched.isNotEmpty()) downloadMeta = downloadMeta + fetched
     }
 
     val visibleFilters = remember(hidden) {
@@ -225,7 +249,9 @@ fun LibraryScreen(
                     }
                 }
 
-                val content = remember(data, selected) { buildLibraryContent(data, selected) }
+                val content = remember(data, selected, downloadMeta) {
+                    buildLibraryContent(data, selected, downloadMeta)
+                }
                 when {
                     content.comingSoon != null -> EmptyHint(content.comingSoon!!)
                     content.rows.isEmpty() -> EmptyHint(content.emptyMessage)
@@ -303,6 +329,9 @@ fun LibraryScreen(
             onDismiss = { showAccount = false },
             onOpenRecoPrefs = onOpenRecoPrefs,
             onOpenHistory = { showHistory = true },
+            onOpenDownloads = {
+                selected = LibraryFilter.Downloads
+            },
             onOpenDebugLogs = onOpenDebugLogs,
             onOpenYtmImport = onOpenYtmImport,
             onLoggedOut = onLoggedOut,
@@ -314,6 +343,7 @@ fun LibraryScreen(
             onDismiss = { showHistory = false },
             onPlay = onPlay,
             onMore = onMore,
+            onOpenEntity = onOpenDetail,
         )
     }
 }
@@ -379,7 +409,11 @@ private data class LibraryContent(
     val comingSoon: String? = null,
 )
 
-private fun buildLibraryContent(data: LibraryResponse, filter: LibraryFilter): LibraryContent {
+private fun buildLibraryContent(
+    data: LibraryResponse,
+    filter: LibraryFilter,
+    downloadMeta: Map<String, TrackDto> = emptyMap(),
+): LibraryContent {
     fun az(tracks: List<TrackDto>) = tracks.sortedBy { it.title.lowercase() }
 
     fun playlistAsTrack(pl: PlaylistDto): TrackDto =
@@ -508,7 +542,7 @@ private fun buildLibraryContent(data: LibraryResponse, filter: LibraryFilter): L
             )
         }
         LibraryFilter.Downloads -> {
-            val byId = (data.songs + data.liked + data.history).associateBy { it.id }
+            val byId = (data.songs + data.liked + data.history).associateBy { it.id } + downloadMeta
             val rows = az(
                 data.downloaded.mapNotNull { id ->
                     byId[id] ?: TrackDto(id = id, title = id, type = "song")

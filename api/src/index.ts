@@ -57,6 +57,8 @@ import {
   addHistory,
   getHistory,
   getTopListened,
+  recordEntityPlay,
+  getEntityHistory,
   listDownloads,
   markDownloaded,
   listPlaylists,
@@ -96,6 +98,7 @@ import {
   signToken,
   verifyToken,
 } from './auth.js';
+import { rateLimit } from './rateLimit.js';
 import {
   addPin,
   addRecoFeedback,
@@ -167,10 +170,46 @@ function p(v: string | string[] | undefined): string {
 
 const app = express();
 app.set('trust proxy', 1);
-app.use(cors({ origin: true, credentials: true }));
+
+/** CORS : allowlist (APP_URL + CORS_ORIGINS) ; en local, LAN privée OK. */
+function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin) return true; // same-origin, curl, apps natives
+  const env = process.env.APP_ENV || 'local';
+  const allow = new Set(
+    [
+      ...(process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
+      (process.env.APP_URL || '').replace(/\/$/, ''),
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://localhost:8787',
+      'http://127.0.0.1:8787',
+    ].filter(Boolean),
+  );
+  if (allow.has(origin)) return true;
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true;
+  if (env === 'local' || env === 'development') {
+    return /^https?:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$/i.test(
+      origin,
+    );
+  }
+  return false;
+}
+
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (isAllowedOrigin(origin)) cb(null, true);
+      else cb(null, false);
+    },
+    credentials: true,
+  }),
+);
 app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
 app.use(authOptional);
+
+const authBurst = rateLimit({ windowMs: 60_000, max: 20 });
+const authStrict = rateLimit({ windowMs: 15 * 60_000, max: 40 });
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -191,7 +230,7 @@ app.get('/api/auth/me', authOptional, (req, res) => {
   res.json({ user: req.user });
 });
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authBurst, authStrict, async (req, res) => {
   try {
     const { email, password, name } = req.body || {};
     if (!email || !password) {
@@ -208,7 +247,7 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authBurst, authStrict, async (req, res) => {
   try {
     const result = await loginLocal(String(req.body?.email || ''), String(req.body?.password || ''), {
       totp: req.body?.totp ? String(req.body.totp) : undefined,
@@ -228,7 +267,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-app.post('/api/auth/google', async (req, res) => {
+app.post('/api/auth/google', authBurst, authStrict, async (req, res) => {
   try {
     const result = await loginGoogle(
       String(req.body?.credential || req.body?.idToken || ''),
@@ -243,7 +282,7 @@ app.post('/api/auth/google', async (req, res) => {
   }
 });
 
-app.post('/api/auth/refresh', async (req, res) => {
+app.post('/api/auth/refresh', authBurst, async (req, res) => {
   try {
     const raw =
       String(req.body?.refreshToken || '') ||
@@ -275,8 +314,9 @@ app.post('/api/auth/refresh', async (req, res) => {
 app.post('/api/auth/logout', (req, res) => {
   const raw = String((req as any).cookies?.ytm_refresh || req.body?.refreshToken || '');
   if (raw) revokeRefreshToken(raw);
-  res.clearCookie('ytm_token');
-  res.clearCookie('ytm_refresh');
+  const opts = sessionCookieOptions();
+  res.clearCookie('ytm_token', { path: opts.path, sameSite: opts.sameSite, secure: opts.secure });
+  res.clearCookie('ytm_refresh', { path: opts.path, sameSite: opts.sameSite, secure: opts.secure });
   res.json({ ok: true });
 });
 
@@ -904,7 +944,7 @@ app.post('/api/history', accountRequired, (req, res) => {
       res.status(400).json({ error: 'track requis' });
       return;
     }
-    addHistory(req.userId!, track);
+    addHistory(req.userId!, track, { bumpCount: false });
     res.json({ ok: true, history: getHistory(req.userId!, 500) });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -912,7 +952,39 @@ app.post('/api/history', accountRequired, (req, res) => {
 });
 
 app.get('/api/history', accountRequired, (req, res) => {
-  res.json({ history: getHistory(req.userId!, 500) });
+  const kind = req.query?.kind ? String(req.query.kind) : undefined;
+  if (kind === 'playlist' || kind === 'album' || kind === 'artist' || kind === 'mix') {
+    res.json({ entities: getEntityHistory(req.userId!, 40, kind) });
+    return;
+  }
+  res.json({
+    history: getHistory(req.userId!, 500),
+    entities: getEntityHistory(req.userId!, 40),
+  });
+});
+
+app.post('/api/history/entity', accountRequired, (req, res) => {
+  try {
+    const kind = String(req.body?.kind || '') as 'playlist' | 'album' | 'artist' | 'mix';
+    const id = String(req.body?.id || '').trim();
+    if (!id || !['playlist', 'album', 'artist', 'mix'].includes(kind)) {
+      res.status(400).json({ error: 'id et kind (playlist|album|artist|mix) requis' });
+      return;
+    }
+    recordEntityPlay(req.userId!, {
+      id,
+      kind,
+      title: req.body?.title || req.body?.name,
+      name: req.body?.name,
+      thumbnails: req.body?.thumbnails,
+      artists: req.body?.artists,
+      type: req.body?.type || kind,
+      covers: req.body?.covers,
+    });
+    res.json({ ok: true, entities: getEntityHistory(req.userId!, 40) });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
 });
 
 app.get('/api/history/detailed', accountRequired, (req, res) => {
@@ -936,19 +1008,28 @@ app.post('/api/listen', accountRequired, (req, res) => {
       seedId: req.body?.seedId ? String(req.body.seedId) : undefined,
     });
     if (event === 'start' || event === 'complete') {
-      const track = req.body?.track as Track | undefined;
-      if (track?.id) {
-        addHistory(req.userId!, track);
-      } else {
-        // Même sans payload complet : garantit « Écouté récemment » synchro web/mobile
-        addHistory(req.userId!, {
-          id: trackId,
-          title: trackId,
-          artists: [],
-          thumbnails: [],
-          type: 'song',
-        });
-      }
+      const track = (req.body?.track as Track | undefined) || {
+        id: trackId,
+        title: trackId,
+        artists: [],
+        thumbnails: [],
+        type: 'song' as const,
+      };
+      // start = remonter dans « récemment » ; complete = incrémenter le compteur
+      addHistory(req.userId!, track, { bumpCount: event === 'complete' });
+    }
+    const ctx = req.body?.context;
+    if (ctx?.id && ctx?.kind && (event === 'start' || event === 'complete')) {
+      recordEntityPlay(req.userId!, {
+        id: String(ctx.id),
+        kind: String(ctx.kind) as 'playlist' | 'album' | 'artist' | 'mix',
+        title: ctx.title || ctx.name,
+        name: ctx.name,
+        thumbnails: ctx.thumbnails,
+        artists: ctx.artists,
+        type: ctx.type,
+        covers: ctx.covers,
+      });
     }
     res.json({ ok: true });
   } catch (err) {
@@ -1187,7 +1268,7 @@ app.get('/api/playlist/:id', async (req, res) => {
   }
 });
 
-app.get('/api/stream/:id/url', (req, res) => {
+app.get('/api/stream/:id/url', authRequired, (req, res) => {
   void handleStreamUrl(req, res);
 });
 

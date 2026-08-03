@@ -71,15 +71,41 @@ data class TrackDto(
     }
 
     fun coverUrl(sizeHint: Int = 400): String? {
-        val sorted = thumbnails?.sortedByDescending { it.width ?: 0 }.orEmpty()
-        val fromThumbs = sorted.firstOrNull()?.url
-            ?: thumbnails?.firstOrNull()?.url
-        if (!fromThumbs.isNullOrBlank()) return fromThumbs
+        val thumbs = thumbnails.orEmpty()
+        if (thumbs.isNotEmpty()) {
+            // Plus petite thumb encore ≥ sizeHint (sinon la plus grande)
+            val sortedAsc = thumbs.sortedBy { it.width ?: 0 }
+            val fit = sortedAsc.firstOrNull { (it.width ?: 0) >= sizeHint }
+            val pick = fit ?: sortedAsc.lastOrNull()
+            if (!pick?.url.isNullOrBlank()) return pick!!.url
+        }
         return if (id.matches(Regex("^[a-zA-Z0-9_-]{11}$"))) {
-            "https://i.ytimg.com/vi/$id/hqdefault.jpg"
+            when {
+                sizeHint <= 200 -> "https://i.ytimg.com/vi/$id/mqdefault.jpg"
+                sizeHint <= 480 -> "https://i.ytimg.com/vi/$id/hqdefault.jpg"
+                else -> "https://i.ytimg.com/vi/$id/hq720.jpg"
+            }
         } else {
             null
         }
+    }
+
+    /** Durée en ms pour MediaSession / lockscreen (si connue). */
+    fun durationMsOrNull(): Long? {
+        durationSeconds?.takeIf { it > 0 }?.let { return it * 1000L }
+        val raw = duration?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        raw.toLongOrNull()?.takeIf { it > 0 }?.let {
+            return if (it < 10_000) it * 1000L else it // secondes vs déjà ms
+        }
+        val parts = raw.split(':').mapNotNull { it.toIntOrNull() }
+        if (parts.isEmpty()) return null
+        val sec = when (parts.size) {
+            1 -> parts[0]
+            2 -> parts[0] * 60 + parts[1]
+            else -> parts[0] * 3600 + parts[1] * 60 + parts[2]
+        }
+        return sec.takeIf { it > 0 }?.times(1000L)
     }
 
     fun kind(): String = (type ?: "song").lowercase()
@@ -145,6 +171,6 @@ data class SearchResponse(
 @JsonClass(generateAdapter = false)
 data class TrackInfoResponse(
     val track: TrackDto,
-    val streamUrl: String,
+    val streamUrl: String? = null,
     val cached: Boolean? = false,
 )

@@ -100,8 +100,14 @@ export default defineConfig({
         timeout: 120_000,
         proxyTimeout: 120_000,
         configure: (proxy) => {
+          let lastLog = 0;
           proxy.on('error', (err, _req, res) => {
-            console.error('[vite-proxy /api]', err.message);
+            const now = Date.now();
+            // Évite le spam ECONNREFUSED dans make logs (WS/API down)
+            if (now - lastLog > 15_000) {
+              lastLog = now;
+              console.error('[vite-proxy /api]', err.message, '— lance make ensure-api');
+            }
             if (res && 'writeHead' in res && !res.headersSent) {
               res.writeHead(502, { 'Content-Type': 'application/json' });
               res.end(
@@ -120,8 +126,13 @@ export default defineConfig({
         changeOrigin: true,
         timeout: 0,
         configure: (proxy) => {
+          let lastLog = 0;
           proxy.on('error', (err) => {
-            console.error('[vite-proxy /ws]', err.message);
+            const now = Date.now();
+            if (now - lastLog > 15_000) {
+              lastLog = now;
+              console.error('[vite-proxy /ws]', err.message, '— lance make ensure-api');
+            }
           });
         },
       },

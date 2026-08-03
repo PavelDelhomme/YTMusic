@@ -48,6 +48,8 @@ import androidx.compose.material.icons.filled.RemoveFromQueue
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SpatialAudioOff
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.SyncDisabled
 import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.AlertDialog
@@ -119,6 +121,7 @@ fun TrackActionsSheet(
     var albumInLibrary by remember { mutableStateOf(false) }
     var songInLibrary by remember { mutableStateOf(false) }
     var liked by remember(track.id) { mutableStateOf(track.id in likedIds) }
+    var receiveRemoteSync by remember { mutableStateOf(container.receiveRemoteSync()) }
     val playerUi by player.state.collectAsState()
     val queueIndex = playerUi.queue.indexOfFirst { it.id == enriched.id }
     val inQueue = queueIndex >= 0
@@ -386,6 +389,25 @@ fun TrackActionsSheet(
                     onDismiss()
                     onCast()
                 }
+            }
+            SheetAction(
+                if (receiveRemoteSync) Icons.Default.SyncDisabled else Icons.Default.Sync,
+                if (receiveRemoteSync) "Désactiver la sync lecture" else "Activer la sync lecture",
+                if (receiveRemoteSync) {
+                    "File et titre redeviennent locaux à cet appareil"
+                } else {
+                    "Partager file / titre / position avec tes autres appareils"
+                },
+            ) {
+                val next = !receiveRemoteSync
+                container.setReceiveRemoteSync(next)
+                receiveRemoteSync = next
+                Toast.makeText(
+                    context,
+                    if (next) "Sync lecture activée" else "Sync lecture désactivée — file locale",
+                    Toast.LENGTH_SHORT,
+                ).show()
+                onDismiss()
             }
             SheetAction(Icons.Default.AutoAwesome, "En rapport", "Mix · similaires + découverte") {
                 scope.launch {

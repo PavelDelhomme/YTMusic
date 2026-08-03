@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
+import ovh.delhomme.ytmusic.data.HistoryEntityBody
 import ovh.delhomme.ytmusic.data.TrackDto
 import ovh.delhomme.ytmusic.data.buildRadioQueue
 import ovh.delhomme.ytmusic.data.resolvePlayableTracks
@@ -70,6 +71,28 @@ fun CollectionDetailScreen(
     var cover by remember { mutableStateOf(seed) }
     var tracks by remember { mutableStateOf<List<TrackDto>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
+
+    fun recordCollectionPlay() {
+        val entityKind = when (kind) {
+            DetailKind.Album -> "album"
+            DetailKind.Artist -> "artist"
+            DetailKind.Playlist -> "playlist"
+        }
+        scope.launch {
+            runCatching {
+                container.api.recordEntityPlay(
+                    HistoryEntityBody(
+                        id = id.removePrefix("local:"),
+                        kind = entityKind,
+                        title = title,
+                        thumbnails = cover?.thumbnails,
+                        artists = cover?.artists,
+                        type = entityKind,
+                    ),
+                )
+            }
+        }
+    }
 
     LaunchedEffect(kind, id, reloadToken) {
         loading = true
@@ -300,7 +323,10 @@ fun CollectionDetailScreen(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     ) {
                                         Button(
-                                            onClick = { onPlay(tracks, 0) },
+                                            onClick = {
+                                                recordCollectionPlay()
+                                                onPlay(tracks, 0)
+                                            },
                                             modifier = Modifier.weight(1f),
                                         ) {
                                             Icon(Icons.Default.PlayArrow, null, Modifier.size(20.dp))
@@ -308,7 +334,10 @@ fun CollectionDetailScreen(
                                             Text("Lecture")
                                         }
                                         OutlinedButton(
-                                            onClick = { onPlay(tracks.shuffled(), 0) },
+                                            onClick = {
+                                                recordCollectionPlay()
+                                                onPlay(tracks.shuffled(), 0)
+                                            },
                                             modifier = Modifier.weight(1f),
                                         ) {
                                             Icon(Icons.Default.Shuffle, null, Modifier.size(18.dp))

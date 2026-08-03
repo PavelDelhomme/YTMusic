@@ -2,11 +2,46 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type Shelf, type Track } from '../api';
 import { ShelfRow } from '../components/MediaCard';
 import { MixCollageCard } from '../components/MixCollageCard';
+import { HomeShelfSkeleton } from '../components/HomeShelfSkeleton';
 import { usePlayer } from '../store/player';
 import { usePins } from '../store/pins';
 import { useLibrary } from '../store/library';
 import { useItemActions } from '../store/itemActions';
 import { Pin, Play, Radio } from 'lucide-react';
+
+const HOME_CACHE_KEY = 'ytm_home_v1';
+
+type HomeCache = {
+  shelves: Shelf[];
+  radios: { id: string; title: string }[];
+  seeds: string[];
+  hasMore: boolean;
+  at: number;
+};
+
+function readHomeCache(): HomeCache | null {
+  try {
+    const raw = sessionStorage.getItem(HOME_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as HomeCache;
+    if (!parsed?.shelves?.length) return null;
+    // Stale après 45 min → encore affiché, refetch derrière
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeHomeCache(payload: Omit<HomeCache, 'at'>) {
+  try {
+    sessionStorage.setItem(
+      HOME_CACHE_KEY,
+      JSON.stringify({ ...payload, at: Date.now() } satisfies HomeCache),
+    );
+  } catch {
+    /* quota */
+  }
+}
 
 export function HomePage() {
   const [shelves, setShelves] = useState<Shelf[]>([]);
@@ -46,17 +81,39 @@ export function HomePage() {
     });
   }, []);
 
+  const [homeReload, setHomeReload] = useState(0);
+  const cacheBoot = useRef(false);
+
   useEffect(() => {
     void refreshPins();
   }, [refreshPins]);
 
+  // Cache-first : affiche immédiatement le dernier home, puis rafraîchit
   useEffect(() => {
-    setLoading(true);
-    seenTitles.current = new Set();
-    setRadioPreviews({});
+    if (cacheBoot.current) return;
+    cacheBoot.current = true;
+    const cached = readHomeCache();
+    if (!cached) return;
+    for (const s of cached.shelves) seenTitles.current.add(s.title);
+    setShelves(cached.shelves);
+    setRadios(cached.radios || []);
+    setSeeds(cached.seeds || []);
+    setHasMore(cached.hasMore !== false);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    const hadCache = shelves.length > 0;
+    if (!hadCache) setLoading(true);
+    setError('');
+    if (!hadCache) {
+      seenTitles.current = new Set();
+      setRadioPreviews({});
+    }
     api
       .home()
       .then(async (r) => {
+        seenTitles.current = new Set();
         for (const s of r.shelves) seenTitles.current.add(s.title);
         setShelves(r.shelves);
         setSeeds(r.seeds || []);
@@ -65,7 +122,12 @@ export function HomePage() {
         setRadios(cats);
         setPage(0);
         setLoading(false);
-        // Previews mosaïque (léger) — en parallèle limité
+        writeHomeCache({
+          shelves: r.shelves,
+          radios: cats,
+          seeds: r.seeds || [],
+          hasMore: r.hasMore !== false,
+        });
         const previews: Record<string, Track[]> = {};
         await Promise.all(
           cats.slice(0, 8).map(async (cat) => {
@@ -80,10 +142,12 @@ export function HomePage() {
         setRadioPreviews(previews);
       })
       .catch((e) => {
-        setError(String(e.message || e));
+        if (!shelves.length) setError(String(e.message || e));
         setLoading(false);
       });
-  }, [pinCount]);
+    // shelves.length volontairement hors deps : boot cache une fois
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinCount, homeReload]);
 
   const loadMore = useCallback(async () => {
     if (loadingMore || !hasMore) return;
@@ -220,10 +284,17 @@ export function HomePage() {
         </section>
       )}
 
-      {loading && <p className="text-yt-muted">Chargement du fil musical…</p>}
+      {loading && shelves.length === 0 && <HomeShelfSkeleton rows={4} />}
       {error && (
-        <div className="rounded-xl border border-yt-border bg-yt-elevated p-4 text-sm text-yt-muted">
-          Impossible de charger l&apos;accueil : {error}
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-yt-border bg-yt-elevated p-4 text-sm text-yt-muted">
+          <span className="min-w-0 flex-1">Impossible de charger l&apos;accueil : {error}</span>
+          <button
+            type="button"
+            className="shrink-0 rounded-full bg-white/10 px-3 py-1.5 text-xs text-white hover:bg-white/16"
+            onClick={() => setHomeReload((n) => n + 1)}
+          >
+            Réessayer
+          </button>
         </div>
       )}
       {!loading && !error && shelves.length === 0 && (

@@ -27,6 +27,10 @@ enum class LibraryFilter(val label: String) {
     companion object {
         val defaultVisible: Set<String> = entries.map { it.name }.toSet()
         val defaultSelected: LibraryFilter = Additions
+
+        /** Demande d’ouverture d’un filtre (ex. depuis Account → Téléchargements). */
+        @Volatile
+        var pendingSelect: LibraryFilter? = null
     }
 }
 
