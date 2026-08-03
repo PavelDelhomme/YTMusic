@@ -4,7 +4,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,7 +20,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -172,7 +170,7 @@ fun HomeScreen(
                 }
 
                 if (state.radios.isNotEmpty()) {
-                    item {
+                    item(key = "radios-title") {
                         Text(
                             "Mixés pour toi",
                             style = MaterialTheme.typography.titleMedium,
@@ -180,13 +178,13 @@ fun HomeScreen(
                             color = MaterialTheme.colorScheme.onBackground,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                         )
-                        Row(
-                            Modifier
-                                .horizontalScroll(rememberScrollState())
-                                .padding(horizontal = 12.dp),
+                    }
+                    item(key = "radios-row") {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 12.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            state.radios.forEach { radio ->
+                            items(state.radios, key = { it.id }) { radio ->
                                 val loading = state.radioLoadingId == radio.id
                                 val preview = state.radioPreviews[radio.id].orEmpty()
                                 val saved = state.savedMixIds.contains(radio.id)
@@ -491,13 +489,11 @@ private fun QuickAccessHomeCard(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             )
         } else {
-            Row(
-                Modifier
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                pins.take(16).forEach { track ->
+                items(pins.take(16), key = { it.id }) { track ->
                     Column(
                         Modifier
                             .width(108.dp)

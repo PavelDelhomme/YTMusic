@@ -8,6 +8,7 @@ import { MediaCard } from '../components/MediaCard';
 import { CoverImage } from '../components/CoverImage';
 import { MixCollageCard } from '../components/MixCollageCard';
 import { useItemActions } from '../store/itemActions';
+import { HomeShelfSkeleton } from '../components/HomeShelfSkeleton';
 import { api, type Track } from '../api';
 
 function shuffleTracks(tracks: Track[]) {
@@ -19,8 +20,24 @@ function shuffleTracks(tracks: Track[]) {
   return copy;
 }
 
+function LibraryListSkeleton({ rows = 8 }: { rows?: number }) {
+  return (
+    <div className="space-y-2" aria-hidden>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3 py-2">
+          <div className="h-12 w-12 shrink-0 animate-pulse rounded bg-yt-border/55" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="h-3 w-2/3 animate-pulse rounded bg-yt-border/45" />
+            <div className="h-2.5 w-2/5 animate-pulse rounded bg-yt-border/30" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function LibraryPage() {
-  const { songs, liked, playlists, history, recentEntities, albums, artists, mixes, likedPlaylists, createPlaylist, deletePlaylist, hasMix } =
+  const { songs, liked, playlists, history, recentEntities, albums, artists, mixes, likedPlaylists, createPlaylist, deletePlaylist, hasMix, loaded } =
     useLibrary();
   const playQueue = usePlayer((s) => s.playQueue);
   const openActions = useItemActions((s) => s.open);
@@ -56,7 +73,15 @@ export function LibraryPage() {
         ))}
       </div>
 
-      {tab === 'titres' && (
+      {!loaded ? (
+        tab === 'titres' || tab === 'liked' || tab === 'history' ? (
+          <LibraryListSkeleton />
+        ) : (
+          <HomeShelfSkeleton rows={2} />
+        )
+      ) : null}
+
+      {loaded && tab === 'titres' && (
         <div>
           <p className="mb-4 text-sm text-yt-muted">
             Titres enregistrés dans ta bibliothèque (indépendant des J&apos;aime).
@@ -91,7 +116,7 @@ export function LibraryPage() {
         </div>
       )}
 
-      {tab === 'liked' && (
+      {loaded && tab === 'liked' && (
         <div>
           <p className="mb-4 text-sm text-yt-muted">
             Tes titres aimés — le cœur uniquement, sans obligation de les enregistrer.
@@ -124,7 +149,7 @@ export function LibraryPage() {
         </div>
       )}
 
-      {tab === 'history' && (
+      {loaded && tab === 'history' && (
         <div>
           <p className="mb-4 text-sm text-yt-muted">
             Titres démarrés et collections lancées récemment.
@@ -172,7 +197,7 @@ export function LibraryPage() {
         </div>
       )}
 
-      {tab === 'albums' && (
+      {loaded && tab === 'albums' && (
         <div>
           {albums.length === 0 ? (
             <p className="text-yt-muted">Ajoute des albums via Importer ou le bouton « Ajouter à la bibliothèque ».</p>
@@ -198,7 +223,7 @@ export function LibraryPage() {
         </div>
       )}
 
-      {tab === 'mixes' && (
+      {loaded && tab === 'mixes' && (
         <div>
           {mixes.length === 0 ? (
             <p className="text-yt-muted">
@@ -243,7 +268,7 @@ export function LibraryPage() {
         </div>
       )}
 
-      {tab === 'artists' && (
+      {loaded && tab === 'artists' && (
         <div>
           {artists.length === 0 ? (
             <p className="text-yt-muted">Ajoute des artistes à ta bibliothèque pour les retrouver ici.</p>
@@ -269,7 +294,7 @@ export function LibraryPage() {
         </div>
       )}
 
-      {tab === 'playlists' && (
+      {loaded && tab === 'playlists' && (
         <div>
           <form
             className="mb-6 flex gap-2"

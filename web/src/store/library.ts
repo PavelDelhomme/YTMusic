@@ -42,6 +42,8 @@ const empty: LibraryData = {
   downloaded: [],
 };
 
+const LIB_CACHE_KEY = 'ytm_library_v1';
+
 function mergeLibrary(lib: LibraryData): LibraryData {
   const liked = Array.isArray(lib.liked) ? lib.liked : [];
   // Compat anciennes réponses API sans `songs`
@@ -62,19 +64,58 @@ function mergeLibrary(lib: LibraryData): LibraryData {
   };
 }
 
+function readLibraryCache(): LibraryData | null {
+  try {
+    const raw = sessionStorage.getItem(LIB_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as LibraryData;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return mergeLibrary(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function writeLibraryCache(lib: LibraryData) {
+  try {
+    // Cap volumes pour rester sous le quota sessionStorage
+    const slim: LibraryData = {
+      ...lib,
+      songs: lib.songs.slice(0, 200),
+      liked: lib.liked.slice(0, 200),
+      history: lib.history.slice(0, 80),
+      recentEntities: lib.recentEntities.slice(0, 40),
+      downloaded: lib.downloaded.slice(0, 80),
+      playlists: lib.playlists.slice(0, 40).map((p) => ({
+        ...p,
+        tracks: (p.tracks || []).slice(0, 40),
+      })),
+    };
+    sessionStorage.setItem(LIB_CACHE_KEY, JSON.stringify(slim));
+  } catch {
+    /* quota */
+  }
+}
+
+const bootCache = typeof sessionStorage !== 'undefined' ? readLibraryCache() : null;
+
 export const useLibrary = create<LibraryState>((set, get) => ({
-  ...empty,
-  loaded: false,
+  ...(bootCache || empty),
+  loaded: Boolean(bootCache),
 
   applyLibrary: (lib) => {
     if (!lib || typeof lib !== 'object') return;
-    set({ ...mergeLibrary(lib), loaded: true });
+    const merged = mergeLibrary(lib);
+    writeLibraryCache(merged);
+    set({ ...merged, loaded: true });
   },
 
   refresh: async () => {
     try {
       const data = await api.library();
-      set({ ...mergeLibrary(data), loaded: true });
+      const merged = mergeLibrary(data);
+      writeLibraryCache(merged);
+      set({ ...merged, loaded: true });
     } catch {
       set({ loaded: true });
     }

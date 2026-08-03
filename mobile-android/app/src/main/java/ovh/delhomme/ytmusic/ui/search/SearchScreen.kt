@@ -71,9 +71,29 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
     private val _state = MutableStateFlow(SearchUiState())
     val state: StateFlow<SearchUiState> = _state.asStateFlow()
     private var job: Job? = null
+    private val recentPrefs by lazy {
+        container.sharedPrefs("ytm_search_recent")
+    }
 
     init {
+        // Cache local immédiat, puis sync serveur
+        readLocalRecent()?.let { local ->
+            if (local.isNotEmpty()) _state.value = _state.value.copy(recent = local)
+        }
         loadRecent()
+    }
+
+    private fun readLocalRecent(): List<String>? {
+        val raw = recentPrefs.getString("queries", null)?.takeIf { it.isNotBlank() } ?: return null
+        return runCatching {
+            raw.split('\n').map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(12)
+        }.getOrNull()
+    }
+
+    private fun writeLocalRecent(queries: List<String>) {
+        recentPrefs.edit()
+            .putString("queries", queries.take(12).joinToString("\n"))
+            .apply()
     }
 
     fun loadRecent() {
@@ -96,7 +116,8 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
                     if (out.size >= 12) break
                 }
                 out
-            }.getOrDefault(emptyList())
+            }.getOrDefault(_state.value.recent)
+            if (recent.isNotEmpty()) writeLocalRecent(recent)
             _state.value = _state.value.copy(recent = recent)
         }
     }
@@ -116,7 +137,11 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
     fun commitSearch(q: String) {
         val query = q.trim()
         if (query.length < 2) return
-        _state.value = _state.value.copy(query = query, error = null)
+        val nextRecent = listOf(query) + _state.value.recent.filter {
+            !it.equals(query, ignoreCase = true)
+        }
+        writeLocalRecent(nextRecent)
+        _state.value = _state.value.copy(query = query, error = null, recent = nextRecent.take(12))
         viewModelScope.launch {
             runCatching {
                 container.api.recordSearchHistory(mapOf("query" to query))
