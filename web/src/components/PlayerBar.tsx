@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Cast,
   Heart,
+  Moon,
   MoreVertical,
   Pause,
   Play,
@@ -14,6 +15,7 @@ import {
   ThumbsDown,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
 import { api, artistNames } from '../api';
 import { usePlayer } from '../store/player';
@@ -21,7 +23,7 @@ import { useLibrary } from '../store/library';
 import { useSession } from '../store/session';
 import { useItemActions } from '../store/itemActions';
 import { CoverImage } from './CoverImage';
-import { formatClock } from '../lib/time';
+import { formatRemaining } from '../lib/time';
 import type { NowPlayingTab } from './NowPlaying';
 
 /** Empêche le clic de remonter jusqu’au footer (qui ouvre le Now Playing). */
@@ -60,10 +62,15 @@ export function PlayerBar({
     cycleRepeat,
     audioEl,
     queueIndex,
+    sleepLabel,
+    setSleepTimer,
+    playError,
+    clearPlayError,
   } = usePlayer();
   const { isLiked, toggleLike } = useLibrary();
   const openActions = useItemActions((s) => s.open);
   const isActivePlayer = useSession((s) => s.isActivePlayer);
+  const receiveRemoteSync = useSession((s) => s.receiveRemoteSync);
   const devices = useSession((s) => s.devices);
   const activePlayerId = useSession((s) => s.activePlayerId);
   const transferHere = useSession((s) => s.transferHere);
@@ -71,8 +78,38 @@ export function PlayerBar({
 
   const [muted, setMuted] = useState(false);
   const [uiPlaying, setUiPlaying] = useState(isPlaying);
+  const [liveProgress, setLiveProgress] = useState(progress);
+  const [bufferedPct, setBufferedPct] = useState(0);
   const prevVol = useRef(volume);
   const footerRef = useRef<HTMLElement | null>(null);
+
+  // Barre fluide : lit l’élément audio (évite re-render store à chaque timeupdate)
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const el = usePlayer.getState().audioEl;
+      if (el && !el.paused && !el.ended && Number.isFinite(el.currentTime)) {
+        setLiveProgress(el.currentTime);
+      } else {
+        setLiveProgress(usePlayer.getState().progress);
+      }
+      if (el && el.buffered.length > 0 && el.duration > 0) {
+        try {
+          const end = el.buffered.end(el.buffered.length - 1);
+          setBufferedPct(Math.min(100, (end / el.duration) * 100));
+        } catch {
+          /* ignore */
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [current?.id]);
+
+  useEffect(() => {
+    setLiveProgress(progress);
+  }, [progress, current?.id]);
 
   // Icône play/pause = état réel de l’élément <audio> (touches média / MPRIS)
   useEffect(() => {
@@ -135,7 +172,9 @@ export function PlayerBar({
   const expand = (tab?: NowPlayingTab) => onExpand?.(tab);
   const effectiveDuration =
     duration > 0 ? duration : Number.isFinite(audioEl?.duration) ? Number(audioEl?.duration) : 0;
-  const pct = effectiveDuration > 0 ? Math.min(100, Math.max(0, (progress / effectiveDuration) * 100)) : 0;
+  const displayProgress = liveProgress;
+  const pct =
+    effectiveDuration > 0 ? Math.min(100, Math.max(0, (displayProgress / effectiveDuration) * 100)) : 0;
 
   const seekFromClientX = (el: HTMLElement, clientX: number) => {
     const dur = effectiveDuration > 0 ? effectiveDuration : Number(audioEl?.duration) || 0;
@@ -184,36 +223,45 @@ export function PlayerBar({
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       onClick={() => expand('queue')}
     >
-      {/* Seek */}
-      <div
-        className="group relative h-5 cursor-pointer px-0"
-        onPointerDown={onSeekPointer}
-        onPointerMove={onSeekMove}
-        role="slider"
-        aria-valuemin={0}
-        aria-valuemax={effectiveDuration || 0}
-        aria-valuenow={progress}
-        aria-label="Position du morceau"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          stop(e);
-          const dur = effectiveDuration;
-          if (!(dur > 0)) return;
-          if (e.key === 'ArrowRight') seek(Math.min(dur, progress + 5));
-          if (e.key === 'ArrowLeft') seek(Math.max(0, progress - 5));
-        }}
-      >
-        <div className="absolute inset-x-0 top-1/2 h-[2px] -translate-y-1/2 bg-[#3a3a3a] transition group-hover:h-1">
-          <div className="relative h-full bg-[#ff0033]" style={{ width: `${pct}%` }}>
-            <span
-              className="absolute right-0 top-1/2 h-2.5 w-2.5 -translate-y-1/2 translate-x-1/2 rounded-full bg-[#ff0033] shadow-[0_0_0_2px_#000] ring-1 ring-[#ff0033]/40 transition group-hover:scale-110"
-              aria-hidden
+      {/* Seek + temps restant (même rétracté) */}
+      <div className="flex items-center gap-1.5 px-2" onClick={stop} onPointerDown={stop}>
+        <span className="w-9 shrink-0 text-[10px] tabular-nums text-yt-muted">
+          {formatRemaining(displayProgress, effectiveDuration)}
+        </span>
+        <div
+          className="group relative h-5 min-w-0 flex-1 cursor-pointer"
+          onPointerDown={onSeekPointer}
+          onPointerMove={onSeekMove}
+          role="slider"
+          aria-valuemin={0}
+          aria-valuemax={effectiveDuration || 0}
+          aria-valuenow={displayProgress}
+          aria-label="Position du morceau"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            stop(e);
+            const dur = effectiveDuration;
+            if (!(dur > 0)) return;
+            if (e.key === 'ArrowRight') seek(Math.min(dur, progress + 5));
+            if (e.key === 'ArrowLeft') seek(Math.max(0, progress - 5));
+          }}
+        >
+          <div className="absolute inset-x-0 top-1/2 h-[2px] -translate-y-1/2 bg-[#3a3a3a] transition group-hover:h-1">
+            <div
+              className="absolute inset-y-0 left-0 bg-[#5c5c5c]"
+              style={{ width: `${bufferedPct}%` }}
             />
+            <div className="relative h-full bg-[#ff0033]" style={{ width: `${pct}%` }}>
+              <span
+                className="absolute right-0 top-1/2 h-2.5 w-2.5 -translate-y-1/2 translate-x-1/2 rounded-full bg-[#ff0033] shadow-[0_0_0_2px_#000] ring-1 ring-[#ff0033]/40 transition group-hover:scale-125"
+                aria-hidden
+              />
+            </div>
           </div>
         </div>
       </div>
 
-      {!isActivePlayer && activeName && (
+      {!isActivePlayer && receiveRemoteSync && activeName && (
         <div
           className="flex items-center justify-center gap-2 border-b border-yt-border/60 px-3 py-1 text-[11px] text-yt-muted"
           onClick={stop}
@@ -228,6 +276,41 @@ export function PlayerBar({
           >
             Écouter ici
           </button>
+        </div>
+      )}
+
+      {(playError || sleepLabel) && (
+        <div
+          className="flex items-center gap-2 border-b border-yt-border/60 px-3 py-1.5 text-[11px]"
+          onClick={stop}
+        >
+          {playError ? (
+            <>
+              <span className="min-w-0 flex-1 truncate text-red-300">{playError}</span>
+              <button
+                type="button"
+                className="shrink-0 rounded-full p-1 text-yt-muted hover:text-white"
+                onClick={() => clearPlayError()}
+                title="Fermer"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </>
+          ) : (
+            <>
+              <Moon className="h-3.5 w-3.5 shrink-0 text-amber-200" />
+              <span className="min-w-0 flex-1 truncate text-amber-100/90">
+                Minuteur : {sleepLabel}
+              </span>
+              <button
+                type="button"
+                className="shrink-0 rounded-full px-2 py-0.5 text-[10px] text-yt-muted hover:bg-white/10 hover:text-white"
+                onClick={() => setSleepTimer(null, null)}
+              >
+                Annuler
+              </button>
+            </>
+          )}
         </div>
       )}
 
@@ -264,8 +347,7 @@ export function PlayerBar({
             <MoreVertical className="h-5 w-5" />
           </button>
         </div>
-        <div className="mt-0.5 flex items-center justify-between gap-1" onClick={stop}>
-          <span className="w-10 text-[10px] tabular-nums text-yt-muted">{formatClock(progress)}</span>
+        <div className="mt-0.5 flex items-center justify-center gap-1" onClick={stop}>
           <div className="flex items-center gap-1">
             <button
               type="button"
@@ -302,9 +384,6 @@ export function PlayerBar({
               <SkipForward className="h-6 w-6 fill-white" />
             </button>
           </div>
-          <span className="w-10 text-right text-[10px] tabular-nums text-yt-muted">
-            {formatClock(effectiveDuration)}
-          </span>
         </div>
       </div>
 
@@ -346,7 +425,7 @@ export function PlayerBar({
             <SkipForward className="h-6 w-6 fill-white" />
           </button>
           <span className="ml-2 whitespace-nowrap text-xs tabular-nums text-yt-muted">
-            {formatClock(progress)} / {formatClock(effectiveDuration)}
+            {formatRemaining(displayProgress, effectiveDuration)}
           </span>
         </div>
 

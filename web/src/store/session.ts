@@ -6,6 +6,7 @@ import {
   getDeviceName,
   setDeviceName,
 } from '../lib/session';
+import { getReceiveRemoteSync, setReceiveRemoteSync as persistReceiveRemoteSync } from '../lib/syncPrefs';
 
 type SessionState = {
   connected: boolean;
@@ -15,6 +16,8 @@ type SessionState = {
   remoteState: PlaybackState | null;
   /** true when THIS device is the active audio player */
   isActivePlayer: boolean;
+  /** Sync lecture multi-appareils (publier + recevoir file/titre). Défaut off. */
+  receiveRemoteSync: boolean;
   init: () => void;
   setActive: (deviceId: string) => void;
   transferHere: () => void;
@@ -22,6 +25,7 @@ type SessionState = {
   sendCommand: (command: Record<string, unknown>) => void;
   publishState: (state: Partial<PlaybackState>) => void;
   renameDevice: (name: string) => void;
+  setReceiveRemoteSync: (on: boolean) => void;
   deviceName: string;
 };
 
@@ -32,6 +36,7 @@ export const useSession = create<SessionState>((set, get) => ({
   activePlayerId: null,
   remoteState: null,
   isActivePlayer: true,
+  receiveRemoteSync: getReceiveRemoteSync(),
   deviceName: getDeviceName(),
 
   init: () => {
@@ -99,5 +104,10 @@ export const useSession = create<SessionState>((set, get) => ({
     setDeviceName(name);
     sessionSocket.rename(name);
     set({ deviceName: name });
+  },
+
+  setReceiveRemoteSync: (on) => {
+    persistReceiveRemoteSync(on);
+    set({ receiveRemoteSync: on });
   },
 }));

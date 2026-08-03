@@ -10,6 +10,13 @@ export function formatClock(totalSeconds: number): string {
   return `${m}:${ss}`;
 }
 
+/** Temps restant compact : `-3:45` (ou `-0:00` si fini). */
+export function formatRemaining(progressSec: number, durationSec: number): string {
+  if (!(durationSec > 0) || !Number.isFinite(durationSec)) return '-0:00';
+  const left = Math.max(0, Math.ceil(durationSec - Math.max(0, progressSec)));
+  return `-${formatClock(left)}`;
+}
+
 /** Normalise une durée texte API (`164:16` → `2:44:16`) ou secondes numériques. */
 export function formatTrackDuration(track: {
   duration?: string | number;

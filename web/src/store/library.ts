@@ -12,6 +12,13 @@ type LibraryState = LibraryData & {
   addToPlaylist: (playlistId: string, track: Track) => Promise<void>;
   addTracksToPlaylist: (playlistId: string, tracks: Track[]) => Promise<void>;
   recordPlay: (track: Track) => Promise<void>;
+  recordEntityPlay: (entity: {
+    id: string;
+    kind: 'playlist' | 'album' | 'artist' | 'mix';
+    title?: string;
+    thumbnails?: Track['thumbnails'];
+    artists?: Track['artists'];
+  }) => Promise<void>;
   isLiked: (id: string) => boolean;
   isInLibrary: (id: string) => boolean;
   hasAlbum: (id: string) => boolean;
@@ -31,6 +38,7 @@ const empty: LibraryData = {
   mixes: [],
   playlists: [],
   history: [],
+  recentEntities: [],
   downloaded: [],
 };
 
@@ -47,6 +55,9 @@ function mergeLibrary(lib: LibraryData): LibraryData {
     mixes: Array.isArray((lib as LibraryData).mixes) ? (lib as LibraryData).mixes : [],
     playlists: Array.isArray(lib.playlists) ? lib.playlists : [],
     history: Array.isArray(lib.history) ? lib.history : [],
+    recentEntities: Array.isArray((lib as LibraryData).recentEntities)
+      ? (lib as LibraryData).recentEntities
+      : [],
     downloaded: Array.isArray(lib.downloaded) ? lib.downloaded : [],
   };
 }
@@ -152,14 +163,28 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   },
 
   recordPlay: async (track: Track) => {
+    // Optimistic seulement — l’écriture serveur passe par api.listen (évite double compteur)
     set((s) => ({
       history: [track, ...s.history.filter((t) => t.id !== track.id)].slice(0, 500),
     }));
+  },
+
+  recordEntityPlay: async (entity) => {
+    const asTrack: Track = {
+      id: entity.id,
+      title: entity.title || entity.id,
+      type: entity.kind,
+      artists: entity.artists || [],
+      thumbnails: entity.thumbnails || [],
+    };
+    set((s) => ({
+      recentEntities: [asTrack, ...s.recentEntities.filter((t) => t.id !== entity.id)].slice(0, 40),
+    }));
     try {
-      const { history } = await api.recordHistory(track);
-      set({ history });
+      const { entities } = await api.recordEntityPlay(entity);
+      set({ recentEntities: entities });
     } catch {
-      /* keep optimistic entry */
+      /* keep optimistic */
     }
   },
 

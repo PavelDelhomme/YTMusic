@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -78,6 +79,7 @@ fun HomeScreen(
     onOpenRecoPrefs: () -> Unit = {},
     onOpenDebugLogs: () -> Unit = {},
     onOpenYtmImport: () -> Unit = {},
+    onOpenDownloads: () -> Unit = {},
     onLoggedOut: () -> Unit = {},
     onMoreMix: ((id: String, title: String, covers: List<TrackDto>) -> Unit)? = null,
     vm: HomeViewModel = viewModel(factory = HomeViewModel.factory(container)),
@@ -137,13 +139,7 @@ fun HomeScreen(
 
         when {
             state.loading && state.shelves.isEmpty() -> {
-                Column(
-                    Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    CircularProgressIndicator()
-                }
+                HomeLoadingSkeleton()
             }
             state.error != null && state.shelves.isEmpty() -> {
                 Column(
@@ -333,13 +329,11 @@ fun HomeScreen(
                     )
 
                     if (mostlyCards || items.size > 5) {
-                        Row(
-                            Modifier
-                                .horizontalScroll(rememberScrollState())
-                                .padding(horizontal = 12.dp),
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 12.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            items.take(16).forEach { track ->
+                            items(items.take(16), key = { it.id }) { track ->
                                 Column(
                                     Modifier
                                         .width(140.dp)
@@ -425,6 +419,7 @@ fun HomeScreen(
             onDismiss = { showAccount = false },
             onOpenRecoPrefs = onOpenRecoPrefs,
             onOpenHistory = { showHistory = true },
+            onOpenDownloads = onOpenDownloads,
             onOpenDebugLogs = onOpenDebugLogs,
             onOpenYtmImport = onOpenYtmImport,
             onLoggedOut = onLoggedOut,
@@ -436,6 +431,7 @@ fun HomeScreen(
             onDismiss = { showHistory = false },
             onPlay = onPlay,
             onMore = onMore,
+            onOpenEntity = onOpenDetail,
         )
     }
 }
@@ -551,6 +547,58 @@ private fun QuickAccessHomeCard(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun HomeLoadingSkeleton() {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(top = 8.dp),
+    ) {
+        repeat(3) {
+            Box(
+                Modifier
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .fillMaxWidth(0.4f)
+                    .height(18.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)),
+            )
+            Row(
+                Modifier.padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                repeat(3) {
+                    Column(Modifier.width(140.dp)) {
+                        Box(
+                            Modifier
+                                .size(132.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Box(
+                            Modifier
+                                .fillMaxWidth(0.85f)
+                                .height(12.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Box(
+                            Modifier
+                                .fillMaxWidth(0.55f)
+                                .height(10.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(20.dp))
         }
     }
 }

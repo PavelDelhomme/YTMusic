@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { api, artistNames, type Track } from '../api';
 import { resolvePlayUrl } from '../lib/offlineCache';
-import { prefetchAround, resolvePrefetchedPlayUrl, warmFormat, warmHead, bumpPrefetchGeneration } from '../lib/streamPrefetch';
+import { prefetchAround, resolvePrefetchedPlayUrl, warmFormat, warmHead, bumpPrefetchGeneration, isPrefetchBlobUrl } from '../lib/streamPrefetch';
 import { useSession } from './session';
 import { useLibrary } from './library';
 
@@ -29,6 +29,7 @@ type PlayerState = {
   showQueue: boolean;
   showLyrics: boolean;
   lyrics: string | null;
+  lyricsTimed: { startMs: number; text: string }[] | null;
   related: Track[];
   hydrated: boolean;
   play: (
@@ -73,8 +74,10 @@ type PlayerState = {
   loadRelated: (trackId: string) => Promise<void>;
   sleepLabel: string | null;
   sleepUntilEnd: boolean;
+  playError: string | null;
   /** Timer actif : pause auto après délai, ou à la fin de la piste. */
   setSleepTimer: (delayMs: number | 'end' | null, label: string | null) => void;
+  clearPlayError: () => void;
   audioEl: HTMLAudioElement | null;
   bindAudio: (el: HTMLAudioElement | null) => void;
 };
@@ -90,6 +93,49 @@ function clearSleepTimerInternal() {
 
 function isPlayable(t: Track) {
   return /^[a-zA-Z0-9_-]{11}$/.test(t.id);
+}
+
+/** Interleave par artiste — max ~1/4 du seed, pas de rafales même auteur. */
+function diversifyByArtist(
+  tracks: Track[],
+  seedArtist?: { id?: string; name?: string } | null,
+): Track[] {
+  const seedKey = (seedArtist?.id || seedArtist?.name || '').toLowerCase();
+  const buckets = new Map<string, Track[]>();
+  for (const t of tracks) {
+    if (!isPlayable(t)) continue;
+    const key = (t.artists?.[0]?.id || t.artists?.[0]?.name || t.id).toLowerCase();
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(t);
+  }
+  const keys = [...buckets.keys()].sort((a, b) => {
+    if (a === seedKey) return 1;
+    if (b === seedKey) return -1;
+    return (buckets.get(b)?.length || 0) - (buckets.get(a)?.length || 0);
+  });
+  const out: Track[] = [];
+  const seen = new Set<string>();
+  let seedHits = 0;
+  let guard = 0;
+  while (out.length < 80 && guard++ < 400) {
+    let added = false;
+    for (const k of keys) {
+      const bucket = buckets.get(k);
+      if (!bucket?.length) continue;
+      if (seedKey && k === seedKey && seedHits >= Math.max(1, Math.floor(out.length / 4) + 1)) {
+        continue;
+      }
+      const t = bucket.shift()!;
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      out.push(t);
+      if (seedKey && k === seedKey) seedHits += 1;
+      added = true;
+      if (out.length >= 80) break;
+    }
+    if (!added) break;
+  }
+  return out;
 }
 
 function mergeArtists(
@@ -263,6 +309,11 @@ let lastHttpPublishAt = 0;
 let lastHttpSignature = '';
 
 function publish() {
+  // Sync off → file / titre / progress restent locaux (compte partagé seulement).
+  if (!useSession.getState().receiveRemoteSync) {
+    persistPlayer();
+    return;
+  }
   const s = usePlayer.getState();
   const payload = {
     current: s.current,
@@ -314,7 +365,10 @@ async function restoreAudioFromPersisted() {
   if (audioEl.dataset.trackId === current.id && audioEl.src) return;
   try {
     const src = await resolvePlayUrl(current.id);
-    if (audioEl.src.startsWith('blob:')) URL.revokeObjectURL(audioEl.src);
+    // Ne pas révoquer un blob encore dans le cache prefetch (skip suivant)
+    if (audioEl.src.startsWith('blob:') && !isPrefetchBlobUrl(audioEl.src)) {
+      URL.revokeObjectURL(audioEl.src);
+    }
     audioEl.src = src;
     audioEl.dataset.trackId = current.id;
     audioEl.volume = volume;
@@ -339,6 +393,8 @@ async function restoreAudioFromPersisted() {
 }
 
 function isActivePlayer() {
+  // Sync titre off → contrôles 100 % locaux (deux appareils = deux musiques).
+  if (!useSession.getState().receiveRemoteSync) return true;
   return useSession.getState().isActivePlayer;
 }
 
@@ -347,10 +403,14 @@ function sendCmd(command: Record<string, unknown>) {
 }
 
 /**
- * Prend la main audio sur CET appareil (style YTM / Android claim).
- * Évite « contrôle distant » sans son quand l’utilisateur clique Lecture ici.
+ * Prend la main audio sur CET appareil.
+ * Sync off → pas de claim hub (chaque appareil joue pour soi).
  */
 function claimLocalPlayer() {
+  if (!useSession.getState().receiveRemoteSync) {
+    useSession.setState({ isActivePlayer: true });
+    return;
+  }
   if (isActivePlayer()) return;
   const s = useSession.getState();
   const me = s.deviceId;
@@ -440,7 +500,20 @@ function schedulePrefetch(queue: Track[], queueIndex: number) {
   let idx = currentId ? ids.indexOf(currentId) : -1;
   if (idx < 0) idx = Math.min(Math.max(0, queueIndex), ids.length - 1);
   // Modéré : laisse de la bande passante au titre en cours (surtout Linux / navigateur).
-  prefetchAround(ids, idx, { ahead: 4, behind: 1, fullAhead: 1, delayFullMs: 2000 });
+  const saveData =
+    typeof navigator !== 'undefined' &&
+    ((navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection
+      ?.saveData ||
+      /^(2g|slow-2g|3g)$/i.test(
+        (navigator as Navigator & { connection?: { effectiveType?: string } }).connection?.effectiveType ||
+          '',
+      ));
+  prefetchAround(ids, idx, {
+    ahead: saveData ? 1 : 2,
+    behind: 1,
+    fullAhead: saveData ? 0 : 1,
+    delayFullMs: 2000,
+  });
 }
 
 /** Un seul remplissage autoplay à la fois (évite tempête related×N au skip). */
@@ -506,7 +579,7 @@ async function ensureAutoRadio(seedId: string) {
       .related(seedId)
       .then((r) => {
         if (seq !== autoRadioSeq) return r;
-        const pool = [...(r.radio || []), ...(r.related || [])];
+        const pool = [...(r.related || []), ...(r.radio || [])];
         mergeAutoTracks(seedId, pool, pool.length ? pool : undefined);
         return r;
       })
@@ -515,16 +588,7 @@ async function ensureAutoRadio(seedId: string) {
         return null;
       });
 
-    const upNextP = api
-      .upNext(seedId)
-      .then((r) => {
-        if (seq !== autoRadioSeq) return r;
-        mergeAutoTracks(seedId, r.tracks || []);
-        return r;
-      })
-      .catch(() => ({ tracks: [] as Track[] }));
-
-    await Promise.all([relatedP, upNextP]);
+    await relatedP;
   })();
 
   autoRadioInflight = { seedId, promise };
@@ -559,23 +623,62 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
           i === s.queueIndex || t.id === track.id ? { ...t, thumbnails: t.thumbnails?.length ? t.thumbnails : ytimg } : t,
         ),
       }));
+      refreshMediaSession();
     }
   }
 
   const src = await srcPromise;
   if (gen !== playGeneration) return;
+  if (!src) throw new Error('Source audio indisponible');
+
+  // Soft fade out → swap → fade in (feel YTM, pas un vrai crossfade dual)
+  const targetVol = state.volume;
+  const fadeMs = 110;
+  const startVol = audio.volume;
+  if (!audio.paused && startVol > 0.02) {
+    const t0 = performance.now();
+    await new Promise<void>((resolve) => {
+      const step = (now: number) => {
+        if (gen !== playGeneration) {
+          resolve();
+          return;
+        }
+        const p = Math.min(1, (now - t0) / fadeMs);
+        audio.volume = Math.max(0, startVol * (1 - p));
+        if (p < 1) requestAnimationFrame(step);
+        else resolve();
+      };
+      requestAnimationFrame(step);
+    });
+  }
+  if (gen !== playGeneration) return;
 
   // Ne pas révoquer les blob: gérés par streamPrefetch (réutilisés au skip suivant).
   audio.src = src;
   audio.dataset.trackId = track.id;
-  audio.volume = state.volume;
+  audio.volume = 0;
   // démarrer dès que possible
   let playPromise: Promise<void>;
   try {
     playPromise = audio.play();
   } catch {
+    audio.volume = targetVol;
     return;
   }
+  void playPromise.then(() => {
+    if (gen !== playGeneration) return;
+    const t1 = performance.now();
+    const fadeIn = (now: number) => {
+      if (gen !== playGeneration) return;
+      const p = Math.min(1, (now - t1) / 160);
+      audio.volume = targetVol * p;
+      if (p < 1) requestAnimationFrame(fadeIn);
+      else audio.volume = targetVol;
+    };
+    requestAnimationFrame(fadeIn);
+  }).catch(() => {
+    audio.volume = targetVol;
+  });
 
   const meta = await metaPromise;
   if (gen !== playGeneration) {
@@ -609,13 +712,26 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
           : t,
       ),
     }));
+    refreshMediaSession();
   }
 
   try {
     await playPromise;
-  } catch {
+  } catch (err) {
     if (gen !== playGeneration) return;
-    throw new Error('Lecture bloquée ou interrompue');
+    const name = err instanceof DOMException ? err.name : '';
+    // Skip / changement de titre : abort normal, pas une erreur utilisateur
+    if (name === 'AbortError') return;
+    // NotSupported / autoplay : une nouvelle tentative après load()
+    try {
+      audio.load();
+      await audio.play();
+    } catch (err2) {
+      if (gen !== playGeneration) return;
+      const n2 = err2 instanceof DOMException ? err2.name : '';
+      if (n2 === 'AbortError') return;
+      throw new Error('Lecture bloquée ou interrompue');
+    }
   }
   if (gen !== playGeneration) return;
 
@@ -641,11 +757,13 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   showQueue: false,
   showLyrics: false,
   lyrics: null,
+  lyricsTimed: null,
   related: [],
   hydrated: false,
   audioEl: null,
   sleepLabel: null,
   sleepUntilEnd: false,
+  playError: null,
 
   bindAudio: (el) => {
     set({ audioEl: el });
@@ -661,6 +779,35 @@ export const usePlayer = create<PlayerState>((set, get) => ({
           el.pause();
           set({ isPlaying: false });
         }
+      });
+      let recovering = false;
+      el.addEventListener('error', () => {
+        void (async () => {
+          if (recovering) return;
+          const track = get().current;
+          if (!track?.id) return;
+          // Ignore si on a déjà changé de titre
+          if (el.dataset.trackId && el.dataset.trackId !== track.id) return;
+          recovering = true;
+          const gen = playGeneration;
+          try {
+            const fresh = await resolvePlayUrl(track.id);
+            if (gen !== playGeneration || get().current?.id !== track.id) return;
+            const bust = fresh.includes('?') ? `${fresh}&r=${Date.now()}` : `${fresh}?r=${Date.now()}`;
+            el.src = bust.startsWith('blob:') ? fresh : bust;
+            el.dataset.trackId = track.id;
+            el.load();
+            await el.play();
+            set({ isPlaying: true, isLoading: false });
+            refreshMediaSession();
+          } catch {
+            if (gen === playGeneration && get().current?.id === track.id) {
+              void get().next({ fromEnded: true });
+            }
+          } finally {
+            recovering = false;
+          }
+        })();
       });
     }
     if (el && get().hydrated && get().current) {
@@ -686,6 +833,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       set({ isPlaying: false, sleepLabel: null, sleepUntilEnd: false });
     }, delayMs);
   },
+
+  clearPlayError: () => set({ playError: null }),
 
   hydrate: async () => {
     if (get().hydrated) return;
@@ -754,6 +903,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       isLoading: true,
       progress: 0,
       lyrics: null,
+      lyricsTimed: null,
     });
 
     const gen = ++playGeneration;
@@ -770,13 +920,19 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       await playLocal(playTrack, get(), gen);
       if (gen !== playGeneration) return;
       recordStarted(get().current || playTrack);
-      set({ isPlaying: true, isLoading: false });
+      set({ isPlaying: true, isLoading: false, playError: null });
       publish();
       // Prefetch léger une fois le titre lancé (pas pendant le démarrage)
       schedulePrefetch(get().queue, get().queueIndex);
     } catch (err) {
       console.error(err);
-      set({ isLoading: false, isPlaying: false });
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === 'string'
+            ? err
+            : 'Lecture impossible';
+      set({ isLoading: false, isPlaying: false, playError: msg });
       publish();
     }
   },
@@ -955,6 +1111,13 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
 
   setProgress: (n) => {
+    const prev = get().progress;
+    const now = Date.now();
+    const jumped = Math.abs(n - prev) > 1.2;
+    const last = (get() as PlayerState & { _lastProgressAt?: number })._lastProgressAt || 0;
+    // Throttle UI store ~2.5 Hz (la barre lit aussi audioEl en live)
+    if (!jumped && now - last < 400) return;
+    (get() as PlayerState & { _lastProgressAt?: number })._lastProgressAt = now;
     set({ progress: n });
     const { duration, isPlaying } = get();
     if ('mediaSession' in navigator && duration) {
@@ -962,18 +1125,22 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         navigator.mediaSession.setPositionState({
           duration,
           position: Math.min(n, duration),
-          playbackRate: 1,
+          playbackRate: get().audioEl?.playbackRate || 1,
         });
       } catch {
         /* ignore */
       }
       navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
     }
-    const now = Date.now();
-    const last = (get() as PlayerState & { _lastPersist?: number })._lastPersist || 0;
-    if (now - last > 4000) {
-      (get() as PlayerState & { _lastPersist?: number })._lastPersist = now;
+    const now2 = Date.now();
+    const lastPersist = (get() as PlayerState & { _lastPersist?: number })._lastPersist || 0;
+    if (now2 - lastPersist > 4000) {
+      (get() as PlayerState & { _lastPersist?: number })._lastPersist = now2;
       persistPlayer();
+    }
+    // Publie le timecode pour les autres appareils (throttle via publish())
+    if (isPlaying && isActivePlayer() && now2 - lastHttpPublishAt > 3000) {
+      publish();
     }
   },
 
@@ -1028,10 +1195,10 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     set({ showLyrics: true, showQueue: false });
     if (current) {
       try {
-        const { lyrics } = await api.lyrics(current.id);
-        set({ lyrics });
+        const { lyrics, timed } = await api.lyrics(current.id);
+        set({ lyrics, lyricsTimed: timed || null });
       } catch {
-        set({ lyrics: null });
+        set({ lyrics: null, lyricsTimed: null });
       }
     }
   },
@@ -1173,17 +1340,11 @@ export const usePlayer = create<PlayerState>((set, get) => ({
 
       if (kind === 'track') {
         const trackId = id;
-        const [rel, up, sim] = await Promise.all([
-          api.related(trackId).catch(() => ({ related: [] as Track[], radio: [] as Track[] })),
-          api.upNext(trackId).catch(() => ({ tracks: [] as Track[] })),
-          api.recoSimilar(trackId).catch(() => ({ tracks: [] as Track[], related: [], radio: [] })),
-        ]);
-        const raw = [
-          ...(up.tracks || []),
-          ...(rel.radio || []),
-          ...(rel.related || []),
-          ...(sim.tracks || []),
-        ];
+        // related API = déjà similarForUser ranked (style) — 1 round-trip
+        const rel = await api
+          .related(trackId)
+          .catch(() => ({ related: [] as Track[], radio: [] as Track[], tracks: [] as Track[] }));
+        const raw = [...(rel.related || []), ...(rel.radio || []), ...((rel as { tracks?: Track[] }).tracks || [])];
         pool = raw.filter((t) => t.id !== trackId && isPlayable(t));
         if (stayClose && seedTrack?.artists?.[0]) {
           const artistKey = (
@@ -1202,11 +1363,11 @@ export const usePlayer = create<PlayerState>((set, get) => ({
                 (a) => (a.id || a.name || '').toLowerCase() === artistKey,
               ),
           );
-          // Mix : ~70 % même artiste / proches, le reste découverte
-          pool = [...close, ...far].slice(0, 80);
-          if (close.length >= 8) {
-            pool = [...close.slice(0, 24), ...far.slice(0, 40)];
-          }
+          // stayClose = un peu du même artiste, majorité style voisin
+          pool = [...close.slice(0, 10), ...far].slice(0, 80);
+        } else {
+          // Radio / mix : même style, artistes variés (pas une discographie)
+          pool = diversifyByArtist(pool, seedTrack?.artists?.[0]);
         }
         if (!seedTrack) {
           seedTrack = { id: trackId, title: 'Radio', artists: [], thumbnails: [], type: 'song' };
@@ -1270,13 +1431,18 @@ export const usePlayer = create<PlayerState>((set, get) => ({
 
   loadRelated: async (trackId) => {
     try {
-      const { related, radio } = await api.related(trackId);
-      // Ne pas écraser avec [] / pool d’un ancien titre si on a déjà sauté
+      const rel = await api
+        .related(trackId)
+        .catch(() => ({ related: [] as Track[], radio: [] as Track[] }));
       if (usePlayer.getState().current?.id && usePlayer.getState().current?.id !== trackId) return;
-      const pool = related.length ? related : radio;
-      set({ related: pool });
-      if (get().autoplay !== false && pool.length) {
-        mergeAutoTracks(trackId, pool);
+      const pool = (rel.related?.length ? rel.related : rel.radio || []).filter(isPlayable);
+      const diversified = diversifyByArtist(
+        pool,
+        usePlayer.getState().current?.artists?.[0],
+      );
+      set({ related: diversified });
+      if (get().autoplay !== false && diversified.length) {
+        mergeAutoTracks(trackId, diversified);
       }
     } catch {
       if (usePlayer.getState().current?.id === trackId) {
@@ -1313,8 +1479,10 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         } else {
           set({ isPlaying: true, isLoading: false });
         }
+        refreshMediaSession();
       } catch (err) {
-        console.error(err);
+        // Abort / NotSupported déjà gérés dans playLocal — log discret
+        console.warn('applyRemoteState play', err);
         set({ isLoading: false });
       }
     }

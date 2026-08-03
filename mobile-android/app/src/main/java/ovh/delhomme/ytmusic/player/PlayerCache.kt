@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger
 @OptIn(UnstableApi::class)
 object PlayerCache {
     private const val CACHE_DIR = "exo-media"
-    private const val CACHE_BYTES = 250L * 1024L * 1024L // 250 Mo
+    private const val CACHE_BYTES = 160L * 1024L * 1024L // 160 Mo SimpleCache audio
     private const val PREFETCH_PARALLEL = 2
 
     @Volatile
@@ -63,6 +63,15 @@ object PlayerCache {
     fun cancelPrefetch() {
         gen.incrementAndGet()
         prefetchInFlight.clear()
+    }
+
+    /** Invalide une entrée cache (URL expirée / 403). */
+    fun invalidate(context: Context, cacheKey: String) {
+        if (cacheKey.isBlank()) return
+        runCatching {
+            get(context.applicationContext).removeResource(cacheKey)
+        }
+        prefetchInFlight.remove(cacheKey)
     }
 
     /**

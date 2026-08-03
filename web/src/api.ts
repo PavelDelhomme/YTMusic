@@ -37,6 +37,8 @@ export type LibraryData = {
   mixes: Track[];
   playlists: LibraryPlaylist[];
   history: Track[];
+  /** Playlists / albums / mixes lancés récemment. */
+  recentEntities: Track[];
   downloaded: string[];
 };
 
@@ -536,7 +538,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(track),
     }),
-  history: () => req<{ history: Track[] }>('/api/history'),
+  history: () =>
+    req<{ history: Track[]; entities?: Track[] }>('/api/history'),
+  recordEntityPlay: (entity: {
+    id: string;
+    kind: 'playlist' | 'album' | 'artist' | 'mix';
+    title?: string;
+    name?: string;
+    thumbnails?: Track['thumbnails'];
+    artists?: Track['artists'];
+    type?: string;
+    covers?: string[];
+  }) =>
+    req<{ ok: boolean; entities: Track[] }>('/api/history/entity', {
+      method: 'POST',
+      body: JSON.stringify(entity),
+    }),
   library: () => req<LibraryData>('/api/library'),
   like: (track: Track) =>
     req<{ liked: boolean; library: LibraryData }>('/api/library/like', {

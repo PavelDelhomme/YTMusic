@@ -36,6 +36,7 @@ data class LibraryResponse(
     val mixes: List<TrackDto> = emptyList(),
     val playlists: List<PlaylistDto> = emptyList(),
     val history: List<TrackDto> = emptyList(),
+    val recentEntities: List<TrackDto> = emptyList(),
     val downloaded: List<String> = emptyList(),
 )
 
@@ -241,6 +242,23 @@ data class ListenBody(
     val progressPct: Double? = null,
     val durationMs: Long? = null,
     val track: TrackDto? = null,
+)
+
+@JsonClass(generateAdapter = false)
+data class HistoryEntityBody(
+    val id: String,
+    val kind: String,
+    val title: String? = null,
+    val name: String? = null,
+    val thumbnails: List<Thumb>? = null,
+    val artists: List<ArtistRef>? = null,
+    val type: String? = null,
+)
+
+@JsonClass(generateAdapter = false)
+data class HistoryEntityResponse(
+    val ok: Boolean? = null,
+    val entities: List<TrackDto> = emptyList(),
 )
 
 @JsonClass(generateAdapter = false)
@@ -452,6 +470,9 @@ interface YtMusicApi {
 
     @POST("api/listen")
     suspend fun listen(@Body body: ListenBody): Map<String, Any>
+
+    @POST("api/history/entity")
+    suspend fun recordEntityPlay(@Body body: HistoryEntityBody): HistoryEntityResponse
 
     @GET("api/ytm/status")
     suspend fun ytmStatus(): YtmStatusResponse

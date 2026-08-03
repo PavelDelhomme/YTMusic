@@ -82,6 +82,7 @@ import ovh.delhomme.ytmusic.ui.importytm.YtmImportScreen
 import ovh.delhomme.ytmusic.ui.detail.CollectionDetailScreen
 import ovh.delhomme.ytmusic.ui.detail.DetailKind
 import ovh.delhomme.ytmusic.ui.home.HomeScreen
+import ovh.delhomme.ytmusic.ui.library.LibraryFilter
 import ovh.delhomme.ytmusic.ui.library.LibraryScreen
 import ovh.delhomme.ytmusic.ui.player.NowPlayingScreen
 import ovh.delhomme.ytmusic.ui.prefs.RecoPrefsScreen
@@ -216,9 +217,11 @@ fun YtMusicAppContent(
                 onPlayTracks = { tracks, idx ->
                     val t = tracks.getOrNull(idx)
                     AppLog.breadcrumb("play", "${t?.id ?: "?"} idx=$idx n=${tracks.size}")
-                    scope.launch {
-                        runCatching {
-                            container.api.setSessionActive(mapOf("targetId" to container.deviceId))
+                    if (container.receiveRemoteSync()) {
+                        scope.launch {
+                            runCatching {
+                                container.api.setSessionActive(mapOf("targetId" to container.deviceId))
+                            }
                         }
                     }
                     player.play(tracks, idx)
@@ -231,9 +234,11 @@ fun YtMusicAppContent(
                         title.contains("radio", ignoreCase = true) ||
                             title.equals("Mix", ignoreCase = true) ||
                             title.contains("rapport", ignoreCase = true)
-                    scope.launch {
-                        runCatching {
-                            container.api.setSessionActive(mapOf("targetId" to container.deviceId))
+                    if (container.receiveRemoteSync()) {
+                        scope.launch {
+                            runCatching {
+                                container.api.setSessionActive(mapOf("targetId" to container.deviceId))
+                            }
                         }
                     }
                     player.play(
@@ -355,7 +360,9 @@ private fun MainTabs(
         }
         if (!sessionHydrated) {
             sessionHydrated = true
-            runCatching {
+            if (!container.receiveRemoteSync()) {
+                // Lectures indépendantes : garder la file locale, pas de pull distant.
+            } else runCatching {
                 container.ensureFreshToken()
                 val snap = container.api.session()
                 val st = snap.state
@@ -399,8 +406,9 @@ private fun MainTabs(
         }
     }
 
-    // Publier l’état de lecture pour sync multi-appareils (web / desktop / autre mobile)
+    // Publier l’état seulement si sync lecture activée (sinon file 100 % locale)
     suspend fun publishPlayback() {
+        if (!container.receiveRemoteSync()) return
         if (System.currentTimeMillis() < suppressSessionPublishUntil) return
         val ui = player.state.value
         val t = ui.track ?: return
@@ -432,18 +440,48 @@ private fun MainTabs(
         delay(400)
         publishPlayback()
     }
-    // Heartbeat progress pendant lecture — rare (énergie)
+    // Heartbeat progress pendant lecture — assez fréquent pour la timeline multi-appareils
     LaunchedEffect(playerUi.playing, playerUi.track?.id) {
         if (!playerUi.playing || playerUi.track == null) return@LaunchedEffect
         while (isActive) {
-            delay(25_000)
+            delay(4_000)
             if (!player.state.value.playing) break
             publishPlayback()
         }
     }
 
-    // Sync multi-appareils : lent en idle, pause si app en arrière-plan sans lecture
+    // Miroir timeline remote quand on est en pause (titre sync ailleurs)
     val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (isActive) {
+                delay(2_000)
+                if (!container.receiveRemoteSync()) continue
+                if (player.state.value.playing) continue
+                if (System.currentTimeMillis() < suppressSessionPublishUntil) continue
+                runCatching {
+                    val snap = container.api.session()
+                    val st = snap.state ?: return@runCatching
+                    if (snap.activePlayerId == container.deviceId) return@runCatching
+                    val remoteId = st.current?.id ?: st.queue.getOrNull(st.queueIndex)?.id
+                    val localId = player.state.value.track?.id
+                    if (remoteId.isNullOrBlank() || remoteId != localId) return@runCatching
+                    val base = (st.progress ?: 0.0).coerceAtLeast(0.0)
+                    val ageSec = if (st.isPlaying) {
+                        ((System.currentTimeMillis() - (st.updatedAt ?: System.currentTimeMillis()))
+                            .coerceAtLeast(0L) / 1000.0)
+                    } else {
+                        0.0
+                    }
+                    val mirrored = ((base + ageSec) * 1000.0).toLong()
+                    val durMs = ((st.duration ?: 0.0) * 1000.0).toLong()
+                    player.mirrorPosition(mirrored, durMs)
+                }
+            }
+        }
+    }
+
+    // Sync multi-appareils : pull file + progress
     var lastDeviceRegisterAt by remember { mutableLongStateOf(0L) }
     LaunchedEffect(lifecycleOwner, playerUi.playing) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -461,46 +499,55 @@ private fun MainTabs(
                                 "canPlay" to true,
                             ),
                         )
-                        if (playing) {
+                        if (playing && container.receiveRemoteSync()) {
                             runCatching {
                                 container.api.setSessionActive(mapOf("targetId" to container.deviceId))
                             }
                         }
                     }
-                    // Pendant lecture locale : pas de pull remote (évite radio + restore)
-                    if (!playing && now >= suppressSessionPublishUntil) {
+                    if (!playing && container.receiveRemoteSync() && now >= suppressSessionPublishUntil) {
                         val snap = container.api.session()
                         val st = snap.state
                         val remoteQueue = st?.queue.orEmpty().filter { it.isPlayable() }
                         val ui = player.state.value
                         val localIds = ui.queue.map { it.id }
                         val remoteIds = remoteQueue.map { it.id }
-                        val remoteNewer =
-                            (st?.updatedAt ?: 0L) > (now - 120_000) &&
-                                remoteIds.isNotEmpty() &&
-                                remoteIds != localIds &&
-                                snap.activePlayerId != null &&
-                                snap.activePlayerId != container.deviceId
-                        if (remoteNewer) {
+                        val remoteActiveElsewhere =
+                            snap.activePlayerId != null &&
+                                snap.activePlayerId != container.deviceId &&
+                                (st?.updatedAt ?: 0L) > (now - 120_000)
+                        if (remoteActiveElsewhere && remoteIds.isNotEmpty()) {
                             val current = st?.current?.takeIf { it.isPlayable() }
                             val idx = when {
                                 current != null -> remoteQueue.indexOfFirst { it.id == current.id }
                                     .takeIf { it >= 0 } ?: (st?.queueIndex ?: 0)
                                 else -> st?.queueIndex ?: 0
                             }.coerceIn(0, remoteQueue.lastIndex)
-                            suppressSessionPublishUntil = System.currentTimeMillis() + 8_000L
-                            player.restoreQueue(
-                                tracks = remoteQueue,
-                                startIndex = idx,
-                                positionMs = ((st?.progress ?: 0.0) * 1000.0).toLong().coerceAtLeast(0L),
-                                autoplay = false,
-                                title = "File synchronisée",
-                                userQueueEnd = st?.userQueueEnd,
-                            )
+                            val base = (st?.progress ?: 0.0).coerceAtLeast(0.0)
+                            val ageSec = if (st?.isPlaying == true) {
+                                ((now - (st.updatedAt ?: now)).coerceAtLeast(0L) / 1000.0)
+                            } else 0.0
+                            val posMs = ((base + ageSec) * 1000.0).toLong().coerceAtLeast(0L)
+                            if (remoteIds != localIds || ui.track?.id != current?.id) {
+                                suppressSessionPublishUntil = System.currentTimeMillis() + 8_000L
+                                player.restoreQueue(
+                                    tracks = remoteQueue,
+                                    startIndex = idx,
+                                    positionMs = posMs,
+                                    autoplay = false,
+                                    title = "File synchronisée",
+                                    userQueueEnd = st?.userQueueEnd,
+                                )
+                            } else {
+                                player.mirrorPosition(
+                                    posMs,
+                                    ((st?.duration ?: 0.0) * 1000.0).toLong(),
+                                )
+                            }
                         }
                     }
                 }
-                delay(if (playing) 45_000 else 30_000)
+                delay(if (playing) 45_000 else 8_000)
             }
         }
     }
@@ -552,7 +599,9 @@ private fun MainTabs(
         if (playerUi.durationMs <= 0 || t.id in completedIds) return@LaunchedEffect
         val pct = playerUi.positionMs.toDouble() / playerUi.durationMs
         if (pct >= 0.85) {
-            completedIds = completedIds + t.id
+            completedIds = (completedIds + t.id).let { s ->
+                if (s.size <= 64) s else s.toList().takeLast(48).toSet()
+            }
             runCatching {
                 container.api.listen(
                     ListenBody(
@@ -596,7 +645,9 @@ private fun MainTabs(
         }
     }
 
-    LaunchedEffect(playerUi.playing, playerUi.track?.id) {
+    LaunchedEffect(playerUi.playing, playerUi.track?.id, expanded) {
+        // NowPlaying a son propre tick plus fin (paroles) — éviter le double tick
+        if (expanded) return@LaunchedEffect
         while (playerUi.playing && playerUi.track != null) {
             player.tick()
             delay(500)
@@ -617,17 +668,50 @@ private fun MainTabs(
                             } else {
                                 0f
                             },
+                            durationMs = playerUi.durationMs,
                             onToggle = {
                                 suppressSessionPublishUntil = 0L
-                                player.toggle()
+                                scope.launch {
+                                    if (container.receiveRemoteSync()) {
+                                        runCatching {
+                                            container.api.setSessionActive(
+                                                mapOf("targetId" to container.deviceId),
+                                            )
+                                        }
+                                    }
+                                    val wasPlaying = player.state.value.playing
+                                    player.toggle()
+                                    if (!wasPlaying) {
+                                        delay(350)
+                                        publishPlayback()
+                                    }
+                                }
                             },
                             onPrev = {
                                 suppressSessionPublishUntil = 0L
-                                player.skipPrev()
+                                scope.launch {
+                                    if (container.receiveRemoteSync()) {
+                                        runCatching {
+                                            container.api.setSessionActive(
+                                                mapOf("targetId" to container.deviceId),
+                                            )
+                                        }
+                                    }
+                                    player.skipPrev()
+                                }
                             },
                             onNext = {
                                 suppressSessionPublishUntil = 0L
-                                player.skipNext()
+                                scope.launch {
+                                    if (container.receiveRemoteSync()) {
+                                        runCatching {
+                                            container.api.setSessionActive(
+                                                mapOf("targetId" to container.deviceId),
+                                            )
+                                        }
+                                    }
+                                    player.skipNext()
+                                }
                             },
                             onOpen = onOpenPlayer,
                             onSeek = { ratio ->
@@ -686,6 +770,13 @@ private fun MainTabs(
                     onOpenRecoPrefs = { nav.navigate("reco_prefs") },
                     onOpenDebugLogs = { nav.navigate("debug_logs") },
                     onOpenYtmImport = { nav.navigate("ytm_import") },
+                    onOpenDownloads = {
+                        LibraryFilter.pendingSelect = LibraryFilter.Downloads
+                        nav.navigate(Tab.Library.route) {
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
                     onLoggedOut = onLoggedOut,
                     onMoreMix = { id, title, covers ->
                         menuTrack = TrackDto(

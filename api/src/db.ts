@@ -114,6 +114,17 @@ db.exec(`
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS entity_history (
+    user_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    played_at INTEGER NOT NULL,
+    play_count INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (user_id, kind, entity_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS downloads (
     user_id TEXT NOT NULL,
     track_id TEXT NOT NULL,
@@ -144,6 +155,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_liked_tracks_track ON liked_tracks(track_id);
   CREATE INDEX IF NOT EXISTS idx_library_tracks_user ON library_tracks(user_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_history_user_played ON history(user_id, played_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_entity_history_user ON entity_history(user_id, played_at DESC);
   CREATE INDEX IF NOT EXISTS idx_playlist_tracks_pl ON playlist_tracks(playlist_id, position);
 `);
 

@@ -1,5 +1,5 @@
 import type { Track } from './types.js';
-import { getRelated, search } from './yt.js';
+import { getRelated, getTrack, search } from './yt.js';
 import {
   getPrefs,
   getWeights,
@@ -8,7 +8,7 @@ import {
   listPins,
   listSearchHistory,
 } from './prefs.js';
-import { getForgottenFavorites, getHistory, getTopListened } from './library.js';
+import { getForgottenFavorites, getHistory, getTopListened, getEntityHistory } from './library.js';
 
 export const RADIO_CATEGORIES = [
   { id: 'focus', title: 'Concentration', query: 'focus concentration playlist', mode: 'focus' },
@@ -30,12 +30,65 @@ function hourBucket(h: number) {
   return 'night';
 }
 
+const STYLE_TAGS: { re: RegExp; tag: string }[] = [
+  { re: /lo-?fi|chillhop/, tag: 'lofi' },
+  { re: /\bjazz\b|bossa|swing/, tag: 'jazz' },
+  { re: /\brap\b|hip.?hop|drill|trap\b/, tag: 'hiphop' },
+  { re: /\brock\b|metal|punk|grunge/, tag: 'rock' },
+  { re: /\bedm\b|house|techno|trance|dnb|drum.?and.?bass/, tag: 'electronic' },
+  { re: /r&b|rnb|\bsoul\b|neo.?soul/, tag: 'rnb' },
+  { re: /\bpop\b|synthpop/, tag: 'pop' },
+  { re: /\bindie\b|alternative|alt\b/, tag: 'indie' },
+  { re: /latin|reggaeton|salsa|bachata/, tag: 'latin' },
+  { re: /afro|afrobeats|amapiano/, tag: 'afro' },
+  { re: /classical|piano|orchestr|symphony/, tag: 'classical' },
+  { re: /\bcountry\b|bluegrass/, tag: 'country' },
+  { re: /k-?pop|j-?pop/, tag: 'kpop' },
+  { re: /\bfolk\b|acoustic|singer.?songwriter/, tag: 'folk' },
+  { re: /\bgospel\b/, tag: 'gospel' },
+  { re: /\bblues\b/, tag: 'blues' },
+  { re: /\bfunk\b|disco|groove/, tag: 'funk' },
+  { re: /ambient|chill|sleep|calm|relax/, tag: 'chill' },
+  { re: /dance|party|club/, tag: 'dance' },
+  { re: /reggae|dancehall/, tag: 'reggae' },
+];
+
+function trackBlob(t: Track) {
+  return `${t.title} ${(t.artists || []).map((a) => a.name).join(' ')}`.toLowerCase();
+}
+
 function energyProxy(t: Track): number {
-  const blob = `${t.title} ${(t.artists || []).map((a) => a.name).join(' ')}`.toLowerCase();
+  const blob = trackBlob(t);
   let e = 0.5;
-  if (/chill|lofi|lo-fi|acoustic|piano|sleep|calm|jazz|ambient/.test(blob)) e -= 0.25;
-  if (/workout|party|dance|edm|metal|rock|rap|drill|hard/.test(blob)) e += 0.25;
+  if (/chill|lofi|lo-fi|acoustic|piano|sleep|calm|jazz|ambient|bossa/.test(blob)) e -= 0.25;
+  if (/workout|party|dance|edm|metal|rock|rap|drill|hard|trap|techno/.test(blob)) e += 0.25;
   return Math.max(0, Math.min(1, e));
+}
+
+function styleTags(t: Track): string[] {
+  const blob = trackBlob(t);
+  const tags = STYLE_TAGS.filter((x) => x.re.test(blob)).map((x) => x.tag);
+  return [...new Set(tags)];
+}
+
+/** Requête search pour élargir le pool « même vibe, autres artistes ». */
+export function styleSearchQuery(seed: Track): string {
+  const tags = styleTags(seed);
+  const artist = seed.artists?.[0]?.name?.trim();
+  const cleanTitle = seed.title
+    .replace(/\(.*?\)|\[.*?\]/g, ' ')
+    .replace(/\b(official|video|audio|lyrics|hd|4k|remaster(ed)?|live|feat\.?|ft\.?)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter((w) => w.length > 2)
+    .slice(0, 4)
+    .join(' ');
+  if (tags.length) {
+    return `${tags.slice(0, 2).join(' ')} songs like ${cleanTitle || artist || 'hits'}`.trim();
+  }
+  if (artist && cleanTitle) return `${cleanTitle} similar songs playlist`;
+  return `${artist || cleanTitle || 'similar'} mix playlist`.trim();
 }
 
 function artistKey(t: Track) {
@@ -43,19 +96,31 @@ function artistKey(t: Track) {
 }
 
 function scoreContent(candidate: Track, seed: Track | null, prefsGenres: string[]) {
-  let s = 0.3;
+  let s = 0.28;
   if (seed) {
     const sameArtist = artistKey(candidate) && artistKey(candidate) === artistKey(seed);
-    if (sameArtist) s += 0.35;
+    // Léger bonus même artiste — la variété de style prime (YTM-like)
+    if (sameArtist) s += 0.08;
+    else {
+      const seedTags = styleTags(seed);
+      const candTags = styleTags(candidate);
+      const overlap = seedTags.filter((t) => candTags.includes(t)).length;
+      if (overlap) s += Math.min(0.42, overlap * 0.18);
+      else {
+        // Pas de tag explicite : proximité d’énergie = proxy de style
+        const d = Math.abs(energyProxy(candidate) - energyProxy(seed));
+        s += Math.max(0, 0.22 - d * 0.4);
+      }
+    }
     const titleOverlap = seed.title
       .toLowerCase()
       .split(/\s+/)
       .filter((w) => w.length > 3 && candidate.title.toLowerCase().includes(w)).length;
-    s += Math.min(0.2, titleOverlap * 0.05);
+    s += Math.min(0.12, titleOverlap * 0.04);
   }
-  const blob = `${candidate.title}`.toLowerCase();
+  const blob = trackBlob(candidate);
   for (const g of prefsGenres) {
-    if (g && blob.includes(g.toLowerCase())) s += 0.08;
+    if (g && blob.includes(g.toLowerCase())) s += 0.1;
   }
   return Math.min(1, s);
 }
@@ -89,23 +154,37 @@ function scoreSatisf(trackId: string, skips: Set<string>, completes: Set<string>
   return 0.5;
 }
 
-function rerank(scored: { track: Track; score: number }[], recentArtist: string[]) {
+function rerank(
+  scored: { track: Track; score: number }[],
+  recentArtist: string[],
+  opts?: { window?: number; seedArtist?: string },
+) {
+  const window = opts?.window ?? 5;
+  const seedArtist = opts?.seedArtist || '';
   const out: { track: Track; score: number }[] = [];
   const usedArtists: string[] = [...recentArtist];
   const pool = [...scored].sort((a, b) => b.score - a.score);
-  while (pool.length && out.length < 40) {
+  let seedArtistHits = 0;
+  while (pool.length && out.length < 48) {
     let idx = 0;
     for (let i = 0; i < pool.length; i++) {
       const a = artistKey(pool[i].track);
-      const recent = usedArtists.slice(-3);
+      const recent = usedArtists.slice(-window);
       if (a && recent.includes(a)) continue;
+      // Cap : pas plus d’1 titre sur 4 du seed artist (variété)
+      if (seedArtist && a === seedArtist && seedArtistHits >= Math.max(1, Math.floor(out.length / 4) + 1)) {
+        continue;
+      }
       idx = i;
       break;
     }
     const pick = pool.splice(idx, 1)[0];
     out.push(pick);
     const a = artistKey(pick.track);
-    if (a) usedArtists.push(a);
+    if (a) {
+      usedArtists.push(a);
+      if (a === seedArtist) seedArtistHits += 1;
+    }
   }
   return out.map((x) => x.track);
 }
@@ -160,21 +239,60 @@ export async function hybridRank(opts: {
         w.w_bandit * s4 +
         w.w_satisf * s5;
       if (recent.has(track.id)) s *= 0.35;
+      // Mode style / radio : léger malus même artiste pour pousser la découverte
+      if (
+        (mode === 'style' || mode === 'radio' || mode === 'discover') &&
+        seed &&
+        artistKey(track) &&
+        artistKey(track) === artistKey(seed)
+      ) {
+        s *= 0.82;
+      }
       return { track, score: s };
     });
 
-  const recentArtists = (seed ? [artistKey(seed)] : []).filter(Boolean);
-  return rerank(scored, recentArtists);
+  const seedA = seed ? artistKey(seed) : '';
+  const recentArtists = seedA ? [seedA] : [];
+  return rerank(scored, recentArtists, {
+    window: mode === 'style' || mode === 'discover' ? 6 : 5,
+    seedArtist: seedA,
+  });
 }
 
 export async function similarForUser(userId: string, trackId: string, seedTrack?: Track) {
+  let seed =
+    seedTrack ||
+    ({ id: trackId, title: '', artists: [], thumbnails: [], type: 'song' } as Track);
+  if (!seed.title) {
+    try {
+      const meta = await getTrack(trackId, { light: true });
+      if (meta?.track?.title) seed = meta.track;
+    } catch {
+      /* ignore */
+    }
+  }
   const { related, radio } = await getRelated(trackId);
-  const pool = [...radio, ...related];
+  let pool = [...radio, ...related];
+
+  // Élargit hors upNext YouTube : search « même vibe » pour plus d’artistes
+  try {
+    if (seed.title || seed.artists?.length) {
+      const q = styleSearchQuery(seed);
+      const res = await search(q, 'song');
+      const extra = [...(res.songs || []), ...(res.videos || [])].filter(
+        (t) => t?.id && t.id !== trackId,
+      );
+      pool = [...pool, ...extra.slice(0, 24)];
+    }
+  } catch {
+    /* ignore */
+  }
+
   const ranked = await hybridRank({
     userId,
     candidates: pool,
-    seed: seedTrack || ({ id: trackId, title: '', artists: [], thumbnails: [], type: 'song' } as Track),
-    mode: 'radio',
+    seed,
+    mode: 'style',
   });
   return { tracks: ranked, related, radio };
 }
@@ -223,7 +341,7 @@ export async function radioForUser(
     userId,
     candidates,
     seed: seedTrack,
-    mode: cat.mode,
+    mode: cat.mode === 'radio' ? 'style' : cat.mode,
   });
   return {
     category: cat,
@@ -262,6 +380,19 @@ export async function homeReco(userId: string) {
 
   if (history.length) {
     shelves.push({ title: 'Écouté récemment', items: history.slice(0, 20) });
+  }
+
+  const recentPlaylists = getEntityHistory(userId, 12, 'playlist');
+  const recentAlbums = getEntityHistory(userId, 8, 'album');
+  const recentMixes = getEntityHistory(userId, 8, 'mix');
+  const recentCollections = [...recentPlaylists, ...recentAlbums, ...recentMixes]
+    .sort((a, b) => (b.playedAt || 0) - (a.playedAt || 0))
+    .slice(0, 16);
+  if (recentCollections.length) {
+    shelves.push({
+      title: 'Playlists & albums récents',
+      items: recentCollections as Track[],
+    });
   }
 
   // YTM « Favoris à redécouvrir » / Forgotten favorites

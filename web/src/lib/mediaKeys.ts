@@ -116,6 +116,28 @@ export function wireMediaSession() {
   });
 }
 
+function mediaArtwork(track: {
+  id: string;
+  thumbnails?: { url: string; width?: number; height?: number }[];
+}): MediaImage[] {
+  const out: MediaImage[] = [];
+  const seen = new Set<string>();
+  const push = (src: string, w: number, h: number) => {
+    if (!src || seen.has(src)) return;
+    seen.add(src);
+    out.push({ src, sizes: `${w}x${h}`, type: 'image/jpeg' });
+  };
+  const thumbs = [...(track.thumbnails || [])].sort((a, b) => (a.width || 0) - (b.width || 0));
+  for (const t of thumbs) {
+    push(t.url, t.width || 256, t.height || t.width || 256);
+  }
+  if (/^[a-zA-Z0-9_-]{11}$/.test(track.id)) {
+    push(`https://i.ytimg.com/vi/${track.id}/mqdefault.jpg`, 320, 180);
+    push(`https://i.ytimg.com/vi/${track.id}/hqdefault.jpg`, 480, 360);
+  }
+  return out;
+}
+
 export function updateMediaSessionMetadata() {
   if (!('mediaSession' in navigator)) return;
   const { current, progress, duration } = usePlayer.getState();
@@ -132,24 +154,12 @@ export function updateMediaSessionMetadata() {
     return;
   }
 
-  const artworkUrl =
-    current.thumbnails?.slice().sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url ||
-    (current.id && /^[a-zA-Z0-9_-]{11}$/.test(current.id)
-      ? `https://i.ytimg.com/vi/${current.id}/hqdefault.jpg`
-      : '');
-
   try {
     navigator.mediaSession.metadata = new MediaMetadata({
       title: current.title,
       artist: current.artists?.map((a) => a.name).filter(Boolean).join(', ') || 'Artiste',
       album: current.album?.name || 'YTMusic',
-      artwork: artworkUrl
-        ? [
-            { src: artworkUrl, sizes: '96x96', type: 'image/jpeg' },
-            { src: artworkUrl, sizes: '256x256', type: 'image/jpeg' },
-            { src: artworkUrl, sizes: '512x512', type: 'image/jpeg' },
-          ]
-        : [],
+      artwork: mediaArtwork(current),
     });
     navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
     const dur = Number.isFinite(duration) && duration > 0 ? duration : audio?.duration || 0;
@@ -158,7 +168,7 @@ export function updateMediaSessionMetadata() {
       navigator.mediaSession.setPositionState({
         duration: dur,
         position: Math.min(Math.max(0, pos), dur),
-        playbackRate: 1,
+        playbackRate: audio?.playbackRate || 1,
       });
     }
   } catch {
@@ -365,16 +375,25 @@ export function installMediaKeys(): () => void {
 
   const keepAlive = window.setInterval(() => {
     if (!usePlayer.getState().current) return;
-    wireMediaSession();
     syncPlayingFromAudio();
     try {
       const audio = audioEl();
       const playing = audio ? !audio.paused && !audio.ended : usePlayer.getState().isPlaying;
       navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+      const { progress, duration } = usePlayer.getState();
+      const dur = duration || audio?.duration || 0;
+      const pos = audio?.currentTime ?? progress;
+      if (dur > 0 && Number.isFinite(pos)) {
+        navigator.mediaSession.setPositionState({
+          duration: dur,
+          position: Math.min(Math.max(0, pos), dur),
+          playbackRate: audio?.playbackRate || 1,
+        });
+      }
     } catch {
       /* ignore */
     }
-  }, 5000);
+  }, 12_000);
 
   let attached: HTMLAudioElement | null = null;
   const audioListeners: Array<[string, EventListener]> = [];
@@ -391,25 +410,9 @@ export function installMediaKeys(): () => void {
       wireMediaSession();
       updateMediaSessionMetadata();
     };
-    for (const ev of ['play', 'playing', 'pause', 'ended', 'loadedmetadata', 'timeupdate'] as const) {
-      const fn: EventListener =
-        ev === 'timeupdate'
-          ? () => {
-              const { progress, duration } = usePlayer.getState();
-              if (!duration) return;
-              try {
-                navigator.mediaSession.setPositionState({
-                  duration,
-                  position: Math.min(Math.max(0, progress || el.currentTime), duration),
-                  playbackRate: 1,
-                });
-              } catch {
-                /* ignore */
-              }
-            }
-          : bump;
-      el.addEventListener(ev, fn);
-      audioListeners.push([ev, fn]);
+    for (const ev of ['play', 'playing', 'pause', 'ended', 'loadedmetadata'] as const) {
+      el.addEventListener(ev, bump);
+      audioListeners.push([ev, bump]);
     }
     bump();
   };

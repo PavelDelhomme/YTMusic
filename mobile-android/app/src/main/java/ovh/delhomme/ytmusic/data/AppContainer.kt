@@ -30,6 +30,29 @@ class AppContainer(context: Context) {
         }
     }
 
+    private val devicePrefs by lazy {
+        appContext.getSharedPreferences("ytm_device", Context.MODE_PRIVATE)
+    }
+
+    /** Sync lecture multi-appareils (publier + recevoir). Défaut false = file locale. */
+    fun receiveRemoteSync(): Boolean {
+        // Migration one-shot : lectures indépendantes par défaut
+        if (!devicePrefs.getBoolean("playback_sync_independent_v1", false)) {
+            devicePrefs.edit()
+                .putBoolean("receive_remote_sync", false)
+                .putBoolean("playback_sync_independent_v1", true)
+                .apply()
+        }
+        return devicePrefs.getBoolean("receive_remote_sync", false)
+    }
+
+    fun setReceiveRemoteSync(on: Boolean) {
+        devicePrefs.edit()
+            .putBoolean("receive_remote_sync", on)
+            .putBoolean("playback_sync_independent_v1", true)
+            .apply()
+    }
+
     /** Base API sans slash final (override prefs > BuildConfig). */
     fun resolvedApiBase(): String {
         val override = apiPrefs.getString("base_url", null)?.trim()?.trimEnd('/')

@@ -1,5 +1,6 @@
 package ovh.delhomme.ytmusic.ui.search
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,7 +13,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -27,6 +31,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -50,6 +55,7 @@ data class SearchUiState(
     val loading: Boolean = false,
     val error: String? = null,
     val sections: List<SearchSection> = emptyList(),
+    val recent: List<String> = emptyList(),
 )
 
 private val FILTERS = listOf(
@@ -66,6 +72,35 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
     val state: StateFlow<SearchUiState> = _state.asStateFlow()
     private var job: Job? = null
 
+    init {
+        loadRecent()
+    }
+
+    fun loadRecent() {
+        viewModelScope.launch {
+            val recent = runCatching {
+                container.ensureFreshToken()
+                val raw = container.api.searchHistory()["history"]
+                val list = raw as? List<*> ?: emptyList<Any>()
+                val seen = LinkedHashSet<String>()
+                val out = ArrayList<String>()
+                for (item in list) {
+                    val q = when (item) {
+                        is Map<*, *> -> item["query"]?.toString()?.trim().orEmpty()
+                        else -> ""
+                    }
+                    if (q.isBlank()) continue
+                    val key = q.lowercase()
+                    if (!seen.add(key)) continue
+                    out += q
+                    if (out.size >= 12) break
+                }
+                out
+            }.getOrDefault(emptyList())
+            _state.value = _state.value.copy(recent = recent)
+        }
+    }
+
     fun onQuery(q: String) {
         _state.value = _state.value.copy(query = q, error = null)
         scheduleSearch()
@@ -77,7 +112,21 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
         scheduleSearch()
     }
 
-    private fun scheduleSearch() {
+    /** Recherche confirmée (tap historique / soumission) → enregistre l’historique serveur. */
+    fun commitSearch(q: String) {
+        val query = q.trim()
+        if (query.length < 2) return
+        _state.value = _state.value.copy(query = query, error = null)
+        viewModelScope.launch {
+            runCatching {
+                container.api.recordSearchHistory(mapOf("query" to query))
+            }
+            loadRecent()
+        }
+        scheduleSearch(recordLive = false)
+    }
+
+    private fun scheduleSearch(recordLive: Boolean = true) {
         job?.cancel()
         val q = _state.value.query
         if (q.trim().length < 2) {
@@ -94,8 +143,8 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
             try {
                 container.ensureFreshToken()
                 // Live typing : ne pas polluer l’historique (préfixes Keny / Keny Ar…)
-                val res = container.api.search(currentQ, currentFilter, noHistory = "1")
-                // Ignore si l’utilisateur a déjà changé la requête
+                val noHist = if (recordLive) "1" else null
+                val res = container.api.search(currentQ, currentFilter, noHistory = noHist)
                 if (_state.value.query.trim() != currentQ || _state.value.filter != currentFilter) {
                     return@launch
                 }
@@ -162,6 +211,10 @@ fun SearchScreen(
             placeholder = { Text("Titres, artistes, albums…") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             shape = RoundedCornerShape(12.dp),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(
+                onSearch = { vm.commitSearch(state.query) },
+            ),
         )
         Row(
             Modifier
@@ -194,11 +247,41 @@ fun SearchScreen(
                 )
             }
             state.query.length < 2 -> {
-                Text(
-                    "Cherche un titre ou un artiste — ex. « Poto Demi Portion ».",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(24.dp),
-                )
+                if (state.recent.isEmpty()) {
+                    Text(
+                        "Cherche un titre ou un artiste — ex. « Poto Demi Portion ».",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(24.dp),
+                    )
+                } else {
+                    LazyColumn(contentPadding = PaddingValues(bottom = 24.dp, top = 8.dp)) {
+                        item {
+                            Text(
+                                "Récentes",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                        items(state.recent, key = { it }) { q ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { vm.commitSearch(q) }
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.History,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(q, style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                }
             }
             !state.loading && state.sections.isEmpty() -> {
                 Text(

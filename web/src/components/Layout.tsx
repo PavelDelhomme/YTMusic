@@ -263,12 +263,22 @@ export function Layout() {
     };
   }, [refresh]);
 
+  const receiveRemoteSync = useSession((s) => s.receiveRemoteSync);
+
   useEffect(() => {
+    if (!receiveRemoteSync) return;
     if (!remoteState || isActivePlayer) return;
     if (remoteState.updatedAt && remoteState.updatedAt <= lastRemoteAt.current) return;
     lastRemoteAt.current = remoteState.updatedAt || Date.now();
     void applyRemoteState(remoteState, false);
-  }, [remoteState, isActivePlayer, applyRemoteState]);
+  }, [remoteState, isActivePlayer, applyRemoteState, receiveRemoteSync]);
+
+  // Activation sync → appliquer une fois l’état distant courant
+  useEffect(() => {
+    if (!receiveRemoteSync || isActivePlayer || !remoteState) return;
+    lastRemoteAt.current = remoteState.updatedAt || Date.now();
+    void applyRemoteState(remoteState, false);
+  }, [receiveRemoteSync]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isGuest = !user || user.isGuest || user.email.includes('@local.ytmusic');
   const allowGuestPage = isVerifyRoute;
@@ -592,7 +602,7 @@ export function Layout() {
             )}
             {authLoaded && (!isGuest || allowGuestPage) && (
               <>
-                {!isActivePlayer && !allowGuestPage && (
+                {!isActivePlayer && receiveRemoteSync && !allowGuestPage && (
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-yt-red/30 bg-yt-red/10 px-4 py-2 text-sm">
                     <span>La musique joue ailleurs — clique Lecture pour écouter ici.</span>
                     <button
@@ -689,7 +699,7 @@ export function Layout() {
 
       <audio
         ref={audioRef}
-        preload="metadata"
+        preload="auto"
         playsInline
         // crossOrigin nécessaire pour Web Audio EQ sur streams proxifiés
         crossOrigin="anonymous"

@@ -20,7 +20,7 @@ function shuffleTracks(tracks: Track[]) {
 }
 
 export function LibraryPage() {
-  const { songs, liked, playlists, history, albums, artists, mixes, likedPlaylists, createPlaylist, deletePlaylist, hasMix } =
+  const { songs, liked, playlists, history, recentEntities, albums, artists, mixes, likedPlaylists, createPlaylist, deletePlaylist, hasMix } =
     useLibrary();
   const playQueue = usePlayer((s) => s.playQueue);
   const openActions = useItemActions((s) => s.open);
@@ -127,12 +127,27 @@ export function LibraryPage() {
       {tab === 'history' && (
         <div>
           <p className="mb-4 text-sm text-yt-muted">
-            Tous les titres démarrés, même si tu n’as pas tout écouté.
+            Titres démarrés et collections lancées récemment.
           </p>
+          {recentEntities.length > 0 && (
+            <section className="mb-8">
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-yt-muted">
+                Playlists & albums récents
+              </h2>
+              <div className="shelf-scroll">
+                {recentEntities.map((item) => (
+                  <MediaCard key={`ent-${item.type}-${item.id}`} item={item} />
+                ))}
+              </div>
+            </section>
+          )}
           {history.length === 0 ? (
             <p className="text-yt-muted">L&apos;historique apparaîtra dès que tu lances un titre.</p>
           ) : (
             <>
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-yt-muted">
+                Titres
+              </h2>
               <div className="mb-4 flex flex-wrap gap-2">
                 <button
                   type="button"

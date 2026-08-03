@@ -1,6 +1,16 @@
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Innertube, UniversalCache, ClientType, YTNodes, Parser } from 'youtubei.js';
+import { Innertube, UniversalCache, ClientType, YTNodes, Parser, Log } from 'youtubei.js';
+
+// youtubei.js loggue massivement des Type mismatch (WatchNext / Message) → pollue make logs
+try {
+  Log.setLevel(Log.Level.ERROR);
+  Parser.setParserErrorHandler(() => {
+    /* ignore mismatches non fatals */
+  });
+} catch {
+  /* versions sans setParserErrorHandler */
+}
 import {
   asText,
   extractThumbs,
@@ -658,7 +668,28 @@ export async function searchSuggestions(query: string): Promise<string[]> {
   return out;
 }
 
-export async function getTrack(videoId: string) {
+export async function getTrack(videoId: string, opts?: { light?: boolean }) {
+  const light = opts?.light === true;
+  const cacheKey = light ? `L:${videoId}` : videoId;
+  const cached = trackMetaCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < TRACK_META_TTL_MS) {
+    return { track: cached.track };
+  }
+  const value = await fetchTrackMeta(videoId, light);
+  trackMetaCache.set(cacheKey, { track: value.track, at: Date.now() });
+  while (trackMetaCache.size > TRACK_META_MAX) {
+    const first = trackMetaCache.keys().next().value;
+    if (first === undefined) break;
+    trackMetaCache.delete(first);
+  }
+  return value;
+}
+
+const TRACK_META_TTL_MS = 20 * 60 * 1000;
+const TRACK_META_MAX = 180;
+const trackMetaCache = new Map<string, { track: Track; at: number }>();
+
+async function fetchTrackMeta(videoId: string, light = false) {
   const innertube = await getYT();
   const info = await innertube.music.getInfo(videoId);
   const basic = (info as any).basic_info || {};
@@ -681,8 +712,7 @@ export async function getTrack(videoId: string) {
     };
   }
 
-  // Enrich missing artist IDs / album via up-next when possible
-  if ((artists.length && artists.some((a) => !a.id)) || !album?.id) {
+  if (!light && ((artists.length && artists.some((a) => !a.id)) || !album?.id)) {
     try {
       const up = await innertube.music.getUpNext(videoId, true);
       const first = ((up as any).contents || [])
@@ -703,17 +733,18 @@ export async function getTrack(videoId: string) {
     }
   }
 
-  // Last resort: search artist name to resolve UC id
-  for (let i = 0; i < artists.length; i++) {
-    if (artists[i].id) continue;
-    try {
-      const found = await search(artists[i].name, 'artist');
-      const hit = found.artists.find(
-        (a) => a.title.toLowerCase() === artists[i].name.toLowerCase() || a.id.startsWith('UC'),
-      );
-      if (hit?.id?.startsWith('UC')) artists[i] = { name: artists[i].name, id: hit.id };
-    } catch {
-      /* ignore */
+  if (!light) {
+    for (let i = 0; i < artists.length; i++) {
+      if (artists[i].id) continue;
+      try {
+        const found = await search(artists[i].name, 'artist');
+        const hit = found.artists.find(
+          (a) => a.title.toLowerCase() === artists[i].name.toLowerCase() || a.id.startsWith('UC'),
+        );
+        if (hit?.id?.startsWith('UC')) artists[i] = { name: artists[i].name, id: hit.id };
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -736,7 +767,7 @@ export async function getTrack(videoId: string) {
     type: 'song',
   };
 
-  return { track, info };
+  return light ? { track } : { track, info };
 }
 
 export async function getUpNext(videoId: string): Promise<Track[]> {
@@ -952,37 +983,140 @@ export async function getArtistSongs(
   return { artist: meta, tracks: tracks.slice(0, limit) };
 }
 
+const LYRICS_CACHE_MAX = 400;
+const lyricsCache = new Map<
+  string,
+  { lyrics: string | null; timed: { startMs: number; text: string }[] | null; at: number }
+>();
+
+function putLyricsCache(
+  videoId: string,
+  result: { lyrics: string | null; timed: { startMs: number; text: string }[] | null },
+) {
+  lyricsCache.set(videoId, { ...result, at: Date.now() });
+  while (lyricsCache.size > LYRICS_CACHE_MAX) {
+    const first = lyricsCache.keys().next().value;
+    if (first === undefined) break;
+    lyricsCache.delete(first);
+  }
+}
+
+function parseLrcBlock(raw: string): { startMs: number; text: string }[] {
+  const out: { startMs: number; text: string }[] = [];
+  const re = /^\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?]\s*(.*)$/;
+  for (const row of raw.split(/\r?\n/)) {
+    const m = row.trim().match(re);
+    if (!m) continue;
+    const min = Number(m[1]);
+    const sec = Number(m[2]);
+    const frac = m[3]
+      ? m[3].length <= 2
+        ? Number(m[3].padEnd(2, '0')) * 10
+        : Number(m[3].padEnd(3, '0').slice(0, 3))
+      : 0;
+    const text = (m[4] || '').trim();
+    if (!text) continue;
+    out.push({ startMs: (min * 60 + sec) * 1000 + frac, text });
+  }
+  return out;
+}
+
+async function fetchLrclibTimed(artist: string, title: string, durationSec?: number) {
+  if (!artist.trim() || !title.trim()) return null;
+  const params = new URLSearchParams({
+    artist_name: artist.slice(0, 120),
+    track_name: title.slice(0, 160),
+  });
+  if (durationSec && durationSec > 0) params.set('duration', String(Math.round(durationSec)));
+  const ctrl = AbortSignal.timeout(4500);
+  const res = await fetch(`https://lrclib.net/api/get?${params}`, {
+    signal: ctrl,
+    headers: { 'User-Agent': 'YTMusic/1.0 (self-hosted)' },
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { syncedLyrics?: string | null; plainLyrics?: string | null };
+  const synced = data.syncedLyrics?.trim();
+  if (synced) {
+    const timed = parseLrcBlock(synced);
+    if (timed.length) return { lyrics: timed.map((l) => l.text).join('\n'), timed };
+  }
+  const plain = data.plainLyrics?.trim();
+  if (plain) return { lyrics: plain, timed: null as { startMs: number; text: string }[] | null };
+  return null;
+}
+
 export async function getLyrics(videoId: string): Promise<{
   lyrics: string | null;
   timed: { startMs: number; text: string }[] | null;
 }> {
+  const cached = lyricsCache.get(videoId);
+  if (cached && Date.now() - cached.at < 6 * 60 * 60 * 1000) {
+    return { lyrics: cached.lyrics, timed: cached.timed };
+  }
+
   const innertube = await getYT();
+  let text: string | null = null;
+  let timed: { startMs: number; text: string }[] | null = null;
+
   try {
     const lyrics = await innertube.music.getLyrics(videoId);
-    if (!lyrics) return { lyrics: null, timed: null };
-    const anyL = lyrics as any;
-    const text = String(anyL.description?.text || anyL.description || anyL.lyrics?.text || '');
-    const timedSrc =
-      anyL.lyrics?.lines ||
-      anyL.timed_lyrics ||
-      anyL.timedLyrics ||
-      anyL.contents?.timed_lyrics?.lines ||
-      [];
-    const timed: { startMs: number; text: string }[] = [];
-    if (Array.isArray(timedSrc)) {
-      for (const line of timedSrc) {
-        const startMs = Number(line.start_time_ms ?? line.startMs ?? line.start_ms ?? line.tStartMs ?? NaN);
-        const lineText = String(line.text || line.lyric_line || line.snippet?.text || '').trim();
-        if (Number.isFinite(startMs) && lineText) timed.push({ startMs, text: lineText });
+    if (lyrics) {
+      const anyL = lyrics as any;
+      text = String(anyL.description?.text || anyL.description || anyL.lyrics?.text || '') || null;
+      const timedSrc =
+        anyL.lyrics?.lines ||
+        anyL.timed_lyrics ||
+        anyL.timedLyrics ||
+        anyL.contents?.timed_lyrics?.lines ||
+        [];
+      const parsed: { startMs: number; text: string }[] = [];
+      if (Array.isArray(timedSrc)) {
+        for (const line of timedSrc) {
+          const startMs = Number(line.start_time_ms ?? line.startMs ?? line.start_ms ?? line.tStartMs ?? NaN);
+          const lineText = String(line.text || line.lyric_line || line.snippet?.text || '').trim();
+          if (Number.isFinite(startMs) && lineText) parsed.push({ startMs, text: lineText });
+        }
       }
+      if (parsed.length) timed = parsed;
+      if (!text && timed?.length) text = timed.map((l) => l.text).join('\n');
     }
-    return {
-      lyrics: text || (timed.length ? timed.map((l) => l.text).join('\n') : null),
-      timed: timed.length ? timed : null,
-    };
   } catch {
-    return { lyrics: null, timed: null };
+    /* fallback LRCLIB */
   }
+
+  // Pas de timed YouTube → LRCLIB (sync style YTM)
+  if (!timed?.length) {
+    try {
+      const meta = await getTrack(videoId, { light: true }).catch(() => null);
+      const title = meta?.track?.title || '';
+      const artist =
+        meta?.track?.artists?.map((a) => a.name).filter(Boolean).join(' ') ||
+        meta?.track?.artists?.[0]?.name ||
+        '';
+      const durationSec =
+        typeof meta?.track?.durationSeconds === 'number'
+          ? meta.track.durationSeconds
+          : undefined;
+      const ext = await fetchLrclibTimed(artist, title, durationSec);
+      if (ext) {
+        if (ext.timed?.length) timed = ext.timed;
+        if (!text && ext.lyrics) text = ext.lyrics;
+        else if (ext.lyrics && !timed?.length) text = text || ext.lyrics;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Texte LRC brut → timed
+  if (!timed?.length && text) {
+    const fromText = parseLrcBlock(text);
+    if (fromText.length >= 3) timed = fromText;
+  }
+
+  const result = { lyrics: text, timed: timed?.length ? timed : null };
+  putLyricsCache(videoId, result);
+  return result;
 }
 
 export async function getArtist(artistId: string): Promise<{

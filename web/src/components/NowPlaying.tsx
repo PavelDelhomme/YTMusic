@@ -14,6 +14,9 @@ const QUEUE_MAX = 100;
 
 type LyricLine = { t: number; text: string };
 
+/** Avance légère : la ligne s’allume juste avant le chant (feel YTM). */
+const LYRIC_LEAD_SEC = 0.28;
+
 /** LRC uniquement — pas de faux timings sur texte brut (ça décale / n’arrête pas). */
 function parseLrcLines(raw: string | null): LyricLine[] {
   if (!raw?.trim()) return [];
@@ -30,7 +33,7 @@ function parseLrcLines(raw: string | null): LyricLine[] {
   return timed.filter((l) => l.text.trim());
 }
 
-function SyncedLyrics({
+export function SyncedLyrics({
   text,
   timed,
 }: {
@@ -39,6 +42,7 @@ function SyncedLyrics({
 }) {
   const audioEl = usePlayer((s) => s.audioEl);
   const isPlaying = usePlayer((s) => s.isPlaying);
+  const seek = usePlayer((s) => s.seek);
   const [clock, setClock] = useState(0);
 
   const lines = useMemo(() => {
@@ -75,9 +79,10 @@ function SyncedLyrics({
 
   const activeIdx = useMemo(() => {
     if (!lines.length) return -1;
+    const t = clock + LYRIC_LEAD_SEC;
     let idx = 0;
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].t <= clock + 0.05) idx = i;
+      if (lines[i].t <= t) idx = i;
       else break;
     }
     return idx;
@@ -99,7 +104,7 @@ function SyncedLyrics({
   }
 
   return (
-    <div className="space-y-1.5 px-2 py-6 sm:px-4">
+    <div className="space-y-4 px-3 py-10 sm:px-6">
       {lines.map((line, i) => {
         const active = i === activeIdx;
         const past = i < activeIdx;
@@ -107,15 +112,25 @@ function SyncedLyrics({
           <p
             key={`${i}-${line.t}`}
             ref={active ? activeRef : undefined}
-            className={`text-base leading-8 transition-all duration-200 sm:text-[17px] sm:leading-9 ${
+            role="button"
+            tabIndex={0}
+            onClick={() => seek(Math.max(0, line.t))}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                seek(Math.max(0, line.t));
+              }
+            }}
+            className={`origin-left cursor-pointer transition-all duration-300 hover:text-white ${
               active
-                ? 'scale-[1.01] font-semibold text-white'
+                ? 'scale-100 py-1 text-3xl font-bold leading-tight text-white sm:text-4xl'
                 : past
-                  ? 'text-white/35'
-                  : 'text-[#c6c6c6]'
+                  ? 'text-base leading-7 text-white/25 sm:text-lg'
+                  : 'text-lg leading-8 text-[#9a9a9a] sm:text-xl sm:leading-9'
             }`}
+            title="Aller à cet instant"
           >
-            {line.text}
+            {line.text || '\u00a0'}
           </p>
         );
       })}
@@ -192,20 +207,27 @@ export function NowPlaying({
 
   useEffect(() => {
     if (!open || tab !== 'lyrics' || !current?.id) return;
+    let cancelled = false;
     setLyricsLoading(true);
-    setLyricsText(null);
-    setLyricsTimed(null);
+    // Ne pas vider tout de suite → évite flash « indisponible »
     void api
       .lyrics(current.id)
       .then((r) => {
+        if (cancelled) return;
         setLyricsText(r.lyrics || null);
         setLyricsTimed(r.timed || null);
       })
       .catch(() => {
+        if (cancelled) return;
         setLyricsText(null);
         setLyricsTimed(null);
       })
-      .finally(() => setLyricsLoading(false));
+      .finally(() => {
+        if (!cancelled) setLyricsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open, tab, current?.id]);
 
   // Charge l’URL vidéo progressive quand on bascule sur « Vidéo »
@@ -313,8 +335,19 @@ export function NowPlaying({
   };
 
   return (
-    <div className="fixed inset-0 z-[45] flex flex-col bg-[#030303] text-white animate-fade-up">
-      <div className="mx-auto grid min-h-0 w-full max-w-[1800px] flex-1 grid-cols-1 gap-3 overflow-hidden px-2 pb-[100px] pt-3 sm:px-4 md:grid-cols-[minmax(260px,0.85fr)_minmax(420px,1.25fr)] md:gap-8 md:px-6 lg:grid-cols-[minmax(280px,0.75fr)_minmax(520px,1.35fr)] lg:gap-10 lg:px-10 xl:px-14">
+    <div className="fixed inset-0 z-[45] flex flex-col overflow-hidden bg-[#030303] text-white animate-fade-up">
+      {/* Ambient blur YTM — derrière tout le contenu */}
+      {current && (
+        <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+          <img
+            src={thumb(current, 240) || undefined}
+            alt=""
+            className="absolute inset-0 h-full w-full scale-125 object-cover opacity-45 blur-3xl"
+          />
+          <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/75 to-[#030303]" />
+        </div>
+      )}
+      <div className="relative mx-auto grid min-h-0 w-full max-w-[1800px] flex-1 grid-cols-1 gap-3 overflow-hidden px-2 pb-[100px] pt-3 sm:px-4 md:grid-cols-[minmax(260px,0.85fr)_minmax(420px,1.25fr)] md:gap-8 md:px-6 lg:grid-cols-[minmax(280px,0.75fr)_minmax(520px,1.35fr)] lg:gap-10 lg:px-10 xl:px-14">
         <div className="flex min-h-0 flex-col items-center justify-center overflow-hidden">
           <div className="mb-4 flex rounded-full bg-[#1d1d1d] p-1 text-xs font-medium">
             <button

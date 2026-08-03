@@ -440,9 +440,25 @@ export function publishPlaybackState(
 
   const active = hub.activePlayerId;
   if (active && deviceId && active !== deviceId && !force) {
-    // Autre appareil actif : n’écrase pas la file entière ; accepte seulement progress léger
-    // si le publisher n’est pas le lecteur — refuse les gros patchs queue
-    if (Array.isArray(patch.queue) && patch.queue.length) {
+    // Soft take-over : l’appareil appuie play → devient actif (sinon Android refuse le claim)
+    if (patch.isPlaying === true) {
+      hub.activePlayerId = deviceId;
+      const soft = hub.softDevices.get(deviceId);
+      if (soft) soft.lastSeen = Date.now();
+      const d = hub.devices.get(deviceId);
+      if (d) d.lastSeen = Date.now();
+    } else if (Array.isArray(patch.queue) && patch.queue.length) {
+      // Autre appareil actif : n’écrase pas la file entière
+      // Accepte quand même progress/isPlaying sans queue
+      const { queue: _q, queueIndex: _i, current: _c, ...light } = patch as Partial<PlaybackState> & {
+        queue?: unknown;
+        queueIndex?: unknown;
+        current?: unknown;
+      };
+      if (typeof light.progress === 'number' || typeof light.isPlaying === 'boolean') {
+        setHubState(userId, hub, { ...light, updatedAt: incomingAt });
+        broadcast(hub, { type: 'state', state: hub.state, activePlayerId: hub.activePlayerId });
+      }
       return getHubPublic(userId);
     }
   }

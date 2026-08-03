@@ -108,6 +108,7 @@ export function getFullLibrary(userId: string) {
   const playlists = listPlaylists(userId);
 
   const history = getHistory(userId, 500);
+  const recentEntities = getEntityHistory(userId, 40);
 
   const downloaded = (
     db
@@ -127,6 +128,7 @@ export function getFullLibrary(userId: string) {
     mixes,
     playlists,
     history,
+    recentEntities,
     downloaded,
   };
 }
@@ -267,9 +269,10 @@ export function isMixSaved(userId: string, mixId: string) {
   );
 }
 
-export function addHistory(userId: string, track: Track) {
+export function addHistory(userId: string, track: Track, opts?: { bumpCount?: boolean }) {
   if (!track?.id) return;
   upsertTrack(track);
+  const bumpCount = opts?.bumpCount !== false;
   // Ensure play_count column
   try {
     db.exec('ALTER TABLE history ADD COLUMN play_count INTEGER DEFAULT 1');
@@ -280,14 +283,129 @@ export function addHistory(userId: string, track: Track) {
     .prepare('SELECT play_count FROM history WHERE user_id = ? AND track_id = ?')
     .get(userId, track.id) as { play_count: number } | undefined;
   if (existing) {
-    db.prepare(
-      `UPDATE history SET played_at = ?, play_count = COALESCE(play_count, 1) + 1 WHERE user_id = ? AND track_id = ?`,
-    ).run(Date.now(), userId, track.id);
+    if (bumpCount) {
+      db.prepare(
+        `UPDATE history SET played_at = ?, play_count = COALESCE(play_count, 1) + 1 WHERE user_id = ? AND track_id = ?`,
+      ).run(Date.now(), userId, track.id);
+    } else {
+      db.prepare(`UPDATE history SET played_at = ? WHERE user_id = ? AND track_id = ?`).run(
+        Date.now(),
+        userId,
+        track.id,
+      );
+    }
   } else {
     db.prepare(
       `INSERT INTO history (user_id, track_id, played_at, play_count) VALUES (?, ?, ?, 1)`,
     ).run(userId, track.id, Date.now());
   }
+}
+
+export type HistoryEntityKind = 'playlist' | 'album' | 'artist' | 'mix';
+
+export type HistoryEntity = Track & {
+  kind?: HistoryEntityKind;
+  playedAt?: number;
+  playCount?: number;
+};
+
+/** Playlist / album / mix / artiste lancé récemment. */
+export function recordEntityPlay(
+  userId: string,
+  entity: {
+    id: string;
+    kind: HistoryEntityKind;
+    title?: string;
+    name?: string;
+    thumbnails?: Track['thumbnails'];
+    artists?: Track['artists'];
+    type?: string;
+    covers?: string[];
+  },
+) {
+  const id = String(entity?.id || '').trim();
+  const kind = entity?.kind;
+  if (!id || !kind) return;
+  const title = String(entity.title || entity.name || id).trim() || id;
+  const type = entity.type || kind;
+  const payload = JSON.stringify({
+    id,
+    title,
+    name: title,
+    type,
+    kind,
+    artists: entity.artists || [],
+    thumbnails: entity.thumbnails || [],
+    covers: entity.covers,
+  });
+  const now = Date.now();
+  const existing = db
+    .prepare(
+      `SELECT play_count FROM entity_history WHERE user_id = ? AND kind = ? AND entity_id = ?`,
+    )
+    .get(userId, kind, id) as { play_count: number } | undefined;
+  if (existing) {
+    db.prepare(
+      `UPDATE entity_history SET played_at = ?, play_count = COALESCE(play_count, 1) + 1, payload = ?
+       WHERE user_id = ? AND kind = ? AND entity_id = ?`,
+    ).run(now, payload, userId, kind, id);
+  } else {
+    db.prepare(
+      `INSERT INTO entity_history (user_id, kind, entity_id, payload, played_at, play_count)
+       VALUES (?, ?, ?, ?, ?, 1)`,
+    ).run(userId, kind, id, payload, now);
+  }
+}
+
+export function getEntityHistory(userId: string, limit = 40, kind?: HistoryEntityKind): HistoryEntity[] {
+  const rows = kind
+    ? (db
+        .prepare(
+          `SELECT kind, entity_id, payload, played_at, play_count FROM entity_history
+           WHERE user_id = ? AND kind = ?
+           ORDER BY played_at DESC LIMIT ?`,
+        )
+        .all(userId, kind, limit) as {
+        kind: string;
+        entity_id: string;
+        payload: string;
+        played_at: number;
+        play_count: number;
+      }[])
+    : (db
+        .prepare(
+          `SELECT kind, entity_id, payload, played_at, play_count FROM entity_history
+           WHERE user_id = ?
+           ORDER BY played_at DESC LIMIT ?`,
+        )
+        .all(userId, limit) as {
+        kind: string;
+        entity_id: string;
+        payload: string;
+        played_at: number;
+        play_count: number;
+      }[]);
+
+  return rows.map((r) => {
+    let raw: Record<string, unknown> = {};
+    try {
+      raw = JSON.parse(r.payload) as Record<string, unknown>;
+    } catch {
+      /* ignore */
+    }
+    const title = String(raw.title || raw.name || r.entity_id);
+    return {
+      id: r.entity_id,
+      title,
+      type: String(raw.type || r.kind),
+      kind: r.kind as HistoryEntityKind,
+      artists: Array.isArray(raw.artists) ? (raw.artists as Track['artists']) : [],
+      thumbnails: Array.isArray(raw.thumbnails) ? (raw.thumbnails as Track['thumbnails']) : [],
+      playedAt: r.played_at,
+      playCount: r.play_count,
+      ...(raw.covers ? { covers: raw.covers } : {}),
+    } as HistoryEntity;
+  });
 }
 
 export function getTopListened(userId: string, limit = 30): Track[] {

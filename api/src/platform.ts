@@ -252,6 +252,15 @@ export function insertTelemetry(ev: {
     ev.batteryCharging == null ? null : ev.batteryCharging ? 1 : 0,
     ev.perf ? JSON.stringify(ev.perf) : null,
   );
+  // Prune opportuniste (~14 j)
+  if (Math.random() < 0.05) {
+    const cutoff = Date.now() - 14 * 24 * 3600 * 1000;
+    try {
+      db.prepare(`DELETE FROM telemetry_events WHERE created_at < ?`).run(cutoff);
+    } catch {
+      /* ignore */
+    }
+  }
   return id;
 }
 

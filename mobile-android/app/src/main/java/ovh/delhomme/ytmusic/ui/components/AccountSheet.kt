@@ -138,11 +138,10 @@ fun AccountSheet(
             AccountRow(
                 icon = { Icon(Icons.Default.Download, contentDescription = null) },
                 title = "Téléchargements",
-                subtitle = "Bientôt disponible",
+                subtitle = "Titres prêts hors ligne",
                 onClick = {
                     onDismiss()
                     onOpenDownloads()
-                    Toast.makeText(context, "Bientôt disponible", Toast.LENGTH_SHORT).show()
                 },
             )
             AccountRow(

@@ -23,6 +23,7 @@ data class PlayerUiState(
     val playing: Boolean = false,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
+    val bufferedMs: Long = 0L,
     val queueSize: Int = 0,
     val queueIndex: Int = 0,
     val queue: List<TrackDto> = emptyList(),
@@ -50,6 +51,8 @@ class PlayerController(
     private var pending: Pair<List<TrackDto>, Int>? = null
     private var pendingSeekMs: Long = 0L
     private var pendingAutoplay: Boolean = true
+    /** Intent utilisateur play/pause — empêche un flush pending de re-pauser après un 1er play. */
+    @Volatile private var userWantsPlaying: Boolean? = null
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -87,13 +90,30 @@ class PlayerController(
                 syncFrom(c)
                 pending?.let { (tracks, idx) ->
                     val seek = pendingSeekMs
-                    val auto = pendingAutoplay
+                    val auto = pendingAutoplay || userWantsPlaying == true
                     pending = null
                     pendingSeekMs = 0L
                     pendingAutoplay = true
-                    playNow(c, tracks, idx, autoplay = auto, startPositionMs = seek)
-                    if (!auto) c.pause()
-                    syncFrom(c)
+                    // Déjà démarré via Holder.player → sync seulement (évite double prepare)
+                    val exo = PlaybackService.Holder.player
+                    val alreadyPrepared =
+                        exo != null &&
+                            exo.mediaItemCount > 0 &&
+                            tracks.getOrNull(idx)?.id?.let { id ->
+                                exo.currentMediaItem?.mediaId == id ||
+                                    (0 until exo.mediaItemCount).any { i ->
+                                        exo.getMediaItemAt(i).mediaId == id
+                                    }
+                            } == true
+                    if (alreadyPrepared) {
+                        if (seek > 0L) runCatching { c.seekTo(seek) }
+                        if (!auto) c.pause() else c.play()
+                        syncFrom(c)
+                    } else {
+                        playNow(c, tracks, idx, autoplay = auto, startPositionMs = seek)
+                        if (!auto) c.pause() else c.play()
+                        syncFrom(c)
+                    }
                 }
             }
         }, MoreExecutors.directExecutor())
@@ -121,11 +141,15 @@ class PlayerController(
         warmAround(tracks, startIndex)
         val playable = tracks.filter { it.isPlayable() }
         this.userQueueEnd = (userQueueEnd ?: playable.size).coerceIn(0, playable.size)
+        userWantsPlaying = true
+        pendingAutoplay = true
         val c = controller
         if (c != null) {
             playNow(c, tracks, startIndex)
         } else {
             pending = tracks to startIndex
+            pendingSeekMs = 0L
+            pendingAutoplay = true
             PlaybackService.Holder.queue = playable
             PlaybackService.Holder.player?.let { exo ->
                 exo.playTracks(streamUrl, tracks, startIndex)
@@ -195,33 +219,44 @@ class PlayerController(
     fun toggle() {
         connect()
         val p = player() ?: run {
-            // Contrôleur pas encore prêt : bascule via ExoPlayer direct
             val exo = PlaybackService.Holder.player ?: return
             if (exo.isPlaying) {
+                userWantsPlaying = false
+                pendingAutoplay = false
                 exo.pause()
                 StreamPrefetcher.cancelIdle()
             } else {
+                userWantsPlaying = true
+                pendingAutoplay = true
                 exo.play()
             }
             syncFrom(exo)
             return
         }
         if (p.isPlaying) {
+            userWantsPlaying = false
+            pendingAutoplay = false
             p.pause()
             StreamPrefetcher.cancelIdle()
         } else {
+            userWantsPlaying = true
+            pendingAutoplay = true
             p.play()
         }
         syncFrom(p)
     }
 
     fun pause() {
+        userWantsPlaying = false
+        pendingAutoplay = false
         connect()
         player()?.pause() ?: PlaybackService.Holder.player?.pause()
         StreamPrefetcher.cancelIdle()
     }
 
     fun playResume() {
+        userWantsPlaying = true
+        pendingAutoplay = true
         connect()
         player()?.play() ?: PlaybackService.Holder.player?.play()
     }
@@ -323,7 +358,25 @@ class PlayerController(
     }
 
     fun seek(ms: Long) {
-        player()?.seekTo(ms.coerceAtLeast(0L))
+        val target = ms.coerceAtLeast(0L)
+        player()?.seekTo(target) ?: PlaybackService.Holder.player?.seekTo(target)
+        // Met à jour la timeline UI même en pause (sync multi-appareils)
+        _state.value = _state.value.copy(positionMs = target)
+    }
+
+    /** Position UI seule (miroir remote sans forcément seek Exo si non préparé). */
+    fun mirrorPosition(ms: Long, durationMs: Long = _state.value.durationMs) {
+        _state.value = _state.value.copy(
+            positionMs = ms.coerceAtLeast(0L),
+            durationMs = durationMs.coerceAtLeast(_state.value.durationMs),
+        )
+        val p = player() ?: PlaybackService.Holder.player
+        if (p != null && p.mediaItemCount > 0) {
+            val cur = p.currentPosition
+            if (kotlin.math.abs(cur - ms) > 1500L) {
+                p.seekTo(ms.coerceAtLeast(0L))
+            }
+        }
     }
 
     /** Restaure une file sync (autres appareils) + timecode, sans forcer le play. */
@@ -338,17 +391,23 @@ class PlayerController(
         if (tracks.isEmpty()) return
         if (title != null) queueTitle = title
         this.userQueueEnd = (userQueueEnd ?: tracks.size).coerceIn(0, tracks.size)
+        // Ne pas écraser un intent play utilisateur en cours
+        if (userWantsPlaying != true) {
+            userWantsPlaying = autoplay
+            pendingAutoplay = autoplay
+        }
         ensureService()
         connect()
         val c = controller ?: PlaybackService.Holder.player
         if (c != null) {
-            playNow(c, tracks, startIndex, autoplay = autoplay, startPositionMs = positionMs)
-            if (!autoplay) c.pause()
+            val auto = autoplay || userWantsPlaying == true
+            playNow(c, tracks, startIndex, autoplay = auto, startPositionMs = positionMs)
+            if (!auto) c.pause() else c.play()
             syncFrom(c)
         } else {
             pending = tracks to startIndex
             pendingSeekMs = positionMs
-            pendingAutoplay = autoplay
+            pendingAutoplay = autoplay || userWantsPlaying == true
         }
     }
 
@@ -591,6 +650,7 @@ class PlayerController(
             playing = player.isPlaying,
             positionMs = player.currentPosition.coerceAtLeast(0),
             durationMs = player.duration.coerceAtLeast(0),
+            bufferedMs = player.bufferedPosition.coerceAtLeast(0),
             queueSize = queue.size,
             queueIndex = idx.coerceIn(0, (queue.size - 1).coerceAtLeast(0)),
             queue = queue,

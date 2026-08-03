@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Cast, Check, Laptop, MonitorPlay, Smartphone, Tv } from 'lucide-react';
+import { Cast, Check, Laptop, Link2, Link2Off, MonitorPlay, Smartphone, Tv } from 'lucide-react';
 import { useSession } from '../store/session';
 import { usePlayer } from '../store/player';
 import { castToChromecast, isCastAvailable } from '../lib/cast';
@@ -13,8 +13,17 @@ function DeviceIcon({ type }: { type: string }) {
 }
 
 export function DevicePicker({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { devices, activePlayerId, deviceId, deviceName, setActive, transferTo, renameDevice } =
-    useSession();
+  const {
+    devices,
+    activePlayerId,
+    deviceId,
+    deviceName,
+    setActive,
+    transferTo,
+    renameDevice,
+    receiveRemoteSync,
+    setReceiveRemoteSync,
+  } = useSession();
   const player = usePlayer();
   const [name, setName] = useState(deviceName);
   const [castMsg, setCastMsg] = useState('');
@@ -56,6 +65,30 @@ export function DevicePicker({ open, onClose }: { open: boolean; onClose: () => 
             ? 'Pilote un PC, une TV ou un autre appareil connecté avec le même compte — file, play/pause, volume.'
             : 'Lance la musique sur un PC / TV et contrôle tout depuis le mobile (file, titres, volume…).'}
         </p>
+
+        <button
+          type="button"
+          onClick={() => setReceiveRemoteSync(!receiveRemoteSync)}
+          className={`mb-4 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition ${
+            receiveRemoteSync ? 'bg-yt-red/15 ring-1 ring-yt-red/40' : 'bg-yt-elevated hover:bg-yt-hover'
+          }`}
+        >
+          {receiveRemoteSync ? (
+            <Link2 className="h-4 w-4 shrink-0 text-yt-red" />
+          ) : (
+            <Link2Off className="h-4 w-4 shrink-0 text-yt-muted" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium">
+              {receiveRemoteSync ? 'Sync lecture activée' : 'Sync lecture désactivée'}
+            </div>
+            <div className="text-xs text-yt-muted">
+              {receiveRemoteSync
+                ? 'File, titre et position partagés entre tes appareils'
+                : 'Chaque appareil a sa propre file — le compte reste partagé'}
+            </div>
+          </div>
+        </button>
 
         <label className="mb-1 block text-xs text-yt-muted">Nom de cet appareil</label>
         <div className="mb-4 flex gap-2">

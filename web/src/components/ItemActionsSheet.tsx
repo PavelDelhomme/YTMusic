@@ -19,6 +19,8 @@ import {
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  Unlink,
+  Link2,
   User,
   X,
 } from 'lucide-react';
@@ -31,6 +33,7 @@ import { useItemActions } from '../store/itemActions';
 import { useLibrary } from '../store/library';
 import { usePins } from '../store/pins';
 import { usePlayer } from '../store/player';
+import { useSession } from '../store/session';
 import { ArtistLinks } from './ArtistLinks';
 import { CoverImage } from './CoverImage';
 
@@ -81,6 +84,8 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
   const refreshPins = usePins((s) => s.refresh);
   const sleepLabel = usePlayer((s) => s.sleepLabel);
   const setSleepTimer = usePlayer((s) => s.setSleepTimer);
+  const receiveRemoteSync = useSession((s) => s.receiveRemoteSync);
+  const setReceiveRemoteSync = useSession((s) => s.setReceiveRemoteSync);
   const [busy, setBusy] = useState(false);
   const [showPlaylists, setShowPlaylists] = useState(false);
   const [showSleep, setShowSleep] = useState(false);
@@ -521,6 +526,25 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
                 } catch {
                   /* ignore */
                 }
+              })
+            }
+          />
+
+          <Row
+            icon={receiveRemoteSync ? <Unlink className="h-4 w-4" /> : <Link2 className="h-4 w-4" />}
+            label={
+              receiveRemoteSync
+                ? 'Désactiver la sync lecture'
+                : 'Activer la sync lecture'
+            }
+            sub={
+              receiveRemoteSync
+                ? 'File et titre redeviennent locaux à cet appareil'
+                : 'Partager file / titre / position avec tes autres appareils'
+            }
+            onClick={() =>
+              after(() => {
+                setReceiveRemoteSync(!receiveRemoteSync);
               })
             }
           />
