@@ -139,10 +139,38 @@ export function AdminPage() {
           <h3 className="font-display text-lg font-semibold">Mise en production (depuis ce PC)</h3>
         </div>
         <p className="mb-3 text-sm text-yt-muted">
-          Un clic depuis <strong className="text-white">localhost</strong> : pousse{' '}
-          <code className="text-white">dev → prod</code> (image Docker GHCR), redeploy VPS{' '}
-          <strong className="text-white">sans webhook Pro</strong> (SSH / Access Token CE /
-          Watchtower), et/ou APK sur le VPS.
+          Guide pas-à-pas : <code className="text-white">DEPLOY.md</code>. Portainer CE ={' '}
+          <strong className="text-white">pas de webhook Pro</strong> → installe la stack{' '}
+          <code className="text-white">watchtower</code> une fois (
+          <code className="text-white">deploy/watchtower-compose.yml</code>).
+        </p>
+        <ol className="mb-4 list-decimal space-y-1 pl-5 text-sm text-yt-muted">
+          <li>
+            DNS A <code className="text-white">ytmusic</code> → IP VPS (
+            <code className="text-white">dig +short ytmusic.delhomme.ovh</code>)
+          </li>
+          <li>
+            Portainer : stack <code className="text-white">ytmusic</code> = coller{' '}
+            <code className="text-white">deploy/portainer-template.yml</code> + env (
+            <code className="text-white">JWT_SECRET</code>, <code className="text-white">SMTP_PASS</code>,
+            emails…)
+          </li>
+          <li>
+            Portainer : stack <code className="text-white">watchtower</code> = coller{' '}
+            <code className="text-white">deploy/watchtower-compose.yml</code>
+          </li>
+          <li>
+            NPM : <code className="text-white">ytmusic.delhomme.ovh</code> →{' '}
+            <code className="text-white">http://ytmusic:8787</code> + SSL +{' '}
+            <strong className="text-white">Websockets ON</strong>
+          </li>
+          <li>
+            Ensuite seulement : boutons ci-dessous (Web / APK). Working tree sale → stash auto.
+          </li>
+        </ol>
+        <p className="mb-3 text-sm text-yt-muted">
+          Un clic : pousse <code className="text-white">dev → prod</code> (image GHCR), redeploy VPS
+          via Watchtower / SSH / Access Token CE, et/ou APK sur le VPS.
         </p>
         <dl className="mb-4 grid gap-2 text-sm sm:grid-cols-2">
           <div>

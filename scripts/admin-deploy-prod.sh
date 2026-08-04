@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # Déploiement depuis Admin local (APP_ENV=local uniquement).
 # Usage :
-#   bash scripts/admin-deploy-prod.sh web
-#   bash scripts/admin-deploy-prod.sh apk
-#   bash scripts/admin-deploy-prod.sh all
+#   bash scripts/admin-deploy-prod.sh web|apk|all
 #
 # Redeploy VPS : SSH | Portainer Access Token (CE) | Watchtower — PAS de webhook Pro.
 set -euo pipefail
@@ -13,6 +11,7 @@ cd "$ROOT"
 MODE="${1:-web}"
 PROD_URL="${DEPLOY_URL:-${PROD_APP_URL:-https://ytmusic.delhomme.ovh}}"
 PROD_URL="${PROD_URL%/}"
+STASHED=0
 
 if [[ -f "$ROOT/.env" ]]; then
   set -a
@@ -27,7 +26,52 @@ if [[ "$APP_ENV_NOW" != "local" && "${ALLOW_REMOTE_ADMIN_DEPLOY:-0}" != "1" ]]; 
   exit 2
 fi
 
+cleanup_stash() {
+  if [[ "$STASHED" == "1" ]]; then
+    echo "==> Restauration du stash local…"
+    git stash pop || echo "    (stash pop conflictuel — vérifie git stash list)"
+  fi
+}
+trap cleanup_stash EXIT
+
+ensure_clean_or_stash() {
+  if [[ -z "$(git status --porcelain)" ]]; then
+    return 0
+  fi
+  echo "==> Working tree sale — stash automatique avant bascule de branche"
+  git status --short
+  git stash push -u -m "admin-deploy-auto $(date -Iseconds)"
+  STASHED=1
+}
+
+# Pousse la branche courante + synchronise origin/dev avant de merger dans prod
+sync_dev_from_current() {
+  local current
+  current="$(git branch --show-current)"
+  echo "==> Push branche courante ($current)…"
+  git push -u origin HEAD
+
+  if [[ "$current" != "dev" && "$current" != "prod" ]]; then
+    echo "==> Merge $current → origin/dev…"
+    git fetch origin
+    git checkout dev
+    git pull origin dev
+    git merge "origin/$current" -m "merge: $current → dev (admin-deploy)"
+    git push origin dev
+    git checkout "$current"
+    if [[ "$STASHED" == "1" ]]; then
+      # rester sur la branche de travail ; stash restauré en EXIT
+      :
+    fi
+  elif [[ "$current" == "dev" ]]; then
+    git push origin dev
+  fi
+}
+
 deploy_web() {
+  ensure_clean_or_stash
+  sync_dev_from_current
+
   echo "==> Web : merge origin/dev → prod + push (image GHCR)"
   git fetch origin
   local current
