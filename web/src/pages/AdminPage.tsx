@@ -45,6 +45,9 @@ export function AdminPage() {
   const [deployBusy, setDeployBusy] = useState(false);
   const [deployMsg, setDeployMsg] = useState('');
   const [repairMsg, setRepairMsg] = useState('');
+  const [ytCookie, setYtCookie] = useState('');
+  const [ytCookieMsg, setYtCookieMsg] = useState('');
+  const [ytCookieBusy, setYtCookieBusy] = useState(false);
 
   const refresh = useCallback(() => {
     void api
@@ -283,6 +286,86 @@ export function AdminPage() {
           <code className="text-white">DEPLOY_SSH</code>. Détail :{' '}
           <code className="text-white">DEPLOY.md</code>.
         </p>
+      </section>
+
+      <section className="mb-6 rounded-2xl border border-amber-500/40 bg-yt-surface p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <Radar className="h-5 w-5 text-amber-400" />
+          <h3 className="font-display text-lg font-semibold">Cookies YouTube (stream VPS)</h3>
+        </div>
+        <p className="mb-3 text-sm text-yt-muted">
+          Sur un VPS, YouTube bloque souvent le stream (« Sign in to confirm you’re not a bot »).
+          Colle le header <code className="text-white">Cookie</code> depuis{' '}
+          <code className="text-white">youtube.com</code> (navigateur connecté) pour débloquer la
+          lecture. Fichier stocké dans le volume Docker (
+          <code className="text-white">/app/data/youtube-cookies.header</code>).
+        </p>
+        <dl className="mb-3 grid gap-2 text-sm sm:grid-cols-2">
+          <div>
+            <dt className="text-xs text-yt-muted">État</dt>
+            <dd className="font-medium">
+              {status?.youtubeCookies?.configured ? 'Configuré ✓' : 'Absent — stream KO sur VPS'}
+              {status?.youtubeCookies?.source ? ` · ${status.youtubeCookies.source}` : ''}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-yt-muted">Hint</dt>
+            <dd className="text-xs text-yt-muted">{status?.youtubeCookies?.hint || '…'}</dd>
+          </div>
+        </dl>
+        <ol className="mb-3 list-decimal space-y-1 pl-5 text-xs text-yt-muted">
+          <li>Chrome / Firefox → fenêtre privée → connecte-toi sur youtube.com</li>
+          <li>F12 → Network → une requête vers youtube.com → Request Headers → Cookie</li>
+          <li>Colle ci-dessous → Enregistrer (puis Admin prod ou local selon où tu es)</li>
+        </ol>
+        <textarea
+          value={ytCookie}
+          onChange={(e) => setYtCookie(e.target.value)}
+          rows={3}
+          placeholder="Cookie: VISITOR_INFO1_LIVE=…; SID=…; …"
+          className="mb-3 w-full rounded-xl border border-yt-border bg-yt-bg px-3 py-2 font-mono text-xs text-white"
+        />
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={ytCookieBusy || ytCookie.trim().length < 40}
+            className="rounded-full bg-yt-red px-4 py-2 text-sm font-medium disabled:opacity-50"
+            onClick={() => {
+              setYtCookieBusy(true);
+              setYtCookieMsg('');
+              void api
+                .adminYoutubeCookiesSave(ytCookie)
+                .then((r) => {
+                  setYtCookieMsg(r.configured ? 'Cookies enregistrés — reteste la lecture' : 'OK');
+                  setYtCookie('');
+                  refresh();
+                })
+                .catch((e) => setYtCookieMsg(String(e.message || e)))
+                .finally(() => setYtCookieBusy(false));
+            }}
+          >
+            {ytCookieBusy ? '…' : 'Enregistrer cookies'}
+          </button>
+          <button
+            type="button"
+            disabled={ytCookieBusy}
+            className="rounded-full border border-yt-border px-4 py-2 text-sm text-yt-muted hover:text-white"
+            onClick={() => {
+              setYtCookieBusy(true);
+              void api
+                .adminYoutubeCookiesClear()
+                .then(() => {
+                  setYtCookieMsg('Cookies effacés');
+                  refresh();
+                })
+                .catch((e) => setYtCookieMsg(String(e.message || e)))
+                .finally(() => setYtCookieBusy(false));
+            }}
+          >
+            Effacer
+          </button>
+        </div>
+        {ytCookieMsg && <p className="mt-3 text-sm text-yt-muted">{ytCookieMsg}</p>}
       </section>
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">

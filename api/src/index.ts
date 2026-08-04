@@ -33,6 +33,7 @@ import {
   getPlaylist,
   getArtistSongs,
   getMoodCategory,
+  resetYT,
 } from './yt.js';
 import {
   getFullLibrary,
@@ -82,6 +83,11 @@ import {
   startAdminDeploy,
   type DeployMode,
 } from './deployRemote.js';
+import {
+  clearYoutubeCookieHeader,
+  saveYoutubeCookieHeader,
+  youtubeCookiesStatus,
+} from './youtubeCookies.js';
 import {
   beginAuthentication,
   beginRegistration,
@@ -686,6 +692,7 @@ app.get('/api/admin/status', requireAdmin, (_req, res) => {
     env: getAppEnv(),
     telemetry: telemetryStats(),
     deploy: deployAdminHints(),
+    youtubeCookies: youtubeCookiesStatus(),
   });
 });
 
@@ -772,6 +779,28 @@ app.post('/api/admin/deploy', requireAdmin, (req, res) => {
   } catch (err) {
     res.status(400).json({ ok: false, error: String((err as Error).message || err), job: getDeployJob() });
   }
+});
+
+/** Cookies YouTube (anti-bot VPS) — header Cookie depuis DevTools. */
+app.get('/api/admin/youtube-cookies', requireAdmin, (_req, res) => {
+  res.json(youtubeCookiesStatus());
+});
+
+app.post('/api/admin/youtube-cookies', requireAdmin, (req, res) => {
+  try {
+    const cookie = String(req.body?.cookie || req.body?.cookies || '');
+    const status = saveYoutubeCookieHeader(cookie);
+    resetYT();
+    res.json({ ok: true, ...status });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: String((err as Error).message || err) });
+  }
+});
+
+app.delete('/api/admin/youtube-cookies', requireAdmin, (_req, res) => {
+  const status = clearYoutubeCookieHeader();
+  resetYT();
+  res.json({ ok: true, ...status });
 });
 
 function apkDownloadAuthorized(req: import('express').Request) {

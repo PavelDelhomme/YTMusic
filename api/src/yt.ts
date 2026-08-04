@@ -1,6 +1,7 @@
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Innertube, UniversalCache, ClientType, YTNodes, Parser, Log } from 'youtubei.js';
+import { resolveYoutubeCookieHeader, youtubeCookiesFingerprint, ytDlpCookieArgs } from './youtubeCookies.js';
 
 // youtubei.js loggue massivement des Type mismatch (WatchNext / Message) → pollue make logs
 try {
@@ -39,6 +40,28 @@ import type { AlbumMeta, ArtistMeta, PlaylistMeta, Shelf, Track } from './types.
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 let yt: Innertube | null = null;
+let ytCookieFp: string | null = null;
+
+export async function getYT(): Promise<Innertube> {
+  const fp = youtubeCookiesFingerprint();
+  if (yt && ytCookieFp === fp) return yt;
+  yt = null;
+  ytCookieFp = fp;
+  const cookie = resolveYoutubeCookieHeader();
+  yt = await Innertube.create({
+    cache: new UniversalCache(true, join(ROOT, 'data', 'yt-cache')),
+    generate_session_locally: true,
+    client_type: ClientType.WEB,
+    ...(cookie ? { cookie } : {}),
+  });
+  return yt;
+}
+
+/** Force recreate Innertube (après maj cookies Admin). */
+export function resetYT() {
+  yt = null;
+  ytCookieFp = null;
+}
 
 type AudioFormat = {
   url: string;
@@ -72,16 +95,6 @@ function formatDurationClock(totalSeconds: number): string {
   const ss = s.toString().padStart(2, '0');
   if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${ss}`;
   return `${m}:${ss}`;
-}
-
-export async function getYT(): Promise<Innertube> {
-  if (yt) return yt;
-  yt = await Innertube.create({
-    cache: new UniversalCache(true, join(ROOT, 'data', 'yt-cache')),
-    generate_session_locally: true,
-    client_type: ClientType.WEB,
-  });
-  return yt;
 }
 
 function shelvesFrom(sections: any[]): Shelf[] {
@@ -1313,6 +1326,7 @@ async function audioFormatViaYtDlp(videoId: string): Promise<AudioFormat> {
         '-g',
         '--no-playlist',
         '--no-warnings',
+        ...ytDlpCookieArgs(),
         `https://www.youtube.com/watch?v=${videoId}`,
       ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
@@ -1417,6 +1431,7 @@ async function videoFormatViaYtDlp(videoId: string): Promise<AudioFormat> {
         '-g',
         '--no-playlist',
         '--no-warnings',
+        ...ytDlpCookieArgs(),
         `https://www.youtube.com/watch?v=${videoId}`,
       ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
