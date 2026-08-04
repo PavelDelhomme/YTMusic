@@ -59,8 +59,20 @@ android {
         } else {
             rawApi
         }
-        val devEmail = rootEnv["SEED_EMAIL"] ?: rootEnv["VITE_DEV_EMAIL"] ?: ""
-        val devPassword = rootEnv["SEED_PASSWORD"] ?: rootEnv["VITE_DEV_PASSWORD"] ?: ""
+        // Jamais préremplir les secrets locaux quand l’APK pointe la prod / un HTTPS distant
+        val isRemoteApi = apiBase.startsWith("https://") &&
+            !apiBase.contains("127.0.0.1") &&
+            !apiBase.contains("localhost")
+        val devEmail = if (isRemoteApi) {
+            ""
+        } else {
+            rootEnv["SEED_EMAIL"] ?: rootEnv["VITE_DEV_EMAIL"] ?: ""
+        }
+        val devPassword = if (isRemoteApi) {
+            ""
+        } else {
+            rootEnv["SEED_PASSWORD"] ?: rootEnv["VITE_DEV_PASSWORD"] ?: ""
+        }
         val androidOrigin = rootEnv["WEBAUTHN_ANDROID_ORIGINS"]
             ?.split(",")
             ?.firstOrNull()

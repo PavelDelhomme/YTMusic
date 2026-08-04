@@ -5,6 +5,7 @@ import { api } from '../api';
 import { useAuth } from '../store/auth';
 import { Fingerprint, KeyRound, Shield, Smartphone, Sparkles, Trash2 } from 'lucide-react';
 import type { User } from '../api';
+import { markLocalPasskeyReady } from '../lib/passkeyEnrollment';
 import { OnboardingWizard } from '../components/OnboardingWizard';
 
 function TwoFactorSection({ user, onUpdated }: { user: User; onUpdated: () => Promise<void> }) {
@@ -293,6 +294,7 @@ export function ProfilePage() {
                     const cred = await startRegistration({ optionsJSON: options });
                     const r = await api.passkeyRegisterVerify(cred, navigator.platform || 'Appareil');
                     setPasskeys(r.passkeys);
+                    markLocalPasskeyReady();
                     setMsg('Passkey enregistrée');
                   } catch (ex) {
                     setErr(String((ex as Error).message || ex));
