@@ -237,6 +237,15 @@ export function createUser(input: {
   return findUserById(id)!;
 }
 
+/** Met à jour le hash mot de passe (seed sync / reset admin). */
+export function updateUserPasswordHash(userId: string, passwordHash: string) {
+  db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?').run(
+    passwordHash,
+    Date.now(),
+    userId,
+  );
+}
+
 export function publicUser(u: UserRow) {
   const row = u as UserRow & {
     email_verified?: number;

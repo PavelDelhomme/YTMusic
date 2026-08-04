@@ -9,6 +9,7 @@ import {
   findUserById,
   publicUser,
   promoteAdminIfNeeded,
+  updateUserPasswordHash,
   type UserRow,
 } from './db.js';
 import { createEmailToken, createRefreshToken, markEmailVerified } from './platform.js';
@@ -316,4 +317,46 @@ export function authConfig() {
     allowRegister: authAllowRegister(),
     allowGuest: authAllowGuest(),
   };
+}
+
+/**
+ * Aligne le compte SEED_EMAIL sur SEED_PASSWORD (source de vérité env).
+ * Instance perso : évite « Identifiants invalides » quand le mdp Portainer ≠ inscription initiale.
+ * Désactiver avec AUTH_SEED_SYNC=0.
+ */
+export function syncSeedCredentials() {
+  const flag = (process.env.AUTH_SEED_SYNC || '1').trim().toLowerCase();
+  if (flag === '0' || flag === 'false' || flag === 'off') return;
+
+  const email = (process.env.SEED_EMAIL || process.env.VITE_DEV_EMAIL || '').trim().toLowerCase();
+  const password = (process.env.SEED_PASSWORD || process.env.VITE_DEV_PASSWORD || '').trim();
+  const name = (process.env.SEED_NAME || email.split('@')[0] || 'Admin').trim();
+  if (!email || !password || password.length < 6) return;
+
+  try {
+    assertEmailAllowed(email);
+  } catch {
+    return;
+  }
+
+  let user = findUserByEmail(email);
+  if (!user) {
+    user = createUser({
+      email,
+      name,
+      passwordHash: hashPassword(password),
+    });
+    promoteAdminIfNeeded(email);
+    console.log(`[auth] seed user créé: ${email}`);
+    return;
+  }
+
+  if (user.password_hash && verifyPassword(password, user.password_hash)) {
+    promoteAdminIfNeeded(email);
+    return;
+  }
+
+  updateUserPasswordHash(user.id, hashPassword(password));
+  promoteAdminIfNeeded(email);
+  console.log(`[auth] seed password synchronisé: ${email}`);
 }
