@@ -3,7 +3,7 @@ import { usePlayer } from '../store/player';
 import { TrackRow } from './TrackRow';
 import { SaveQueueSheet } from './SaveQueueSheet';
 import { SyncedLyrics } from './NowPlaying';
-import { ListMusic, Radio, Save, Sparkles, X } from 'lucide-react';
+import { ListMusic, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles, X } from 'lucide-react';
 
 type PanelTab = 'queue' | 'similar';
 
@@ -14,6 +14,8 @@ export function QueuePanel() {
   const queueIndex = usePlayer((s) => s.queueIndex);
   const userQueueEnd = usePlayer((s) => s.userQueueEnd);
   const autoplay = usePlayer((s) => s.autoplay);
+  const shuffle = usePlayer((s) => s.shuffle);
+  const repeat = usePlayer((s) => s.repeat);
   const lyrics = usePlayer((s) => s.lyrics);
   const lyricsTimed = usePlayer((s) => s.lyricsTimed);
   const related = usePlayer((s) => s.related);
@@ -21,10 +23,15 @@ export function QueuePanel() {
   const toggleQueue = usePlayer((s) => s.toggleQueue);
   const toggleLyrics = usePlayer((s) => s.toggleLyrics);
   const toggleAutoplay = usePlayer((s) => s.toggleAutoplay);
+  const toggleShuffle = usePlayer((s) => s.toggleShuffle);
+  const cycleRepeat = usePlayer((s) => s.cycleRepeat);
   const topUpAutoplay = usePlayer((s) => s.topUpAutoplay);
   const playAt = usePlayer((s) => s.playAt);
+  const clearPlayedFromQueue = usePlayer((s) => s.clearPlayedFromQueue);
   const appendRelated = usePlayer((s) => s.appendRelated);
   const loadRelated = usePlayer((s) => s.loadRelated);
+  const relatedLoading = usePlayer((s) => s.relatedLoading);
+  const relatedError = usePlayer((s) => s.relatedError);
   const play = usePlayer((s) => s.play);
   const [saveOpen, setSaveOpen] = useState(false);
   const [panelTab, setPanelTab] = useState<PanelTab>('queue');
@@ -76,16 +83,44 @@ export function QueuePanel() {
         </h3>
         <div className="flex shrink-0 items-center gap-1">
           {!showLyrics && panelTab === 'queue' && (
-            <button
-              type="button"
-              disabled={userTracks.length === 0}
-              onClick={() => setSaveOpen(true)}
-              className="inline-flex items-center gap-1 rounded-full bg-white/8 px-2.5 py-1.5 text-xs text-white hover:bg-white/14 disabled:opacity-40"
-              title="Enregistrer la file"
-            >
-              <Save className="h-3.5 w-3.5" />
-              Enregistrer
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={cycleRepeat}
+                title={
+                  repeat === 'off'
+                    ? 'Boucle désactivée'
+                    : repeat === 'all'
+                      ? 'Boucler toute la file'
+                      : 'Boucler le titre'
+                }
+                className={`flex h-8 w-8 items-center justify-center rounded-full ${
+                  repeat !== 'off' ? 'text-yt-red' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
+                }`}
+              >
+                {repeat === 'one' ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
+              </button>
+              <button
+                type="button"
+                onClick={toggleShuffle}
+                title={shuffle ? 'Aléatoire activé' : 'Aléatoire'}
+                className={`flex h-8 w-8 items-center justify-center rounded-full ${
+                  shuffle ? 'text-yt-red' : 'text-yt-muted hover:bg-yt-hover hover:text-white'
+                }`}
+              >
+                <Shuffle className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                disabled={userTracks.length === 0}
+                onClick={() => setSaveOpen(true)}
+                className="inline-flex items-center gap-1 rounded-full bg-white/8 px-2.5 py-1.5 text-xs text-white hover:bg-white/14 disabled:opacity-40"
+                title="Enregistrer la file"
+              >
+                <Save className="h-3.5 w-3.5" />
+                Enregistrer
+              </button>
+            </>
           )}
           {!showLyrics && panelTab === 'similar' && related.length > 0 && (
             <button
@@ -147,8 +182,23 @@ export function QueuePanel() {
                 Même style · mis à jour avec « {current?.title || 'titre en cours'} »
               </p>
             </div>
-            {related.length === 0 ? (
+            {relatedLoading && related.length === 0 ? (
               <p className="px-2 py-4 text-sm text-yt-muted">Chargement des suggestions…</p>
+            ) : relatedError && related.length === 0 ? (
+              <div className="px-2 py-4">
+                <p className="text-sm text-yt-muted">{relatedError}</p>
+                {current?.id && (
+                  <button
+                    type="button"
+                    className="mt-2 text-xs font-medium text-white underline"
+                    onClick={() => void loadRelated(current.id)}
+                  >
+                    Réessayer
+                  </button>
+                )}
+              </div>
+            ) : related.length === 0 ? (
+              <p className="px-2 py-4 text-sm text-yt-muted">Aucune suggestion pour l’instant.</p>
             ) : (
               related.slice(0, 24).map((track) => (
                 <TrackRow
@@ -164,11 +214,22 @@ export function QueuePanel() {
           </div>
         ) : (
           <>
-            <div className="mb-2 px-2 text-xs text-yt-muted">
-              {userTracks.length} titre{userTracks.length > 1 ? 's' : ''} dans ta file
-              {queueIndex > 0
-                ? ` · ${Math.min(queueIndex, userTracks.length)} déjà joué${queueIndex > 1 ? 's' : ''}`
-                : ''}
+            <div className="mb-2 flex items-center justify-between gap-2 px-2 text-xs text-yt-muted">
+              <span>
+                {userTracks.length} titre{userTracks.length > 1 ? 's' : ''} dans ta file
+                {queueIndex > 0
+                  ? ` · ${Math.min(queueIndex, userTracks.length)} déjà joué${queueIndex > 1 ? 's' : ''}`
+                  : ''}
+              </span>
+              {queueIndex > 0 && (
+                <button
+                  type="button"
+                  onClick={() => clearPlayedFromQueue()}
+                  className="shrink-0 font-medium text-yt-muted hover:text-white"
+                >
+                  Effacer déjà joués
+                </button>
+              )}
             </div>
             {userTracks.map((track, i) => (
               <div

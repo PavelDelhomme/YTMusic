@@ -25,7 +25,13 @@ enum class LibraryFilter(val label: String) {
     ;
 
     companion object {
-        val defaultVisible: Set<String> = entries.map { it.name }.toSet()
+        /** Masqués par défaut (stubs « bientôt ») — réaffichables via long-press + Réafficher. */
+        val defaultHidden: Set<String> = setOf(
+            Profiles.name,
+            Podcasts.name,
+            DeviceFiles.name,
+        )
+        val defaultVisible: Set<String> = entries.map { it.name }.toSet() - defaultHidden
         val defaultSelected: LibraryFilter = Additions
 
         /** Demande d’ouverture d’un filtre (ex. depuis Account → Téléchargements). */
@@ -38,17 +44,20 @@ class LibraryFilterStore(private val context: Context) {
     private val hiddenKey = stringSetPreferencesKey("hidden_filters")
 
     val hiddenIds: Flow<Set<String>> =
-        context.libraryFilterStore.data.map { it[hiddenKey] ?: emptySet() }
+        context.libraryFilterStore.data.map { it[hiddenKey] ?: LibraryFilter.defaultHidden }
 
     suspend fun hide(filter: LibraryFilter) {
         context.libraryFilterStore.edit { prefs ->
-            val cur = prefs[hiddenKey]?.toMutableSet() ?: mutableSetOf()
+            val cur = (prefs[hiddenKey] ?: LibraryFilter.defaultHidden).toMutableSet()
             cur.add(filter.name)
             prefs[hiddenKey] = cur
         }
     }
 
     suspend fun resetHidden() {
-        context.libraryFilterStore.edit { it.remove(hiddenKey) }
+        // Réaffiche tout (y compris Profils / Podcasts / Fichiers)
+        context.libraryFilterStore.edit { prefs ->
+            prefs[hiddenKey] = emptySet()
+        }
     }
 }

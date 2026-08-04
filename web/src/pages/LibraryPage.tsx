@@ -37,7 +37,7 @@ function LibraryListSkeleton({ rows = 8 }: { rows?: number }) {
 }
 
 export function LibraryPage() {
-  const { songs, liked, playlists, history, recentEntities, albums, artists, mixes, likedPlaylists, createPlaylist, deletePlaylist, hasMix, loaded } =
+  const { songs, liked, playlists, history, recentEntities, albums, artists, mixes, likedPlaylists, createPlaylist, deletePlaylist, hasMix, loaded, error, refresh } =
     useLibrary();
   const playQueue = usePlayer((s) => s.playQueue);
   const openActions = useItemActions((s) => s.open);
@@ -57,6 +57,19 @@ export function LibraryPage() {
   return (
     <div className="animate-fade-up">
       <h1 className="mb-6 font-display text-3xl font-semibold tracking-tight">Bibliothèque</h1>
+
+      {error && (
+        <div className="mb-4 rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          <p>{error}</p>
+          <button
+            type="button"
+            className="mt-2 text-xs underline opacity-80 hover:opacity-100"
+            onClick={() => void refresh()}
+          >
+            Réessayer
+          </button>
+        </div>
+      )}
 
       <div className="mb-6 flex flex-wrap gap-2">
         {tabs.map(([id, label]) => (

@@ -31,6 +31,8 @@ type PlayerState = {
   lyrics: string | null;
   lyricsTimed: { startMs: number; text: string }[] | null;
   related: Track[];
+  relatedLoading: boolean;
+  relatedError: string | null;
   hydrated: boolean;
   play: (
     track: Track,
@@ -58,8 +60,12 @@ type PlayerState = {
   addToQueue: (track: Track) => void;
   moveInQueue: (fromIndex: number, toIndex: number) => void;
   removeFromQueue: (index: number) => void;
+  /** Retire les titres avant l’index courant (section « Déjà joués »). */
+  clearPlayedFromQueue: () => void;
   appendRelated: (tracks: Track[]) => void;
   clearQueue: () => void;
+  relatedLoading: boolean;
+  relatedError: string | null;
   startMix: (track: Track) => Promise<void>;
   /** Radio style YTM : depuis un titre, album ou artiste. */
   startRadio: (opts: {
@@ -759,6 +765,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   lyrics: null,
   lyricsTimed: null,
   related: [],
+  relatedLoading: false,
+  relatedError: null,
   hydrated: false,
   audioEl: null,
   sleepLabel: null,
@@ -1312,6 +1320,22 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     publish();
   },
 
+  clearPlayedFromQueue: () => {
+    set((s) => {
+      if (s.queueIndex <= 0) return s;
+      const drop = s.queueIndex;
+      const q = s.queue.slice(drop);
+      const prevEnd = typeof s.userQueueEnd === 'number' ? s.userQueueEnd : s.queue.length;
+      const end = Math.max(0, prevEnd - drop);
+      return {
+        queue: q,
+        queueIndex: 0,
+        userQueueEnd: Math.min(end, q.length),
+      };
+    });
+    publish();
+  },
+
   appendRelated: (tracks) => {
     set((s) => {
       if (s.autoplay === false) return s;
@@ -1430,23 +1454,36 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
 
   loadRelated: async (trackId) => {
+    set({ relatedLoading: true, relatedError: null });
     try {
       const rel = await api
         .related(trackId)
         .catch(() => ({ related: [] as Track[], radio: [] as Track[] }));
-      if (usePlayer.getState().current?.id && usePlayer.getState().current?.id !== trackId) return;
+      if (usePlayer.getState().current?.id && usePlayer.getState().current?.id !== trackId) {
+        set({ relatedLoading: false });
+        return;
+      }
       const pool = (rel.related?.length ? rel.related : rel.radio || []).filter(isPlayable);
       const diversified = diversifyByArtist(
         pool,
         usePlayer.getState().current?.artists?.[0],
       );
-      set({ related: diversified });
+      set({
+        related: diversified,
+        relatedLoading: false,
+        relatedError: diversified.length ? null : 'Aucune suggestion pour ce titre.',
+      });
       if (get().autoplay !== false && diversified.length) {
         mergeAutoTracks(trackId, diversified);
       }
-    } catch {
+    } catch (e) {
       if (usePlayer.getState().current?.id === trackId) {
-        // Garde les anciennes suggestions plutôt que flash « Chargement… »
+        set({
+          relatedLoading: false,
+          relatedError: e instanceof Error ? e.message : 'Suggestions indisponibles',
+        });
+      } else {
+        set({ relatedLoading: false });
       }
     }
   },

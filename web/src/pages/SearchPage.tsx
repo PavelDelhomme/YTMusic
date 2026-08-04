@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { api, type Track } from '../api';
 import { TrackRow } from '../components/TrackRow';
 import { MediaCard } from '../components/MediaCard';
+import { HomeShelfSkeleton } from '../components/HomeShelfSkeleton';
 
 const tabs = [
   { id: 'all', label: 'Tout' },
@@ -12,6 +13,22 @@ const tabs = [
   { id: 'playlist', label: 'Playlists' },
   { id: 'video', label: 'Vidéos' },
 ] as const;
+
+function SearchListSkeleton({ rows = 8 }: { rows?: number }) {
+  return (
+    <div className="space-y-2" aria-hidden>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3 py-2">
+          <div className="h-12 w-12 shrink-0 animate-pulse rounded bg-yt-border/55" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="h-3 w-2/3 animate-pulse rounded bg-yt-border/45" />
+            <div className="h-2.5 w-2/5 animate-pulse rounded bg-yt-border/30" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export function SearchPage() {
   const [params] = useSearchParams();
@@ -129,7 +146,16 @@ export function SearchPage() {
         ))}
       </div>
 
-      {loading && <p className="text-yt-muted">Recherche…</p>}
+      {loading && (
+        filter === 'song' || filter === 'all' ? (
+          <div className="space-y-8">
+            <SearchListSkeleton />
+            {filter === 'all' && <HomeShelfSkeleton rows={1} />}
+          </div>
+        ) : (
+          <HomeShelfSkeleton rows={2} />
+        )
+      )}
       {error && (
         <div className="mb-4 rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-300">
           <p>{error.includes('Bad Gateway') || error.includes('502')

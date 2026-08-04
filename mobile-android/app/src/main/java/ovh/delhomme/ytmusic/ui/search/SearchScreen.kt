@@ -18,12 +18,18 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -151,6 +157,10 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
         scheduleSearch(recordLive = false)
     }
 
+    fun retrySearch() {
+        scheduleSearch(recordLive = false)
+    }
+
     private fun scheduleSearch(recordLive: Boolean = true) {
         job?.cancel()
         val q = _state.value.query
@@ -258,18 +268,26 @@ fun SearchScreen(
         }
         when {
             state.loading -> {
-                Column(
-                    Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) { CircularProgressIndicator() }
+                SearchLoadingSkeleton()
             }
             state.error != null -> {
-                Text(
-                    state.error!!,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(16.dp),
-                )
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        state.error!!,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Button(onClick = vm::retrySearch) {
+                        Text("Réessayer")
+                    }
+                }
             }
             state.query.length < 2 -> {
                 if (state.recent.isEmpty()) {
@@ -365,6 +383,49 @@ fun SearchScreen(
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchLoadingSkeleton() {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        repeat(7) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)),
+                )
+                Column(Modifier.weight(1f)) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.7f)
+                            .height(12.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.4f)
+                            .height(10.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                    )
                 }
             }
         }
