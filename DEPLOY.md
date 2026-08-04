@@ -161,18 +161,66 @@ curl -fsS https://ytmusic.delhomme.ovh/api/health
 
 ---
 
-### ☐ 6. Créer ton compte sur le site prod (une fois)
+### ☐ 6. Créer ton compte sur le site prod (une seule fois)
 
-L’inscription est fermée par défaut.
+Le site répond déjà (`/api/health` OK). L’inscription est **fermée** (`AUTH_ALLOW_REGISTER=0`) :
+c’est voulu pour n’avoir **qu’un** compte (`dev@example.com` dans `AUTH_ALLOWED_EMAILS`).
+
+Pour créer **ce** compte la première fois, on ouvre l’inscription **temporairement**.
+
+#### 6.a — Ouvrir l’inscription (env seulement)
+
+1. Portainer → **Stacks** → **ytmusic** → **Editor**  
+2. Trouve la variable `AUTH_ALLOW_REGISTER` → mets la valeur **`1`**  
+3. Clique **Update the stack**  
+4. Dans la popup / options Portainer :
+   - ✅ **Update / Redeploy** (recréation du conteneur avec les nouvelles env)  
+   - ❌ **Ne coche PAS** « Pull image » / « Repull image and redeploy »  
+     (inutile ici : on ne change **pas** l’image, seulement une variable)  
+   - ❌ **Ne coche PAS** « Remove volumes » / « Remove orphaned volumes »
+
+Attends que le conteneur `ytmusic` soit de nouveau **running / healthy** (~10–30 s).
+
+Vérif depuis ton PC :
+
+```bash
+curl -fsS https://ytmusic.delhomme.ovh/api/auth/config
+# tu dois voir : "allowRegister":true
+```
+
+#### 6.b — Créer le compte
+
+1. Navigateur : **https://ytmusic.delhomme.ovh**  
+2. **Créer un compte** avec **exactement** :
+   - email : `dev@example.com` (celui de `AUTH_ALLOWED_EMAILS` / `ADMIN_EMAILS`)  
+   - mot de passe : celui que tu veux (note-le)  
+3. Connecte-toi → tu dois être admin.
+
+Si « Accès réservé » / email refusé → l’email n’est pas dans `AUTH_ALLOWED_EMAILS` côté stack.
+
+#### 6.c — Refermer l’inscription
 
 1. Portainer → stack **ytmusic** → **Editor**  
-2. Dans les env : mets `AUTH_ALLOW_REGISTER` = `1`  
-3. **Update the stack** (**sans** Remove volumes)  
-4. Navigateur : `https://ytmusic.delhomme.ovh` → **Créer un compte**  
-   avec l’email de `AUTH_ALLOWED_EMAILS` (ex. `dev@example.com`)  
-5. Remets `AUTH_ALLOW_REGISTER` = `0` → Update  
+2. `AUTH_ALLOW_REGISTER` → **`0`**  
+3. **Update the stack** encore une fois  
+   - ❌ toujours **pas** de Pull / Repull image  
+   - ❌ toujours **pas** de Remove volumes  
 
-Connecte-toi → OK.
+```bash
+curl -fsS https://ytmusic.delhomme.ovh/api/auth/config
+# "allowRegister":false   ← plus personne ne peut s’inscrire
+```
+
+Tes réglages finaux (à garder) :
+
+| Variable | Valeur |
+|----------|--------|
+| `AUTH_ALLOW_REGISTER` | `0` |
+| `AUTH_ALLOW_GUEST` | `0` |
+| `ADMIN_EMAILS` | `dev@example.com` |
+| `AUTH_ALLOWED_EMAILS` | `dev@example.com` |
+
+→ un seul compte utilisable : le tien.
 
 ---
 
