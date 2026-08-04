@@ -760,7 +760,7 @@ app.get('/api/admin/apk', requireAdmin, (_req, res) => {
   res.json(getApkJob());
 });
 
-/** Mise en prod depuis Admin local : web (git→GHCR→webhook) / apk / all */
+/** Mise en prod depuis Admin local : web (git→GHCR→redeploy CE) / apk / all */
 app.get('/api/admin/deploy', requireAdmin, (_req, res) => {
   res.json(deployAdminHints());
 });
