@@ -12,9 +12,11 @@
 #   Websockets       : ON (obligatoire pour /ws)
 # Réseau Docker      : nginx-proxy-manager_npm-network (external)
 #
-# === Mise à jour quotidienne ===
-#   git push origin prod  →  GHCR :latest
-#   Portainer → Stack → Pull and redeploy  (NE PAS cocher Remove volumes)
+# === Mise à jour (Portainer CE, SANS webhook Pro) ===
+#   1) git push origin prod → GHCR :latest
+#   2) Watchtower (deploy/watchtower-compose.yml) OU
+#      Access Token API / SSH depuis Admin local OU
+#      Portainer UI → Pull and redeploy (NE PAS cocher Remove volumes)
 
 version: "3.8"
 

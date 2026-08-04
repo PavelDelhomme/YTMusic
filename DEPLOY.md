@@ -17,8 +17,8 @@ Le conteneur **n’a pas** le SDK Android → on ne compile pas l’APK dans Por
 1. **Un seul compte** = email(s) dans `ADMIN_EMAILS` / `AUTH_ALLOWED_EMAILS` (comme ton `.env` local).
 2. **Personne d’autre** ne peut s’inscrire, jouer en invité, ni streamer sans JWT.
 3. **NPM** expose `https://ytmusic.delhomme.ovh` → conteneur `ytmusic:8787`.
-4. **Git** : push `prod` → GitHub Actions build l’image → Portainer **Pull and redeploy**.
-5. **APK** : `make android-upload-apk` → lien `/api/deploy/apk` (QR dans Admin).
+4. **Git** : push `prod` → GitHub Actions build l’image → **Watchtower** (ou SSH / API CE) met à jour le conteneur.
+5. **APK** : Admin local **APK → VPS** (ou `make android-upload-apk`) → lien `/api/deploy/apk`.
 
 ---
 
@@ -143,37 +143,68 @@ Le site web (SPA) reste visible ; sans login, l’API renvoie **401**.
 
 ---
 
-### Mise à jour depuis Admin (localhost)
+### Mise à jour depuis Admin (localhost) — sans Portainer Pro
 
-Sur ton PC (`APP_ENV=local`), ouvre `http://localhost:5173/admin` :
+Les **webhooks de stack** sont une feature **Portainer Business/Pro**. En CE on ne les utilise pas.
+
+Sur ton PC (`APP_ENV=local`) → `http://localhost:5173/admin` → **Mise en production** :
 
 | Bouton | Effet |
 |--------|--------|
-| **Web (git → image)** | merge `dev` → `prod` + push → CI GHCR ; si `PORTAINER_WEBHOOK_URL` → redeploy |
-| **APK → VPS** | build APK figée prod + upload `/api/admin/apk/upload` |
+| **Web (git → image)** | merge `dev` → `prod` + push → attend CI GHCR → redeploy VPS |
+| **APK → VPS** | build APK figée prod + upload sur le serveur |
 | **Web + APK** | les deux |
-| **Réparer client local** | désinscrit SW + vide caches navigateur |
+| **Réparer client local** | SW + caches navigateur |
 
-Dans `.env` local :
+#### Redeploy VPS — 3 contournements CE (choisis-en un)
+
+**A) Watchtower (recommandé, zéro config après)**
+
+1. Portainer → Add stack `watchtower` → colle [`deploy/watchtower-compose.yml`](deploy/watchtower-compose.yml)
+2. Le conteneur `ytmusic` a déjà le label `watchtower.enable=true`
+3. Après chaque push `prod`, Watchtower pull `:latest` sous ~5 min et recrée le conteneur (volume conservé)
+
+**B) Access Token Portainer (gratuit en CE)**
+
+1. Portainer → ton profil (en haut à droite) → **Access tokens** → Add  
+2. Dans `.env` **local** :
 
 ```env
 DEPLOY_URL=https://ytmusic.delhomme.ovh
-PORTAINER_WEBHOOK_URL=https://portainer…/api/webhooks/…   # optionnel
-# SEED_PASSWORD ou ADMIN_PASSWORD pour l’upload APK distant
+PORTAINER_URL=https://portainer.ton-domaine
+PORTAINER_API_KEY=ptr_…
+PORTAINER_STACK_NAME=ytmusic
 ```
 
+Le script appelle l’API CE (`git/redeploy` ou `RepullImageAndRedeploy`) — pas de webhook.
+
+**C) SSH**
+
+```env
+DEPLOY_SSH=user@ip-du-vps
+DEPLOY_SSH_CMD='docker pull ghcr.io/paveldelhomme/ytmusic:latest && docker restart ytmusic'
+```
+
+Clé SSH en `BatchMode` (déjà dans `ssh-agent` / `~/.ssh`).
+
+Sans A/B/C : le bouton Web pousse quand même l’image ; tu fais **Pull and redeploy** une fois dans l’UI Portainer.
+
+Login APK distant : `SEED_PASSWORD` ou `ADMIN_PASSWORD` dans `.env`.
+
 ---
+
+## Mise à jour quotidienne
 
 ```
 feat/… → merge → dev → (tests)
                     ↓
-               merge → prod → push
+         Admin « Web »  (ou merge → prod + push)
                     ↓
          GitHub Actions → image :latest
                     ↓
-         Portainer → Pull and redeploy   ← web/API
+         Watchtower / API CE / SSH   ← web/API
                     ↓
-         make android-upload-apk         ← mobile (quand tu veux)
+         Admin « APK → VPS »         ← mobile (quand tu veux)
 ```
 
 - **Ne coche jamais** « Remove volumes » au redeploy (sinon SQLite + APK perdus).
@@ -184,8 +215,9 @@ Commandes utiles :
 
 ```bash
 make deploy-hint
-make push-prod          # si présent dans le Makefile
+make push-prod
 make android-upload-apk
+bash scripts/redeploy-vps.sh   # redeploy seul (après image déjà buildée)
 ```
 
 ---
@@ -201,6 +233,7 @@ make android-upload-apk
 - [ ] Login avec **ton** email OK
 - [ ] Sans token : `/api/home` → 401
 - [ ] `make android-upload-apk` → QR installable
+- [ ] Stack **watchtower** déployée **ou** `PORTAINER_API_KEY` / `DEPLOY_SSH` dans `.env` local
 - [ ] Volume `ytmusic_data` conservé
 
 ---
@@ -217,6 +250,8 @@ make android-upload-apk
 | Stream 401 sur téléphone | APK/client à jour (token sur `/api/stream`) + être connecté |
 | Admin « Compiler » KO sur VPS | Normal → **Uploader** ou `make android-upload-apk` |
 | APK 404 | Pas encore uploadée |
+| Conteneur pas à jour après push | Watchtower pas déployé / API CE / SSH — ou Pull manuel |
+| Webhook Portainer | Feature **Pro** — on n’utilise pas ; voir Watchtower / Access Token / SSH |
 | Passkey KO | `WEBAUTHN_RP_ID` = hostname sans `https://` |
 | Comptes / APK perdus | Remove volumes coché — restore backup |
 
@@ -226,12 +261,15 @@ make android-upload-apk
 
 | Fichier | Rôle |
 |---------|------|
-| [`deploy/portainer-template.yml`](deploy/portainer-template.yml) | Compose à coller dans Portainer |
+| [`deploy/portainer-template.yml`](deploy/portainer-template.yml) | Compose stack ytmusic |
+| [`deploy/watchtower-compose.yml`](deploy/watchtower-compose.yml) | MAJ auto image (CE, sans webhook) |
 | [`docker-compose.yml`](docker-compose.yml) | Même stack (mode Git) |
-| [`.env.production.example`](.env.production.example) | Variables à remplir |
+| [`.env.production.example`](.env.production.example) | Variables stack prod |
 | [`.github/workflows/docker.yml`](.github/workflows/docker.yml) | Build GHCR sur push `prod` / `dev` |
+| `scripts/admin-deploy-prod.sh` | Boutons Admin Web / APK |
+| `scripts/redeploy-vps.sh` | Redeploy SSH / API CE / hint Watchtower |
 | `scripts/android-publish-apk.sh` | Build APK local |
-| `scripts/publish-apk-remote.sh` | Upload vers `/api/admin/…` |
+| `scripts/publish-apk-remote.sh` | Upload APK vers le VPS |
 | [`docs/DNS-ET-INSTALL.md`](docs/DNS-ET-INSTALL.md) | DNS détail |
 | [`docs/SMTP-MAILY.md`](docs/SMTP-MAILY.md) | SMTP |
 

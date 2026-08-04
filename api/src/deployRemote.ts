@@ -27,6 +27,29 @@ export function deployAllowedFromThisHost() {
   return process.env.ALLOW_REMOTE_ADMIN_DEPLOY === '1';
 }
 
+/** Méthode de redeploy VPS configurée (CE, sans webhook Pro). */
+export function redeployMethod(): {
+  method: 'ssh' | 'portainer-api' | 'watchtower-or-manual';
+  label: string;
+  ready: boolean;
+} {
+  if ((process.env.DEPLOY_SSH || '').trim()) {
+    return { method: 'ssh', label: 'SSH (docker pull / restart)', ready: true };
+  }
+  if ((process.env.PORTAINER_URL || '').trim() && (process.env.PORTAINER_API_KEY || '').trim()) {
+    return {
+      method: 'portainer-api',
+      label: 'Portainer API CE (Access Token)',
+      ready: true,
+    };
+  }
+  return {
+    method: 'watchtower-or-manual',
+    label: 'Watchtower (auto) ou Pull manuel Portainer',
+    ready: false,
+  };
+}
+
 export function startAdminDeploy(mode: DeployMode) {
   if (!deployAllowedFromThisHost()) {
     throw new Error('Déploiement Admin uniquement depuis APP_ENV=local (ton PC)');
@@ -47,7 +70,6 @@ export function startAdminDeploy(mode: DeployMode) {
     cwd: ROOT,
     env: {
       ...process.env,
-      // Force local gate even if .env was overridden oddly
       APP_ENV: process.env.APP_ENV || 'local',
     },
   });
@@ -77,11 +99,14 @@ export function deployAdminHints() {
     /\/$/,
     '',
   );
+  const redeploy = redeployMethod();
   return {
     allowed: deployAllowedFromThisHost(),
     appEnv: getAppEnv(),
     prodUrl,
-    portainerWebhookConfigured: Boolean((process.env.PORTAINER_WEBHOOK_URL || '').trim()),
+    redeploy,
+    /** @deprecated webhooks = Portainer Pro — ne plus utiliser */
+    portainerWebhookConfigured: false,
     job: getDeployJob(),
   };
 }

@@ -1,0 +1,38 @@
+# Watchtower — mise à jour auto des images (Portainer CE, SANS webhook Pro)
+#
+# 1. Portainer → Stacks → Add stack → name: watchtower
+# 2. Colle ce fichier
+# 3. Deploy
+#
+# Le conteneur ytmusic a déjà le label :
+#   com.centurylinklabs.watchtower.enable=true
+# → Watchtower ne touche QUE les conteneurs labellisés.
+#
+# Après un push `prod` + build GHCR, Watchtower pull `:latest` sous ~5 min
+# et recrée le conteneur (volume ytmusic_data conservé).
+
+version: "3.8"
+
+services:
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # Uniquement les conteneurs avec le label enable=true
+      WATCHTOWER_LABEL_ENABLE: "true"
+      # Toutes les 5 minutes
+      WATCHTOWER_POLL_INTERVAL: "300"
+      # Nettoyage des anciennes images
+      WATCHTOWER_CLEANUP: "true"
+      # Inclure GHCR (si privé : aussi WATCHTOWER_REPO_USER / PASS ou config.json)
+      WATCHTOWER_INCLUDE_STOPPED: "false"
+    networks:
+      - shared
+
+networks:
+  shared:
+    external: true
+    name: shared-network-copy

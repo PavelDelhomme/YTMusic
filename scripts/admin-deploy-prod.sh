@@ -4,6 +4,8 @@
 #   bash scripts/admin-deploy-prod.sh web
 #   bash scripts/admin-deploy-prod.sh apk
 #   bash scripts/admin-deploy-prod.sh all
+#
+# Redeploy VPS : SSH | Portainer Access Token (CE) | Watchtower — PAS de webhook Pro.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -37,17 +39,8 @@ deploy_web() {
   git checkout "$current"
   echo "==> Push prod OK — GitHub Actions build ghcr.io/…/ytmusic:latest"
 
-  if [[ -n "${PORTAINER_WEBHOOK_URL:-}" ]]; then
-    echo "==> Attente 90s (build image) puis webhook Portainer…"
-    sleep "${PORTAINER_WEBHOOK_WAIT_SECS:-90}"
-    echo "==> POST Portainer webhook"
-    curl -fsS -X POST "$PORTAINER_WEBHOOK_URL" \
-      -H 'Content-Type: application/json' \
-      -d '{}' || echo "Webhook Portainer a échoué (stack à Pull & Redeploy manuellement)"
-  else
-    echo "==> Astuce : définis PORTAINER_WEBHOOK_URL dans .env pour redeploy auto"
-    echo "    Sinon : Portainer → stack ytmusic → Pull and redeploy"
-  fi
+  echo "==> Redeploy VPS (sans webhook Pro)…"
+  bash "$ROOT/scripts/redeploy-vps.sh"
 }
 
 deploy_apk() {
