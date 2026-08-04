@@ -33,6 +33,7 @@ import { api } from '../api';
 import { installMediaKeys } from '../lib/mediaKeys';
 import { wireEqualizer, resumeEqContext } from '../lib/equalizer';
 import { EqualizerPanel } from './EqualizerPanel';
+import { ProxyHealthBanner } from './ProxyHealthBanner';
 
 const links = [
   { to: '/', label: 'Accueil', icon: Home },
@@ -453,6 +454,7 @@ export function Layout() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-yt-bg">
+      <ProxyHealthBanner />
       <div className="flex min-h-0 flex-1">
         {/* Overlay drawer (mobile + quand on ouvre par-dessus) */}
         {navOpen && (
