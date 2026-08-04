@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -53,6 +54,45 @@ fun LoginScreen(
     }
     if (state.loggedIn) return
 
+    if (state.offerPasskey) {
+        AlertDialog(
+            onDismissRequest = { /* forcer un choix */ },
+            icon = { Icon(Icons.Default.Fingerprint, contentDescription = null) },
+            title = { Text("Connexion rapide ?") },
+            text = {
+                Text(
+                    "Enregistre une passkey (empreinte / PIN) pour te reconnecter sans mot de passe. " +
+                        "Sinon tu pourras le faire plus tard dans Compte.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { vm.enrollPasskey(context) },
+                    enabled = !state.loading,
+                ) {
+                    if (state.loading) CircularProgressIndicator(modifier = Modifier.height(18.dp))
+                    else Text("Enregistrer")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = vm::dismissPasskeyOffer,
+                    enabled = !state.loading,
+                ) {
+                    Text("Plus tard")
+                }
+            },
+        )
+        state.error?.let {
+            Text(
+                it,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(16.dp),
+            )
+        }
+        return
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -71,7 +111,7 @@ fun LoginScreen(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(28.dp))
 
         if (state.registerMode) {
             OutlinedTextField(
@@ -81,7 +121,7 @@ fun LoginScreen(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(10.dp))
         }
         OutlinedTextField(
             value = state.email,
@@ -91,7 +131,7 @@ fun LoginScreen(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
             modifier = Modifier.fillMaxWidth(),
         )
-        Spacer(Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(10.dp))
         OutlinedTextField(
             value = state.password,
             onValueChange = vm::updatePassword,
@@ -122,7 +162,7 @@ fun LoginScreen(
             modifier = Modifier.fillMaxWidth(),
         )
         if (state.needs2fa) {
-            Spacer(Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(10.dp))
             OutlinedTextField(
                 value = state.totp,
                 onValueChange = vm::updateTotp,
@@ -133,10 +173,10 @@ fun LoginScreen(
             )
         }
         state.error?.let {
-            Spacer(Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(10.dp))
             Text(it, color = MaterialTheme.colorScheme.error)
         }
-        Spacer(Modifier.height(18.dp))
+        Spacer(modifier = Modifier.height(18.dp))
         Button(
             onClick = vm::submit,
             enabled = !state.loading,
@@ -145,8 +185,8 @@ fun LoginScreen(
             if (state.loading) CircularProgressIndicator(modifier = Modifier.height(20.dp))
             else Text(if (state.registerMode) "Créer un compte" else "Se connecter")
         }
-        if (!state.registerMode) {
-            Spacer(Modifier.height(10.dp))
+        if (!state.registerMode && state.showPasskeyLogin) {
+            Spacer(modifier = Modifier.height(10.dp))
             OutlinedButton(
                 onClick = { vm.loginWithPasskey(context) },
                 enabled = !state.loading,
@@ -156,13 +196,21 @@ fun LoginScreen(
                 Text("  Continuer avec une passkey")
             }
         }
+        if (!state.registerMode && !state.showPasskeyLogin) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                "Passkey : proposée après ta première connexion.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         TextButton(onClick = vm::toggleMode) {
             Text(
                 if (state.registerMode) "Déjà un compte ? Connexion"
                 else "Créer un compte",
             )
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
             "Email / 2FA / Passkey natif (Credential Manager).",
             style = MaterialTheme.typography.labelSmall,

@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { startAuthentication } from '@simplewebauthn/browser';
+import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import { api, setRefreshToken, setToken } from '../api';
 import { useAuth } from '../store/auth';
 import { useLibrary } from '../store/library';
-import { Fingerprint } from 'lucide-react';
+import { Fingerprint, KeyRound } from 'lucide-react';
+import {
+  dismissPasskeyOffer,
+  hasLocalPasskeyReady,
+  markLocalPasskeyReady,
+  passkeyPlatformOk,
+  wasPasskeyOfferDismissed,
+} from '../lib/passkeyEnrollment';
 
 declare global {
   interface Window {
@@ -11,12 +18,20 @@ declare global {
   }
 }
 
+const isProdHost =
+  typeof window !== 'undefined' &&
+  !/^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname);
+
 export function AuthModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { login, register, loginGoogle, googleEnabled, googleClientId, user, init } = useAuth();
   const refresh = useLibrary((s) => s.refresh);
   const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [email, setEmail] = useState(() => import.meta.env.VITE_DEV_EMAIL || '');
-  const [password, setPassword] = useState(() => import.meta.env.VITE_DEV_PASSWORD || '');
+  const [email, setEmail] = useState(() =>
+    isProdHost ? '' : import.meta.env.VITE_DEV_EMAIL || '',
+  );
+  const [password, setPassword] = useState(() =>
+    isProdHost ? '' : import.meta.env.VITE_DEV_PASSWORD || '',
+  );
   const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState('');
   const [totp, setTotp] = useState('');
@@ -24,9 +39,20 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [info, setInfo] = useState('');
+  const [step, setStep] = useState<'form' | 'passkey-offer'>('form');
+  const [showPasskeyLogin, setShowPasskeyLogin] = useState(() => hasLocalPasskeyReady());
   const googleBtn = useRef<HTMLDivElement>(null);
 
   const isGuest = !user || user.isGuest || user.email.includes('@local.ytmusic');
+
+  useEffect(() => {
+    if (!open) {
+      setStep('form');
+      setError('');
+      setInfo('');
+      setShowPasskeyLogin(hasLocalPasskeyReady());
+    }
+  }, [open]);
 
   useEffect(() => {
     if (!open || !googleEnabled || !googleClientId) return;
@@ -39,7 +65,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
           try {
             await loginGoogle(resp.credential);
             await refresh();
-            onClose();
+            await maybeOfferPasskey();
           } catch (e) {
             setError(String((e as Error).message || e));
           }
@@ -62,9 +88,84 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
       s.onload = boot;
       document.body.appendChild(s);
     } else boot();
-  }, [open, googleEnabled, googleClientId, loginGoogle, onClose, refresh]);
+  }, [open, googleEnabled, googleClientId, loginGoogle, refresh]);
+
+  async function maybeOfferPasskey() {
+    if (!passkeyPlatformOk() || wasPasskeyOfferDismissed()) {
+      onClose();
+      return;
+    }
+    try {
+      const { passkeys } = await api.passkeys();
+      if ((passkeys?.length || 0) > 0) {
+        markLocalPasskeyReady();
+        setShowPasskeyLogin(true);
+        onClose();
+        return;
+      }
+    } catch {
+      /* si liste KO, on propose quand même une fois */
+    }
+    setStep('passkey-offer');
+  }
+
+  async function enrollPasskey() {
+    setBusy(true);
+    setError('');
+    try {
+      const options = await api.passkeyRegisterOptions();
+      const cred = await startRegistration({ optionsJSON: options });
+      await api.passkeyRegisterVerify(cred, navigator.platform || 'Web');
+      markLocalPasskeyReady();
+      setShowPasskeyLogin(true);
+      setInfo('Passkey enregistrée — tu pourras te connecter sans mot de passe.');
+      onClose();
+    } catch (e) {
+      setError(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   if (!open) return null;
+
+  if (step === 'passkey-offer') {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+        <div className="w-full max-w-md rounded-2xl border border-yt-border bg-yt-surface p-6 shadow-2xl">
+          <div className="mb-3 flex items-center gap-2">
+            <Fingerprint className="h-6 w-6 text-yt-red" />
+            <h2 className="font-display text-xl font-semibold">Connexion rapide ?</h2>
+          </div>
+          <p className="mb-5 text-sm text-yt-muted">
+            Enregistre une passkey sur cet appareil (empreinte, Face ID ou PIN) pour te reconnecter
+            sans retaper ton mot de passe. Tu pourras aussi le faire plus tard dans Profil.
+          </p>
+          {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
+          <button
+            type="button"
+            disabled={busy}
+            className="mb-2 flex w-full items-center justify-center gap-2 rounded-full bg-yt-red py-2.5 text-sm font-medium disabled:opacity-60"
+            onClick={() => void enrollPasskey()}
+          >
+            <KeyRound className="h-4 w-4" />
+            {busy ? 'Enregistrement…' : 'Enregistrer une passkey'}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            className="w-full rounded-full border border-yt-border py-2.5 text-sm text-yt-muted hover:text-white"
+            onClick={() => {
+              dismissPasskeyOffer();
+              onClose();
+            }}
+          >
+            Plus tard
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
@@ -104,33 +205,45 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
           </div>
         )}
 
-        <button
-          type="button"
-          disabled={busy}
-          className="mb-4 flex w-full items-center justify-center gap-2 rounded-full border border-yt-border bg-yt-elevated py-2.5 text-sm font-medium hover:bg-yt-hover disabled:opacity-60"
-          onClick={() => {
-            setBusy(true);
-            setError('');
-            void (async () => {
-              try {
-                const options = await api.passkeyLoginOptions(email || undefined);
-                const cred = await startAuthentication({ optionsJSON: options });
-                const r = await api.passkeyLoginVerify(cred);
-                setToken(r.token);
-                if ((r as any).refreshToken) setRefreshToken((r as any).refreshToken);
-                await init();
-                await refresh();
-                onClose();
-              } catch (e) {
-                setError(String((e as Error).message || e));
-              } finally {
-                setBusy(false);
-              }
-            })();
-          }}
-        >
-          <Fingerprint className="h-4 w-4" /> Continuer avec une passkey
-        </button>
+        {mode === 'login' && showPasskeyLogin && passkeyPlatformOk() && (
+          <button
+            type="button"
+            disabled={busy}
+            className="mb-4 flex w-full items-center justify-center gap-2 rounded-full border border-yt-border bg-yt-elevated py-2.5 text-sm font-medium hover:bg-yt-hover disabled:opacity-60"
+            onClick={() => {
+              setBusy(true);
+              setError('');
+              void (async () => {
+                try {
+                  const options = await api.passkeyLoginOptions(email || undefined);
+                  const cred = await startAuthentication({ optionsJSON: options });
+                  const r = await api.passkeyLoginVerify(cred);
+                  setToken(r.token);
+                  if ((r as any).refreshToken) setRefreshToken((r as any).refreshToken);
+                  await init();
+                  await refresh();
+                  markLocalPasskeyReady();
+                  onClose();
+                } catch (e) {
+                  setError(
+                    String((e as Error).message || e) ||
+                      'Aucune passkey trouvée — connecte-toi au mot de passe puis enregistre-en une.',
+                  );
+                } finally {
+                  setBusy(false);
+                }
+              })();
+            }}
+          >
+            <Fingerprint className="h-4 w-4" /> Continuer avec une passkey
+          </button>
+        )}
+
+        {mode === 'login' && !showPasskeyLogin && (
+          <p className="mb-4 text-center text-xs text-yt-muted">
+            Passkey : disponible après une première connexion (on te proposera de l’activer).
+          </p>
+        )}
 
         <form
           className="space-y-3"
@@ -153,13 +266,14 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
                     throw err;
                   }
                   await refresh();
-                  onClose();
+                  await maybeOfferPasskey();
                 } else {
                   await register(email, password, name || email.split('@')[0]);
                   setInfo(
                     'Compte créé — un email de validation a été envoyé. En local : Admin → Boîte mail / logs serveur.',
                   );
                   await refresh();
+                  await maybeOfferPasskey();
                 }
               } catch (err) {
                 setError(String((err as Error).message || err));
