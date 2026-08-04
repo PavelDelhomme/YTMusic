@@ -3,7 +3,6 @@ package ovh.delhomme.ytmusic.ui.auth
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,10 +24,18 @@ data class AuthUiState(
     val loading: Boolean = false,
     val error: String? = null,
     val loggedIn: Boolean = false,
+    /** Après login mot de passe : proposer d’enregistrer une passkey. */
+    val offerPasskey: Boolean = false,
+    /** Bouton « Continuer avec une passkey » (flag appareil local). */
+    val showPasskeyLogin: Boolean = false,
 )
 
 class AuthViewModel(private val container: AppContainer) : ViewModel() {
-    private val _state = MutableStateFlow(AuthUiState())
+    private val prefs = container.sharedPrefs("ytm_passkey")
+
+    private val _state = MutableStateFlow(
+        AuthUiState(showPasskeyLogin = prefs.getBoolean(KEY_READY, false)),
+    )
     val state: StateFlow<AuthUiState> = _state.asStateFlow()
 
     init {
@@ -75,7 +82,13 @@ class AuthViewModel(private val container: AppContainer) : ViewModel() {
                     res.user.email,
                     res.user.name,
                 )
-                _state.value = _state.value.copy(loading = false, loggedIn = true, needs2fa = false)
+                val offer = shouldOfferPasskey()
+                _state.value = _state.value.copy(
+                    loading = false,
+                    needs2fa = false,
+                    offerPasskey = offer,
+                    loggedIn = !offer,
+                )
             } catch (e: HttpException) {
                 val body = e.response()?.errorBody()?.string().orEmpty()
                 val needs2fa = e.code() == 401 && (body.contains("2FA") || body.contains("needs2fa"))
@@ -93,6 +106,33 @@ class AuthViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    fun dismissPasskeyOffer() {
+        prefs.edit().putBoolean(KEY_DISMISSED, true).apply()
+        _state.value = _state.value.copy(offerPasskey = false, loggedIn = true)
+    }
+
+    fun enrollPasskey(activityContext: android.content.Context) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(loading = true, error = null)
+            try {
+                val token = container.tokenStore.getAccess() ?: error("Session expirée")
+                PasskeyAuth(activityContext, container.httpPlain).register(token, "Android")
+                markPasskeyReady()
+                _state.value = _state.value.copy(
+                    loading = false,
+                    offerPasskey = false,
+                    showPasskeyLogin = true,
+                    loggedIn = true,
+                )
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = e.message ?: "Échec enregistrement passkey",
+                )
+            }
+        }
+    }
+
     fun loginWithPasskey(activityContext: android.content.Context) {
         viewModelScope.launch {
             _state.value = _state.value.copy(loading = true, error = null)
@@ -105,17 +145,41 @@ class AuthViewModel(private val container: AppContainer) : ViewModel() {
                     tokens.email,
                     tokens.name,
                 )
-                _state.value = _state.value.copy(loading = false, loggedIn = true)
+                markPasskeyReady()
+                _state.value = _state.value.copy(
+                    loading = false,
+                    loggedIn = true,
+                    showPasskeyLogin = true,
+                )
             } catch (e: Exception) {
                 _state.value = _state.value.copy(
                     loading = false,
-                    error = e.message ?: "Passkey indisponible",
+                    error = e.message
+                        ?: "Aucune passkey — connecte-toi au mot de passe pour en enregistrer une.",
                 )
             }
         }
     }
 
+    /** Appelé depuis AccountSheet après register réussi. */
+    fun markPasskeyReady() {
+        prefs.edit()
+            .putBoolean(KEY_READY, true)
+            .remove(KEY_DISMISSED)
+            .apply()
+        _state.value = _state.value.copy(showPasskeyLogin = true)
+    }
+
+    private fun shouldOfferPasskey(): Boolean {
+        if (prefs.getBoolean(KEY_READY, false)) return false
+        if (prefs.getBoolean(KEY_DISMISSED, false)) return false
+        return true
+    }
+
     companion object {
+        private const val KEY_READY = "ready"
+        private const val KEY_DISMISSED = "offer_dismissed"
+
         fun factory(container: AppContainer) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =

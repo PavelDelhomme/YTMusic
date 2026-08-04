@@ -173,7 +173,11 @@ fun AccountSheet(
                         try {
                             val token = container.tokenStore.getAccess() ?: error("Session expirée")
                             PasskeyAuth(context, container.httpPlain).register(token, "Android")
-                            passkeyInfo = "Passkey enregistrée"
+                            container.sharedPrefs("ytm_passkey").edit()
+                                .putBoolean("ready", true)
+                                .remove("offer_dismissed")
+                                .apply()
+                            passkeyInfo = "Passkey enregistrée — disponible au prochain login"
                         } catch (e: Exception) {
                             Toast.makeText(context, e.message ?: "Échec", Toast.LENGTH_SHORT).show()
                         }
