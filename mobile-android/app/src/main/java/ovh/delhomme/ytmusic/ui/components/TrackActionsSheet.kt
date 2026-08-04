@@ -363,7 +363,7 @@ fun TrackActionsSheet(
 
         // Accès artiste / album en haut (toujours visibles + scrollables)
         namedArtists.forEach { a ->
-            SheetAction(Icons.Default.Person, "Accéder à la page de l'artiste", a.name) {
+            SheetAction(Icons.Default.Person, "Accéder à ${a.name}") {
                 openArtistPage(a)
             }
         }
@@ -384,31 +384,48 @@ fun TrackActionsSheet(
         }
 
         if (enriched.isPlayable()) {
-            if (onCast != null) {
-                SheetAction(Icons.Default.Cast, "Caster", "Écouter sur un autre appareil") {
+            // Bibliothèque + téléchargement (juste après navigation)
+            SheetAction(
+                if (songInLibrary) Icons.Default.LibraryAddCheck else Icons.Default.LibraryAdd,
+                if (songInLibrary) "Dans la bibliothèque" else "Enregistrer dans la bibliothèque",
+                if (songInLibrary) "Retirer (sans toucher au J'aime)" else "Sans ajouter aux J'aime",
+            ) {
+                scope.launch {
+                    runCatching {
+                        val r = container.api.toggleLibrarySong(enriched)
+                        songInLibrary = r.saved
+                        Toast.makeText(
+                            context,
+                            if (r.saved) "Dans la bibliothèque" else "Retiré de la bibliothèque",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
                     onDismiss()
-                    onCast()
                 }
             }
             SheetAction(
-                if (receiveRemoteSync) Icons.Default.SyncDisabled else Icons.Default.Sync,
-                if (receiveRemoteSync) "Désactiver la sync lecture" else "Activer la sync lecture",
-                if (receiveRemoteSync) {
-                    "File et titre redeviennent locaux à cet appareil"
-                } else {
-                    "Partager file / titre / position avec tes autres appareils"
-                },
+                if (downloaded) Icons.Default.DownloadDone else Icons.Default.Download,
+                if (downloaded) "Sur l'appareil" else "Télécharger",
             ) {
-                val next = !receiveRemoteSync
-                container.setReceiveRemoteSync(next)
-                receiveRemoteSync = next
-                Toast.makeText(
-                    context,
-                    if (next) "Sync lecture activée" else "Sync lecture désactivée — file locale",
-                    Toast.LENGTH_SHORT,
-                ).show()
-                onDismiss()
+                if (downloaded) {
+                    Toast.makeText(context, "Déjà sur l'appareil", Toast.LENGTH_SHORT).show()
+                    onDismiss()
+                } else {
+                    scope.launch {
+                        runCatching { container.api.download(enriched.id) }
+                            .onSuccess {
+                                downloaded = true
+                                Toast.makeText(context, "Téléchargement lancé", Toast.LENGTH_SHORT).show()
+                            }
+                            .onFailure {
+                                Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
+                            }
+                        onDismiss()
+                    }
+                }
             }
+
+            // Radios
             SheetAction(Icons.Default.AutoAwesome, "En rapport", "Mix · similaires + découverte") {
                 scope.launch {
                     runCatching {
@@ -417,17 +434,6 @@ fun TrackActionsSheet(
                             player.play(mix, 0, title = "En rapport", userQueueEnd = 1)
                             Toast.makeText(context, "Mix démarré", Toast.LENGTH_SHORT).show()
                         }
-                    }
-                    onDismiss()
-                }
-            }
-            SheetAction(Icons.Default.ThumbDown, "Je n'aime pas", "Signale au moteur de reco") {
-                scope.launch {
-                    runCatching {
-                        container.api.recoFeedback(
-                            RecoFeedbackBody(enriched.id, "bad", "actions_dislike"),
-                        )
-                        Toast.makeText(context, "Retour enregistré", Toast.LENGTH_SHORT).show()
                     }
                     onDismiss()
                 }
@@ -469,6 +475,8 @@ fun TrackActionsSheet(
                     }
                 }
             }
+
+            // File d'attente
             if (inQueue && !isCurrent) {
                 SheetAction(Icons.Default.RemoveFromQueue, "Supprimer de la file d'attente") {
                     player.removeFromQueue(queueIndex)
@@ -482,45 +490,7 @@ fun TrackActionsSheet(
                     onDismiss()
                 }
             }
-            SheetAction(
-                if (downloaded) Icons.Default.DownloadDone else Icons.Default.Download,
-                if (downloaded) "Sur l'appareil" else "Télécharger",
-            ) {
-                if (downloaded) {
-                    Toast.makeText(context, "Déjà sur l'appareil", Toast.LENGTH_SHORT).show()
-                    onDismiss()
-                } else {
-                    scope.launch {
-                        runCatching { container.api.download(enriched.id) }
-                            .onSuccess {
-                                downloaded = true
-                                Toast.makeText(context, "Téléchargement lancé", Toast.LENGTH_SHORT).show()
-                            }
-                            .onFailure {
-                                Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
-                            }
-                        onDismiss()
-                    }
-                }
-            }
-            SheetAction(
-                if (songInLibrary) Icons.Default.LibraryAddCheck else Icons.Default.LibraryAdd,
-                if (songInLibrary) "Dans la bibliothèque" else "Enregistrer dans la bibliothèque",
-                if (songInLibrary) "Retirer (sans toucher au J'aime)" else "Sans ajouter aux J'aime",
-            ) {
-                scope.launch {
-                    runCatching {
-                        val r = container.api.toggleLibrarySong(enriched)
-                        songInLibrary = r.saved
-                        Toast.makeText(
-                            context,
-                            if (r.saved) "Dans la bibliothèque" else "Retiré de la bibliothèque",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                    }
-                    onDismiss()
-                }
-            }
+
             enriched.album?.id?.let { albumId ->
                 SheetAction(
                     if (albumInLibrary) Icons.Default.CheckCircle else Icons.Default.Album,
@@ -552,6 +522,44 @@ fun TrackActionsSheet(
                         onDismiss()
                     }
                 }
+            }
+
+            SheetAction(Icons.Default.ThumbDown, "Je n'aime pas", "Signale au moteur de reco") {
+                scope.launch {
+                    runCatching {
+                        container.api.recoFeedback(
+                            RecoFeedbackBody(enriched.id, "bad", "actions_dislike"),
+                        )
+                        Toast.makeText(context, "Retour enregistré", Toast.LENGTH_SHORT).show()
+                    }
+                    onDismiss()
+                }
+            }
+
+            if (onCast != null) {
+                SheetAction(Icons.Default.Cast, "Caster", "Écouter sur un autre appareil") {
+                    onDismiss()
+                    onCast()
+                }
+            }
+            SheetAction(
+                if (receiveRemoteSync) Icons.Default.SyncDisabled else Icons.Default.Sync,
+                if (receiveRemoteSync) "Désactiver la sync lecture" else "Activer la sync lecture",
+                if (receiveRemoteSync) {
+                    "File et titre redeviennent locaux à cet appareil"
+                } else {
+                    "Partager file / titre / position avec tes autres appareils"
+                },
+            ) {
+                val next = !receiveRemoteSync
+                container.setReceiveRemoteSync(next)
+                receiveRemoteSync = next
+                Toast.makeText(
+                    context,
+                    if (next) "Sync lecture activée" else "Sync lecture désactivée — file locale",
+                    Toast.LENGTH_SHORT,
+                ).show()
+                onDismiss()
             }
         } else if (enriched.isAlbum() || enriched.isPlaylist() || enriched.isArtist()) {
             SheetAction(

@@ -20,7 +20,7 @@ DEVICE ?= R5CT7263YJL
 	dev-server dev-web build start deploy-local clean-vite icons \
 	docker-dev docker-dev-down docker-build \
 	mobile-qr mobile-hint mobile-adb mobile-install-adb test-register-adb \
-	android-sync android-build android-install android-logs android-publish android-prod android \
+	android-sync android-build android-install android-logs android-publish android-upload-apk android-prod android \
 	android-capacitor android-capacitor-prod adb-fix \
 	adb-fix-keys \
 	update-apps status status-watch \
@@ -46,7 +46,7 @@ help: ## Affiche cette aide colorée
 		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(C_CYAN)%-20s$(C_RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@printf "  $(C_GREEN)▶ Mobile Android$(C_RESET)\n"
-	@grep -E '^(android|android-prod|android-install|android-build|android-logs|android-publish|mobile-):.*?##' $(MAKEFILE_LIST) | \
+	@grep -E '^(android|android-prod|android-install|android-build|android-logs|android-publish|android-upload-apk|mobile-):.*?##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(C_CYAN)%-20s$(C_RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@printf "  $(C_GREEN)▶ Build / Docker / Git$(C_RESET)\n"
@@ -229,6 +229,12 @@ android-logs: ## Pull crashes + journal APK → logs/android/ (dev)
 android-publish: ## Compile APK + publie pour /api/deploy/apk (Admin QR)
 	@chmod +x $(ROOT)/scripts/android-publish-apk.sh
 	@API_BASE_URL="$(or $(API_BASE_URL),)" bash $(ROOT)/scripts/android-publish-apk.sh
+
+android-upload-apk: ## Build APK prod + upload vers Portainer (Admin QR en ligne)
+	@chmod +x $(ROOT)/scripts/publish-apk-remote.sh $(ROOT)/scripts/android-publish-apk.sh
+	@API_BASE_URL="$(or $(API_BASE_URL),https://ytmusic.delhomme.ovh)" \
+	 DEPLOY_URL="$(or $(DEPLOY_URL),$(or $(APP_URL),https://ytmusic.delhomme.ovh))" \
+	 bash $(ROOT)/scripts/publish-apk-remote.sh
 
 android: ## Raccourci : ensure-api + APK Kotlin native
 	@$(MAKE) android-install DEVICE="$(DEVICE)" API_BASE_URL="$(or $(API_BASE_URL),$(or $(VITE_API_ORIGIN),http://127.0.0.1:8787))"
@@ -413,10 +419,15 @@ push-prod: ## Merge dev → prod localement puis push (ATTENTION prod)
 
 deploy-hint: ## Guide déploiement Portainer / NPM / mobile
 	@echo ""
-	@echo "  Déploiement"
-	@echo "  -----------"
-	@echo "  LOCAL : make up-full && make android"
-	@echo "  DEV   : git push origin dev → image :dev"
-	@echo "  PROD  : make push-prod → :latest / :prod"
-	@echo "  Docs  : docs/DNS-ET-INSTALL.md  DEPLOY.md"
+	@echo "  Déploiement (détail : DEPLOY.md)"
+	@echo "  --------------------------------"
+	@echo "  WEB  1) git push origin prod  → image GHCR :latest"
+	@echo "       2) Portainer → stack ytmusic → Pull and redeploy"
+	@echo "       3) NPM : ytmusic.delhomme.ovh → ytmusic:8787 + WS"
+	@echo ""
+	@echo "  APK  1) ADMIN_EMAIL=… ADMIN_PASSWORD=… make android-upload-apk"
+	@echo "       2) Admin web → QR /api/deploy/apk"
+	@echo "       ou : Admin → Uploader une APK"
+	@echo ""
+	@echo "  Docs : DEPLOY.md  docs/DNS-ET-INSTALL.md"
 	@echo ""

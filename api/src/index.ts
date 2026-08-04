@@ -72,6 +72,7 @@ import {
   getApkJob,
   getApkPath,
   getBuildJob,
+  publishApkBuffer,
   startApkBuild,
   startBuild,
 } from './admin.js';
@@ -204,6 +205,8 @@ app.use(
     credentials: true,
   }),
 );
+/** Upload APK binaire — avant express.json pour ne pas consommer le flux. */
+app.use('/api/admin/apk/upload', express.raw({ type: () => true, limit: '120mb' }));
 app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
 app.use(authOptional);
@@ -715,6 +718,30 @@ app.get('/api/admin/build', requireAdmin, (_req, res) => {
 app.post('/api/admin/apk/build', requireAdmin, (req, res) => {
   const target = String(req.body?.target || 'auto').trim() || 'auto';
   res.json(startApkBuild(target, PORT));
+});
+
+/**
+ * Upload d’une APK déjà compilée (idéal Portainer : pas de SDK dans le conteneur).
+ * Body brut = octets APK. Headers optionnels : X-Apk-Api-Base-Url, X-Apk-Version-Name.
+ */
+app.post('/api/admin/apk/upload', requireAdmin, (req, res) => {
+  try {
+    const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || []);
+    const apiBaseUrl = String(
+      req.headers['x-apk-api-base-url'] ||
+        process.env.ANDROID_API_BASE_URL ||
+        process.env.APP_URL ||
+        `https://ytmusic.delhomme.ovh`,
+    )
+      .trim()
+      .replace(/\/$/, '');
+    const versionName = String(req.headers['x-apk-version-name'] || '').trim() || undefined;
+    const versionCode = Number(req.headers['x-apk-version-code'] || 0) || undefined;
+    const published = publishApkBuffer(buf, { apiBaseUrl, versionName, versionCode });
+    res.json({ ok: true, ...published, apk: getApkJob() });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: String((err as Error).message || err) });
+  }
 });
 
 app.get('/api/admin/apk', requireAdmin, (_req, res) => {

@@ -380,6 +380,32 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ target }),
     }),
+  /** Upload APK déjà compilée (Portainer / sans SDK). */
+  adminApkUpload: async (
+    file: Blob,
+    meta: { apiBaseUrl: string; versionName?: string; versionCode?: number },
+  ) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/vnd.android.package-archive',
+      'X-Device-Id': deviceId(),
+      'X-Apk-Api-Base-Url': meta.apiBaseUrl.replace(/\/$/, ''),
+    };
+    if (meta.versionName) headers['X-Apk-Version-Name'] = meta.versionName;
+    if (meta.versionCode != null) headers['X-Apk-Version-Code'] = String(meta.versionCode);
+    const token = getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(apiUrl('/api/admin/apk/upload'), {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: file,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || `Upload APK ${res.status}`);
+    }
+    return res.json();
+  },
 
   home: () =>
     req<{

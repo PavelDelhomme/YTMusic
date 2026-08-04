@@ -11,6 +11,8 @@ const APK_PUBLIC_DIR = join(ROOT, 'data', 'public', 'android');
 const APK_PATH = join(APK_PUBLIC_DIR, 'ytmusic.apk');
 const APK_MANIFEST = join(APK_PUBLIC_DIR, 'manifest.json');
 
+mkdirSync(APK_PUBLIC_DIR, { recursive: true });
+
 let buildJob: {
   status: 'idle' | 'running' | 'ok' | 'error';
   startedAt?: number;
@@ -280,4 +282,57 @@ export function startApkBuild(
     apkJob.log += `\n${String(err)}\n`;
   });
   return getApkJob();
+}
+
+function writeApkManifest(meta: {
+  apiBaseUrl: string;
+  versionName?: string;
+  versionCode?: number;
+  sizeBytes: number;
+}) {
+  const payload = {
+    file: 'ytmusic.apk',
+    apiBaseUrl: meta.apiBaseUrl.replace(/\/$/, ''),
+    appEnv: process.env.APP_ENV || 'production',
+    versionName: meta.versionName || 'upload',
+    versionCode: meta.versionCode ?? 0,
+    sizeBytes: meta.sizeBytes,
+    builtAt: new Date().toISOString(),
+    package: 'ovh.delhomme.ytmusic',
+  };
+  writeFileSync(APK_MANIFEST, JSON.stringify(payload, null, 2) + '\n');
+  return payload;
+}
+
+/**
+ * Publie une APK déjà compilée (upload Admin / Portainer sans SDK Android).
+ * Le fichier vit dans le volume `ytmusic_data` → `/app/data/public/android/`.
+ */
+export function publishApkBuffer(
+  buffer: Buffer,
+  meta: { apiBaseUrl: string; versionName?: string; versionCode?: number },
+) {
+  if (!buffer?.length || buffer.length < 1024) {
+    throw new Error('Fichier APK vide ou trop petit');
+  }
+  // ZIP/APK magic
+  if (buffer[0] !== 0x50 || buffer[1] !== 0x4b) {
+    throw new Error('Fichier invalide (pas une APK/ZIP)');
+  }
+  mkdirSync(APK_PUBLIC_DIR, { recursive: true });
+  writeFileSync(APK_PATH, buffer);
+  const manifest = writeApkManifest({
+    apiBaseUrl: meta.apiBaseUrl || resolveAndroidApiBaseUrl('app_url'),
+    versionName: meta.versionName,
+    versionCode: meta.versionCode,
+    sizeBytes: buffer.length,
+  });
+  apkJob = {
+    status: 'ok',
+    startedAt: Date.now(),
+    finishedAt: Date.now(),
+    log: `Upload APK ${buffer.length} octets → ${APK_PATH}\napiBaseUrl=${manifest.apiBaseUrl}\n`,
+    apiBaseUrl: manifest.apiBaseUrl,
+  };
+  return { ...manifest, path: APK_PATH, ready: true, downloadPath: '/api/deploy/apk' };
 }
