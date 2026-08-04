@@ -59,6 +59,13 @@ git push origin prod
 Si GHCR est **privé** : Portainer → **Registries** → ajoute GitHub avec un PAT  
 ayant le droit `read:packages`.
 
+**Mieux (recommandé) : package en Public** — repo public ≠ image publique.
+
+1. Ouvre : https://github.com/users/PavelDelhomme/packages/container/ytmusic/settings  
+   (ou repo YTMusic → panneau droit **Packages** → `ytmusic` → **Package settings**)  
+2. **Danger Zone** / Change visibility → **Public** → confirmer  
+3. Réessaie le Deploy de la stack Portainer (plus besoin de registry login)
+
 ---
 
 ### ☐ 3. Stack Portainer `ytmusic` (le conteneur)
