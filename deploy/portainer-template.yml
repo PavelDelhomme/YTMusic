@@ -40,6 +40,12 @@ services:
       AUTH_ALLOW_GUEST: ${AUTH_ALLOW_GUEST:-0}
       AUTH_ALLOWED_EMAILS: ${AUTH_ALLOWED_EMAILS:-}
       ADMIN_EMAILS: ${ADMIN_EMAILS:?set ADMIN_EMAILS}
+      # Aligne le mot de passe admin sur .env (évite login KO après inscription)
+      SEED_EMAIL: ${SEED_EMAIL:-}
+      SEED_PASSWORD: ${SEED_PASSWORD:-}
+      AUTH_SEED_SYNC: ${AUTH_SEED_SYNC:-1}
+      # Optionnel : header Cookie youtube.com (sinon Admin UI)
+      YOUTUBE_COOKIES: ${YOUTUBE_COOKIES:-}
       APK_DOWNLOAD_TOKEN: ${APK_DOWNLOAD_TOKEN:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-ytmusic.delhomme.ovh}
