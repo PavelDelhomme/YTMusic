@@ -1,5 +1,5 @@
 import { openDB } from 'idb';
-import { apiUrl, type Track } from '../api';
+import { apiUrl, getToken, type Track } from '../api';
 
 const DB_NAME = 'ytmusic-offline';
 const STORE = 'audio';
@@ -42,16 +42,28 @@ export async function removeCached(trackId: string) {
 }
 
 export async function downloadAndCache(track: Track) {
-  const res = await fetch(apiUrl(`/api/stream/${track.id}`));
+  const token = getToken();
+  const headers: HeadersInit = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(apiUrl(`/api/stream/${track.id}`), {
+    headers,
+    credentials: 'include',
+  });
   if (!res.ok) throw new Error('Téléchargement impossible');
   const blob = await res.blob();
   await cacheAudioBlob(track.id, blob, track);
-  await fetch(apiUrl(`/api/download/${track.id}`), { method: 'POST', credentials: 'include' }).catch(() => undefined);
+  await fetch(apiUrl(`/api/download/${track.id}`), {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+  }).catch(() => undefined);
   return blob;
 }
 
 export async function resolvePlayUrl(trackId: string): Promise<string> {
   const cached = await getCachedAudio(trackId);
   if (cached) return URL.createObjectURL(cached);
-  return apiUrl(`/api/stream/${trackId}`);
+  const token = getToken();
+  const q = token ? `?access_token=${encodeURIComponent(token)}` : '';
+  return apiUrl(`/api/stream/${trackId}${q}`);
 }

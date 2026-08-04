@@ -77,6 +77,12 @@ import {
   startBuild,
 } from './admin.js';
 import {
+  deployAdminHints,
+  getDeployJob,
+  startAdminDeploy,
+  type DeployMode,
+} from './deployRemote.js';
+import {
   beginAuthentication,
   beginRegistration,
   deletePasskey,
@@ -88,6 +94,7 @@ import {
 } from './passkeys.js';
 import {
   accountRequired,
+  authAllowGuest,
   authConfig,
   authOptional,
   authRequired,
@@ -674,7 +681,12 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
 }
 
 app.get('/api/admin/status', requireAdmin, (_req, res) => {
-  res.json({ ...deployInfo(PORT), env: getAppEnv(), telemetry: telemetryStats() });
+  res.json({
+    ...deployInfo(PORT),
+    env: getAppEnv(),
+    telemetry: telemetryStats(),
+    deploy: deployAdminHints(),
+  });
 });
 
 app.get('/api/admin/telemetry', requireAdmin, (req, res) => {
@@ -748,13 +760,39 @@ app.get('/api/admin/apk', requireAdmin, (_req, res) => {
   res.json(getApkJob());
 });
 
-/** Téléchargement public de l’APK publiée (QR téléphone, hors Wi‑Fi via APP_URL). */
+/** Mise en prod depuis Admin local : web (git→GHCR→redeploy CE) / apk / all */
+app.get('/api/admin/deploy', requireAdmin, (_req, res) => {
+  res.json(deployAdminHints());
+});
+
+app.post('/api/admin/deploy', requireAdmin, (req, res) => {
+  try {
+    const mode = String(req.body?.mode || 'web').trim() as DeployMode;
+    res.json(startAdminDeploy(mode));
+  } catch (err) {
+    res.status(400).json({ ok: false, error: String((err as Error).message || err), job: getDeployJob() });
+  }
+});
+
+function apkDownloadAuthorized(req: import('express').Request) {
+  const secret = (process.env.APK_DOWNLOAD_TOKEN || '').trim();
+  if (!secret) return true; // pas de secret = lien public (QR Admin)
+  const q = typeof req.query?.key === 'string' ? req.query.key : '';
+  const header = String(req.headers['x-apk-token'] || '');
+  return q === secret || header === secret;
+}
+
+/** Téléchargement APK (QR). Optionnel : APK_DOWNLOAD_TOKEN → ?key=… */
 app.get('/api/deploy/apk', (req, res) => {
+  if (!apkDownloadAuthorized(req)) {
+    res.status(401).json({ error: 'Lien APK protégé — clé manquante ou invalide' });
+    return;
+  }
   const path = getApkPath();
   if (!path) {
     res.status(404).json({
       error: 'APK non publiée',
-      hint: 'Admin → Déploiement mobile → Compiler l’APK, ou make android-publish',
+      hint: 'Admin → Déploiement mobile → Uploader l’APK, ou make android-upload-apk',
     });
     return;
   }
@@ -764,7 +802,11 @@ app.get('/api/deploy/apk', (req, res) => {
   res.sendFile(path);
 });
 
-app.get('/api/deploy/apk/info', (_req, res) => {
+app.get('/api/deploy/apk/info', (req, res) => {
+  if (!apkDownloadAuthorized(req)) {
+    res.status(401).json({ error: 'Lien APK protégé — clé manquante ou invalide' });
+    return;
+  }
   const info = deployInfo(PORT).apk;
   res.json({
     ready: info.ready,
@@ -1237,7 +1279,7 @@ app.get('/api/track/:id/related', accountRequired, async (req, res) => {
   }
 });
 
-app.get('/api/track/:id/lyrics', async (req, res) => {
+app.get('/api/track/:id/lyrics', accountRequired, async (req, res) => {
   try {
     res.json(await getLyrics(p(req.params.id)));
   } catch (err) {
@@ -1245,7 +1287,7 @@ app.get('/api/track/:id/lyrics', async (req, res) => {
   }
 });
 
-app.get('/api/artist/:id', async (req, res) => {
+app.get('/api/artist/:id', accountRequired, async (req, res) => {
   try {
     res.json(await getArtist(p(req.params.id)));
   } catch (err) {
@@ -1253,7 +1295,7 @@ app.get('/api/artist/:id', async (req, res) => {
   }
 });
 
-app.get('/api/artist/:id/radio', async (req, res) => {
+app.get('/api/artist/:id/radio', accountRequired, async (req, res) => {
   try {
     res.json({ tracks: await getArtistRadio(p(req.params.id)) });
   } catch (err) {
@@ -1261,7 +1303,7 @@ app.get('/api/artist/:id/radio', async (req, res) => {
   }
 });
 
-app.get('/api/artist/:id/songs', async (req, res) => {
+app.get('/api/artist/:id/songs', accountRequired, async (req, res) => {
   try {
     const limitRaw = Number(req.query.limit);
     const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
@@ -1271,7 +1313,7 @@ app.get('/api/artist/:id/songs', async (req, res) => {
   }
 });
 
-app.get('/api/album/:id', async (req, res) => {
+app.get('/api/album/:id', accountRequired, async (req, res) => {
   try {
     res.json(await getAlbum(p(req.params.id)));
   } catch (err) {
@@ -1279,7 +1321,7 @@ app.get('/api/album/:id', async (req, res) => {
   }
 });
 
-app.get('/api/album/:id/radio', async (req, res) => {
+app.get('/api/album/:id/radio', accountRequired, async (req, res) => {
   try {
     res.json({ tracks: await getAlbumRadio(p(req.params.id)) });
   } catch (err) {
@@ -1287,7 +1329,7 @@ app.get('/api/album/:id/radio', async (req, res) => {
   }
 });
 
-app.get('/api/playlist/:id', async (req, res) => {
+app.get('/api/playlist/:id', accountRequired, async (req, res) => {
   try {
     res.json(await getPlaylist(p(req.params.id)));
   } catch (err) {
@@ -1303,7 +1345,7 @@ app.post('/api/stream/warm', accountRequired, (req, res) => {
   void handleStreamWarm(req, res);
 });
 
-app.get('/api/stream/:id', (req, res) => {
+app.get('/api/stream/:id', authRequired, (req, res) => {
   void handleStream(req, res);
 });
 
@@ -1649,8 +1691,12 @@ async function resolveWsUser(req: import('node:http').IncomingMessage) {
       const user = await verifyToken(token);
       return { userId: user.id, name: user.name };
     } catch {
-      /* guest */
+      /* fallthrough */
     }
+  }
+
+  if (!authAllowGuest()) {
+    throw new Error('Authentification requise');
   }
 
   const device =
@@ -1671,13 +1717,17 @@ async function resolveWsUser(req: import('node:http').IncomingMessage) {
 
 wss.on('connection', (ws, req) => {
   void (async () => {
-    const { userId, name } = await resolveWsUser(req);
-    ws.on('message', (data) => {
-      handleSessionMessage(userId, ws, String(data), { defaultName: name });
-    });
-    ws.on('close', () => detachSocket(ws));
-    ws.on('error', () => detachSocket(ws));
-    ws.send(JSON.stringify({ type: 'hello', userId }));
+    try {
+      const { userId, name } = await resolveWsUser(req);
+      ws.on('message', (data) => {
+        handleSessionMessage(userId, ws, String(data), { defaultName: name });
+      });
+      ws.on('close', () => detachSocket(ws));
+      ws.on('error', () => detachSocket(ws));
+      ws.send(JSON.stringify({ type: 'hello', userId }));
+    } catch {
+      ws.close(4401, 'auth required');
+    }
   })();
 });
 

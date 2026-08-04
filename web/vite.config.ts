@@ -11,6 +11,8 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
+      // Ne jamais enregistrer de SW en dev (sinon /api peut servir du HTML cache)
+      devOptions: { enabled: false },
       includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'],
       manifest: {
         name: 'YTMusic',

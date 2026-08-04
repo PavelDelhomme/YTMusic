@@ -45,14 +45,19 @@ object PlayerCache {
     }
 
     fun dataSourceFactory(context: Context): CacheDataSource.Factory {
+        val token = runCatching {
+            ovh.delhomme.ytmusic.YtMusicApp.instance.container.tokenStore.peekAccess()
+        }.getOrNull()
+        val props = mutableMapOf("X-YTM-Client" to "android")
+        if (!token.isNullOrBlank()) {
+            props["Authorization"] = "Bearer $token"
+        }
         val upstream = DefaultHttpDataSource.Factory()
             .setUserAgent("YTMusic-Android")
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(12_000)
             .setReadTimeoutMs(30_000)
-            .setDefaultRequestProperties(
-                mapOf("X-YTM-Client" to "android"),
-            )
+            .setDefaultRequestProperties(props)
         return CacheDataSource.Factory()
             .setCache(get(context))
             .setUpstreamDataSourceFactory(upstream)

@@ -1,266 +1,241 @@
-# Déploiement YTMusic — VPS / Portainer / Mobile
+# Déploiement YTMusic — à suivre dans l’ordre
 
-Guide **actionnable**. Deux canaux distincts :
+**État actuel typique :** tu es en local, tu as aligné `.env` / `.env.example`,  
+tu as **`DEPLOY_URL=https://ytmusic.delhomme.ovh`**.  
+Tu n’as **pas encore** créé la stack Portainer / NPM / Watchtower / DNS.
 
-| Quoi | Où | Comment |
-|------|-----|---------|
-| **Web + API** | Portainer (Docker) | Image GHCR → stack `ytmusic` → NPM |
-| **APK Android** | Admin du site + volume Docker | Compile **en local**, upload vers le serveur |
+**Ne configure pas** `PORTAINER_API_KEY` ni `DEPLOY_SSH` pour l’instant.  
+On utilise **Watchtower** (gratuit, Portainer CE, sans webhook Pro).
 
-Le conteneur Docker **n’a pas** le SDK Android → on ne compile pas l’APK dans Portainer.
+Après la **première mise en ligne** (étapes 1 → 7), tu ne feras plus que  
+l’étape **8** (boutons Admin sur ton PC).
 
 ---
 
-## TL;DR — première mise en ligne
+## Checklist première mise en ligne
 
-### A. Web (Portainer)
+Coche au fur et à mesure. **Ne saute aucune étape.**
+
+### ☐ 1. DNS OVH (obligatoire en premier)
+
+Sans ça : `Could not resolve host` partout.
+
+1. Va sur [OVH](https://www.ovh.com/manager/) → Domaines → **`delhomme.ovh`** → Zone DNS  
+2. **Ajouter une entrée** :
+
+| Type | Sous-domaine / Nom | Cible | TTL |
+|------|--------------------|--------|-----|
+| **A** | `ytmusic` | **IP publique de ton VPS** (celle de ton serveur) | 300 |
+
+3. Enregistre. Attends quelques minutes.  
+4. Sur ton PC :
 
 ```bash
-# 1. Sur ta machine : merger vers prod pour builder l’image
-git checkout prod && git merge origin/dev && git push origin prod
-# → GitHub Actions pousse ghcr.io/paveldelhomme/ytmusic:latest
+dig +short ytmusic.delhomme.ovh
 ```
 
-2. Portainer → **Stacks** → Add stack (ou ouvre la stack `ytmusic`)
-3. Compose = contenu de `deploy/portainer-template.yml` (ou git `docker-compose.yml` branche `prod`)
-4. Variables d’env (copie `.env.production.example`) — **obligatoire** :
-   - `JWT_SECRET` = `openssl rand -hex 32`
-   - `SMTP_PASS` = mot de passe maily
-   - `ADMIN_EMAILS` = ton email
-   - `APP_URL` / `WEBAUTHN_*` = `https://ytmusic.delhomme.ovh`
-5. Deploy → conteneur `ytmusic` healthy
-6. NPM → Proxy Host `ytmusic.delhomme.ovh` → `ytmusic:8787`, SSL + **Websockets ON**
+✅ OK si tu vois l’IP du VPS.  
+❌ Si vide / NXDOMAIN → attends encore, ou corrige l’entrée DNS. **N’avance pas.**
 
-Mise à jour web ensuite : push `prod` → Portainer **Pull and redeploy** (ne coche pas « Remove volumes »).
+---
 
-### B. Mobile (APK)
+### ☐ 2. Image Docker déjà sur GitHub (une fois)
+
+Sur ton PC :
 
 ```bash
-# Sur ta machine (avec Android SDK) — une commande :
-ADMIN_EMAIL=toi@email.com ADMIN_PASSWORD='…' make android-upload-apk
+cd ~/Documents/Dev/Perso/YTMusic
+git status          # working tree propre de préférence
+git checkout dev && git pull origin dev
+git checkout prod && git pull origin prod
+git merge origin/dev -m "merge: promu dev → prod"
+git push origin prod
 ```
 
-Ça compile l’APK pointant vers `https://ytmusic.delhomme.ovh`, puis l’upload
-dans le volume Portainer. Ensuite :
+1. Ouvre GitHub → repo **YTMusic** → onglet **Actions**  
+2. Attends que le workflow **Docker** sur `prod` soit **vert**  
+3. Image produite : `ghcr.io/paveldelhomme/ytmusic:latest`
 
-1. Ouvre `https://ytmusic.delhomme.ovh` → **Admin** → **Déploiement mobile**
-2. Scanne le QR / ouvre `https://ytmusic.delhomme.ovh/api/deploy/apk`
-3. Installe l’APK sur le téléphone
-
-Sans CLI : Admin → **Uploader une APK** (fichier `data/public/android/ytmusic.apk`
-après `API_BASE_URL=https://ytmusic.delhomme.ovh make android-publish`).
+Si GHCR est **privé** : Portainer → **Registries** → ajoute GitHub avec un PAT  
+ayant le droit `read:packages`.
 
 ---
 
-## 1. Erreur Vite `504 Outdated Optimize Dep`
+### ☐ 3. Stack Portainer `ytmusic` (le conteneur)
 
-```bash
-rm -rf web/node_modules/.vite node_modules/.vite
-# Relancer npm run dev + Ctrl+Shift+R
-```
+1. Ouvre **Portainer** (comme pour tes autres apps)  
+2. **Stacks** → **Add stack**  
+3. **Name** : `ytmusic`  
+4. **Web editor** (pas Git si ça t’a déjà embêté)  
+5. Ouvre sur ton PC le fichier  
+   `deploy/portainer-template.yml`  
+   → **tout sélectionner** → coller dans l’éditeur Portainer  
+6. Plus bas : **Environment variables** → **Add an environment variable**  
+   pour **chaque** ligne :
 
----
+| Name | Value |
+|------|--------|
+| `JWT_SECRET` | lance `openssl rand -hex 32` et colle le résultat (**pas** le secret local) |
+| `SMTP_PASS` | le même mot de passe maily que dans ton `.env` local |
+| `ADMIN_EMAILS` | `dev@example.com` (ou ton email) |
+| `AUTH_ALLOWED_EMAILS` | **identique** à `ADMIN_EMAILS` |
+| `AUTH_ALLOW_REGISTER` | `0` |
+| `AUTH_ALLOW_GUEST` | `0` |
+| `APP_URL` | `https://ytmusic.delhomme.ovh` |
+| `WEBAUTHN_RP_ID` | `ytmusic.delhomme.ovh` |
+| `WEBAUTHN_ORIGIN` | `https://ytmusic.delhomme.ovh` |
+| `YTMUSIC_IMAGE` | `ghcr.io/paveldelhomme/ytmusic:latest` |
+| `SMTP_HOST` | `ssl0.ovh.net` |
+| `SMTP_USER` | `noreply@example.com` |
+| `SMTP_FROM` | `YTMusic <noreply@example.com>` |
 
-## 2. Architecture prod
+7. **Deploy the stack**  
+8. Onglet Containers : `ytmusic` doit passer **healthy** / running  
 
-```
-Internet → NPM (HTTPS ytmusic.delhomme.ovh)
-              ↓
-         conteneur ytmusic:8787  (API + SPA + WS)
-              ↓
-         volume ytmusic_data  (/app/data → SQLite + APK publique)
-```
+**Réseaux** (déjà chez toi en principe) :  
+`nginx-proxy-manager_npm-network` et `shared-network-copy`.  
+Si Portainer refuse le deploy → Networks : vérifie que ces noms existent  
+(ou adapte les `name:` en bas du YAML comme sur tes autres stacks).
 
-Mobile natif = APK qui parle à la même URL HTTPS (API figée au build).
-
----
-
-## 3. DNS OVH
-
-Voir [`docs/DNS-ET-INSTALL.md`](docs/DNS-ET-INSTALL.md).
-
-| Type | Nom | Cible |
-|------|-----|--------|
-| A ou CNAME | `ytmusic` | IP du VPS |
-
----
-
-## 4. GitHub — branches
-
-| Branche | Image Docker |
-|---------|--------------|
-| **`prod`** | `:latest` + `:prod` |
-| **`dev`** | `:dev` |
-
-Travail courant = `feat/…` → PR vers **`dev`** → plus tard **`dev` → `prod`**.
-
-Portainer Registry GHCR (si privé) : PAT avec `read:packages`.
-
-Image : `ghcr.io/paveldelhomme/ytmusic:latest` (déjà dans les compose).
+⚠️ Ne **jamais** cocher « Remove volumes » plus tard.
 
 ---
 
-## 5. Stack Portainer (détail)
+### ☐ 4. Stack Portainer `watchtower` (MAJ auto)
 
-### Option A — Custom Template
+**Une seule fois.** C’est ça qui remplace les webhooks Pro.
 
-1. App Templates → Custom Templates → Create  
-2. Colle `deploy/portainer-template.yml`  
-3. Renseigne les env (JWT, SMTP, APP_URL…)  
-4. Deploy
+1. Portainer → **Stacks** → **Add stack**  
+2. **Name** : `watchtower`  
+3. Colle le contenu de `deploy/watchtower-compose.yml`  
+4. **Deploy**  
 
-### Option B — Stack depuis Git
-
-1. Stacks → Add stack → **Repository**  
-2. Repo GitHub, ref `refs/heads/prod`  
-3. Compose path : `docker-compose.yml`  
-4. Env = `.env.production.example` rempli
-
-Réseaux **externes** (déjà chez toi) :
-
-- `nginx-proxy-manager_npm-network`
-- `shared-network-copy`
+Tu n’ajoutes **rien** dans ton `.env` local pour Watchtower.  
+Les commentaires A/B/C dans `.env` : ignore B et C.
 
 ---
 
-## 6. Nginx Proxy Manager
+### ☐ 5. Nginx Proxy Manager (HTTPS)
+
+1. Ouvre **Nginx Proxy Manager**  
+2. **Proxy Hosts** → **Add Proxy Host**  
+3. Onglet **Details** :
+
+| Champ | Valeur exacte |
+|--------|----------------|
+| Domain Names | `ytmusic.delhomme.ovh` |
+| Scheme | `http` |
+| Forward Hostname / IP | `ytmusic` |
+| Forward Port | `8787` |
+| Websockets Support | **ON** |
+| Block Common Exploits | ON (ok) |
+
+4. Onglet **SSL** :
 
 | Champ | Valeur |
 |--------|--------|
-| Domain | `ytmusic.delhomme.ovh` |
-| Scheme | `http` |
-| Forward Hostname | `ytmusic` |
-| Forward Port | `8787` |
-| Websockets | **ON** |
-| SSL | Let’s Encrypt + Force SSL |
+| SSL Certificate | Request a new SSL Certificate |
+| Force SSL | **ON** |
+| HTTP/2 | ON |
+| Email | ton email Let’s Encrypt |
+| Agree Let’s Encrypt | coché |
+
+5. **Save**
+
+Test sur ton PC :
+
+```bash
+curl -fsS https://ytmusic.delhomme.ovh/api/health
+```
+
+✅ Tu dois voir du JSON avec `"ok":true`.  
+❌ **502** → conteneur pas sur le réseau NPM, ou Forward Hostname ≠ `ytmusic`.  
+❌ certificat KO → DNS pas encore propagé (reviens à l’étape 1).
 
 ---
 
-## 7. Variables critiques
+### ☐ 6. Créer ton compte sur le site prod (une fois)
+
+L’inscription est fermée par défaut.
+
+1. Portainer → stack **ytmusic** → **Editor**  
+2. Dans les env : mets `AUTH_ALLOW_REGISTER` = `1`  
+3. **Update the stack** (**sans** Remove volumes)  
+4. Navigateur : `https://ytmusic.delhomme.ovh` → **Créer un compte**  
+   avec l’email de `AUTH_ALLOWED_EMAILS` (ex. `dev@example.com`)  
+5. Remets `AUTH_ALLOW_REGISTER` = `0` → Update  
+
+Connecte-toi → OK.
+
+---
+
+### ☐ 7. Première APK (quand le site HTTPS marche)
+
+Sur ton PC (Android SDK) :
+
+```bash
+cd ~/Documents/Dev/Perso/YTMusic
+ADMIN_EMAIL=dev@example.com ADMIN_PASSWORD='ton-mot-de-passe' make android-upload-apk
+```
+
+Ou : `http://localhost:5173/admin` → **APK → VPS**.
+
+Puis téléphone : ouvre / scanne  
+`https://ytmusic.delhomme.ovh/api/deploy/apk`
+
+---
+
+### ☐ 8. Ensuite : tout contrôler depuis ton PC
+
+**Quotidien / chaque release :**
+
+1. Lance l’API + Vite en local si besoin (`make ensure-api`, `npm run dev:web`)  
+2. `http://localhost:5173` → login → **Admin**  
+3. Bloc **Mise en production** :
+
+| Bouton | Effet |
+|--------|--------|
+| **Web (git → image)** | envoie le code → `prod` → build Docker → Watchtower met à jour le VPS (~5 min) |
+| **APK → VPS** | recompile + upload l’APK sur le serveur |
+| **Web + APK** | les deux d’un coup |
+
+Tu n’as **plus** à toucher Portainer pour une MAJ normale (sauf souci).
+
+---
+
+## Rappel `.env` local (déjà fait)
 
 ```env
-JWT_SECRET=<openssl rand -hex 32>
-ADMIN_EMAILS=toi@email.com
-APP_URL=https://ytmusic.delhomme.ovh
-WEBAUTHN_RP_ID=ytmusic.delhomme.ovh
-WEBAUTHN_ORIGIN=https://ytmusic.delhomme.ovh
-SMTP_PASS=…
-YTMUSIC_IMAGE=ghcr.io/paveldelhomme/ytmusic:latest
+APP_ENV=local
+APP_URL=http://127.0.0.1:8787
+DEPLOY_URL=https://ytmusic.delhomme.ovh
 ```
+
+Laisse B/C (Portainer API / SSH) **commentés**. Watchtower suffit.
 
 ---
 
-## 8. Déploiement mobile — interface Admin
+## Dépannage
 
-Dans l’app web (compte admin) → **Admin** → bloc **Déploiement mobile** :
+| Symptôme | Que faire |
+|----------|-----------|
+| `Could not resolve host` | Étape 1 DNS pas OK |
+| Deploy Admin : fichiers locaux | `git commit` ou laisse le stash auto |
+| 502 NPM | Étape 5 : hostname `ytmusic`, port `8787`, Websockets |
+| Pull denied image | Registry GHCR + PAT `read:packages` |
+| Conteneur pas à jour après Web | Étape 4 Watchtower absente, ou attendre 5 min, ou Pull manuel |
+| Inscription impossible | Étape 6 : `AUTH_ALLOW_REGISTER=1` temporaire |
+| Données perdues | Tu as coché Remove volumes |
 
-| Action | Quand |
-|--------|--------|
-| **Compiler & publier** | Seulement si l’API tourne **sur une machine avec SDK** (ton PC, pas le conteneur) |
-| **Uploader une APK** | **Cas Portainer** : APK buildée en local |
-| QR / Télécharger | Install sur téléphone (même hors Wi‑Fi) |
+---
 
-### Commandes locales
+## Fichiers à coller dans Portainer
+
+| Stack | Fichier du repo |
+|-------|------------------|
+| `ytmusic` | `deploy/portainer-template.yml` |
+| `watchtower` | `deploy/watchtower-compose.yml` |
 
 ```bash
-# Build seule (fichier dans data/public/android/ytmusic.apk)
-API_BASE_URL=https://ytmusic.delhomme.ovh make android-publish
-
-# Build + upload vers le VPS
-ADMIN_EMAIL=toi@email.com ADMIN_PASSWORD='…' make android-upload-apk
-
-# Ou avec un token déjà connecté
-ADMIN_TOKEN='eyJ…' BUILD_FIRST=0 make android-upload-apk
+make deploy-hint
 ```
-
-L’APK est stockée dans le volume Docker :
-
-`/app/data/public/android/ytmusic.apk` → URL publique `/api/deploy/apk`.
-
----
-
-## 9. Flux quotidien
-
-```
-feat → PR → dev → (tests)
-              ↓
-         merge → prod
-              ↓
-         GitHub Actions → image :latest
-              ↓
-         Portainer Pull & Redeploy   ← web à jour
-              ↓
-         make android-upload-apk    ← mobile à jour (quand tu veux)
-```
-
-PWA : se met à jour toute seule au prochain chargement (service worker).  
-APK : il faut republier + réinstaller (ou proposer le QR aux utilisateurs).
-
----
-
-## 10. Checklist go-live
-
-- [ ] DNS `ytmusic.delhomme.ovh`
-- [ ] Push `prod` → image GHCR verte
-- [ ] Stack Portainer healthy (réseau npm)
-- [ ] NPM + SSL + Websockets
-- [ ] Login admin + passkey OK
-- [ ] `make android-upload-apk` → QR Admin installable
-- [ ] Volume `ytmusic_data` **non** supprimé au redeploy
-
----
-
-## 11. Dépannage
-
-| Symptôme | Fix |
-|----------|-----|
-| 502 NPM | Conteneur sur `npm-network`, hostname `ytmusic` |
-| Pull denied GHCR | Registry + PAT `read:packages` dans Portainer |
-| Admin « Compiler » KO sur VPS | Normal → **Uploader** ou `make android-upload-apk` |
-| APK 404 | Pas encore uploadée → Admin ou script |
-| Passkey KO | `WEBAUTHN_RP_ID` = hostname sans `https://` |
-| Comptes perdus | Tu as coché Remove volumes — restore backup DB |
-
----
-
-## Fichiers utiles
-
-- `Dockerfile` / `docker-compose.yml` / `deploy/portainer-template.yml`
-- `.env.production.example`
-- `.github/workflows/docker.yml`
-- `scripts/android-publish-apk.sh` — build local
-- `scripts/publish-apk-remote.sh` — upload vers prod
-- `make deploy-hint` / `make android-upload-apk`
-
----
-
-## Auth / email / volume (rappel)
-
-Voir aussi sections historiques ci-dessous + [`docs/SMTP-MAILY.md`](docs/SMTP-MAILY.md).
-
-| Action Portainer | Données (users, APK) |
-|------------------|----------------------|
-| Pull & Redeploy | **Conservées** |
-| Delete stack **avec** volumes | **Perdues** |
-
----
-
-## 12. Auth, email, 2FA (multi-env)
-
-| Variable | Local | Prod |
-|----------|-------|------|
-| `APP_ENV` | `local` | `production` |
-| `APP_URL` | `http://localhost:5173` | `https://ytmusic.delhomme.ovh` |
-| `SMTP_*` | maily.ovh / Mailhog | secrets Portainer |
-| `COOKIE_SECURE` | `0` | `1` |
-
-```bash
-make seed-users   # comptes admin locaux
-```
-
-### Validation email
-
-| Env | Lien |
-|-----|------|
-| Prod | `https://ytmusic.delhomme.ovh/verify-email?token=…` |
-| Local + ADB | `make test-register-adb` |
