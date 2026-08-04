@@ -309,6 +309,7 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
         )}
 
         <div className="py-1 pb-6">
+          {/* 1. Navigation artiste / album */}
           {artistsAll.map((a) => (
             <Row
               key={`${a.name}-${a.id || 'x'}`}
@@ -328,6 +329,40 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
           {(artistsAll.length > 0 || canOpenAlbum) && (
             <div className="my-1 border-t border-white/10" />
           )}
+
+          {/* 2. Bibliothèque + téléchargement */}
+          {playable && (
+            <Row
+              icon={inLibrary ? <Check className="h-5 w-5 text-yt-red" /> : <Library className="h-5 w-5" />}
+              label={inLibrary ? 'Dans la bibliothèque' : 'Enregistrer dans la bibliothèque'}
+              sub={inLibrary ? 'Appuyer pour retirer (ne retire pas le J’aime)' : 'Sans ajouter aux J’aime'}
+              disabled={busy}
+              onClick={() => {
+                void toggleLibrarySong(item);
+              }}
+            />
+          )}
+          {playable && (
+            <Row
+              icon={onDevice ? <Smartphone className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+              label={onDevice ? "Sur l'appareil" : 'Télécharger'}
+              onClick={() =>
+                after(async () => {
+                  if (onDevice) return;
+                  setBusy(true);
+                  try {
+                    await downloadAndCache(item);
+                    await api.download(item.id).catch(() => undefined);
+                    setOnDevice(true);
+                  } finally {
+                    setBusy(false);
+                  }
+                })
+              }
+            />
+          )}
+
+          {/* 3. Radios */}
           {playable && (
             <>
               <Row
@@ -373,61 +408,27 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
                   }
                 />
               )}
-              {inQueue && !isCurrent ? (
-                <Row
-                  icon={<ListMinus className="h-4 w-4" />}
-                  label="Supprimer de la file d'attente"
-                  onClick={() => after(() => removeFromQueue(absQueueIndex))}
-                />
-              ) : (
-                <Row
-                  icon={<ListEnd className="h-4 w-4" />}
-                  label="Ajouter à la file d'attente"
-                  sub="À la fin de la file prévue"
-                  onClick={() => after(() => addToQueue(item))}
-                />
-              )}
-              <Row
-                icon={onDevice ? <Smartphone className="h-4 w-4" /> : <Download className="h-4 w-4" />}
-                label={onDevice ? "Sur l'appareil" : 'Télécharger'}
-                onClick={() =>
-                  after(async () => {
-                    if (onDevice) return;
-                    setBusy(true);
-                    try {
-                      await downloadAndCache(item);
-                      await api.download(item.id).catch(() => undefined);
-                      setOnDevice(true);
-                    } finally {
-                      setBusy(false);
-                    }
-                  })
-                }
-              />
-              {onOpenEqualizer && (
-                <Row
-                  icon={<SlidersHorizontal className="h-4 w-4" />}
-                  label="Égaliseur"
-                  sub="Optionnel · désactivé par défaut"
-                  onClick={() =>
-                    after(() => {
-                      onOpenEqualizer();
-                    })
-                  }
-                />
-              )}
-              <Row
-                icon={inLibrary ? <Check className="h-5 w-5 text-yt-red" /> : <Library className="h-5 w-5" />}
-                label={inLibrary ? 'Dans la bibliothèque' : 'Enregistrer dans la bibliothèque'}
-                sub={inLibrary ? 'Appuyer pour retirer (ne retire pas le J’aime)' : 'Sans ajouter aux J’aime'}
-                disabled={busy}
-                onClick={() => {
-                  void toggleLibrarySong(item);
-                }}
-              />
             </>
           )}
 
+          {/* 4. File d'attente */}
+          {playable &&
+            (inQueue && !isCurrent ? (
+              <Row
+                icon={<ListMinus className="h-4 w-4" />}
+                label="Supprimer de la file d'attente"
+                onClick={() => after(() => removeFromQueue(absQueueIndex))}
+              />
+            ) : (
+              <Row
+                icon={<ListEnd className="h-4 w-4" />}
+                label="Ajouter à la file d'attente"
+                sub="À la fin de la file prévue"
+                onClick={() => after(() => addToQueue(item))}
+              />
+            ))}
+
+          {/* 5. Collections / album lié */}
           {opts.playlistId && opts.onRemoveFromPlaylist && (
             <Row
               icon={<Trash2 className="h-4 w-4" />}
@@ -510,6 +511,20 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
                   } finally {
                     setBusy(false);
                   }
+                })
+              }
+            />
+          )}
+
+          {/* 6. Divers */}
+          {playable && onOpenEqualizer && (
+            <Row
+              icon={<SlidersHorizontal className="h-4 w-4" />}
+              label="Égaliseur"
+              sub="Optionnel · désactivé par défaut"
+              onClick={() =>
+                after(() => {
+                  onOpenEqualizer();
                 })
               }
             />

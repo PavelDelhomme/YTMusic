@@ -534,6 +534,37 @@ export function AdminPage() {
                   <Smartphone className="h-4 w-4" />
                   {status?.apk?.job?.status === 'running' ? 'Compilation…' : 'Compiler & publier l’APK'}
                 </button>
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-yt-border px-5 py-2 text-sm hover:bg-yt-elevated">
+                  <Download className="h-4 w-4 rotate-180" />
+                  Uploader une APK
+                  <input
+                    type="file"
+                    accept=".apk,application/vnd.android.package-archive"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (!file) return;
+                      const target =
+                        apkTarget === 'custom'
+                          ? apkCustom.trim()
+                          : apkTarget === 'production' || apkTarget === 'preprod'
+                            ? status?.apk?.presets?.[apkTarget]
+                            : apkTarget === 'lan'
+                              ? status?.apk?.presets?.lan
+                              : apkTarget === 'app_url'
+                                ? status?.apk?.presets?.app_url
+                                : status?.apk?.presets?.production ||
+                                  status?.apk?.appUrl ||
+                                  'https://ytmusic.delhomme.ovh';
+                      if (!target) return;
+                      void api
+                        .adminApkUpload(file, { apiBaseUrl: String(target) })
+                        .then(() => refresh())
+                        .catch((err) => alert(String(err.message || err)));
+                    }}
+                  />
+                </label>
                 {status?.apk?.ready && (
                   <a
                     href={status.apk.downloadUrl}
@@ -545,8 +576,15 @@ export function AdminPage() {
               </div>
               {!status?.apk?.sdkReady && (
                 <p className="mt-2 text-xs text-amber-300">
-                  Gradle Android introuvable sur cette machine — utilise{' '}
-                  <code className="text-white">make android-publish</code> en local puis resers le fichier.
+                  Pas de SDK Android ici (normal sur Portainer). Sur ta machine :{' '}
+                  <code className="text-white">API_BASE_URL=https://ytmusic.delhomme.ovh make android-publish</code>
+                  {' '}puis <strong className="text-white">Uploader une APK</strong> ci-dessus, ou{' '}
+                  <code className="text-white">make android-upload-apk</code>.
+                </p>
+              )}
+              {status?.apk?.sdkReady && (
+                <p className="mt-2 text-xs text-yt-muted">
+                  Tu peux aussi uploader une APK déjà compilée si tu préfères.
                 </p>
               )}
               {status?.apk?.job?.status === 'ok' && (
@@ -564,13 +602,13 @@ export function AdminPage() {
               )}
               <ol className="mt-4 grid gap-2 text-sm text-yt-muted sm:grid-cols-3">
                 <li className="rounded-2xl bg-black/30 p-3">
-                  <span className="text-white">1.</span> Choisis prod / LAN / APP_URL
+                  <span className="text-white">1.</span> Choisis l’URL API (prod / LAN)
                 </li>
                 <li className="rounded-2xl bg-black/30 p-3">
-                  <span className="text-white">2.</span> Compile (ou make android-publish)
+                  <span className="text-white">2.</span> Compile en local ou Uploader l’APK
                 </li>
                 <li className="rounded-2xl bg-black/30 p-3">
-                  <span className="text-white">3.</span> Scanne le QR → installe l’APK
+                  <span className="text-white">3.</span> Scanne le QR → installe
                 </li>
               </ol>
             </div>

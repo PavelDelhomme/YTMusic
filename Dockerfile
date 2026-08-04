@@ -43,7 +43,7 @@ COPY api ./api
 COPY bin ./bin
 COPY --from=build /app/web/dist ./web/dist
 
-RUN mkdir -p /app/data /app/data/cache /app/data/img-cache \
+RUN mkdir -p /app/data /app/data/cache /app/data/img-cache /app/data/public/android \
   && chown -R ytmusic:ytmusic /app
 
 USER ytmusic
