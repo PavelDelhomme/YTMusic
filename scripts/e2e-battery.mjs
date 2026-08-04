@@ -246,7 +246,7 @@ async function runTarget({ name, base }) {
     const hist = await req(base, '/api/history', {
       method: 'POST',
       token,
-      body: { videoId: track.id, trackId: track.id, title: track.title },
+      body: { id: track.id, title: track.title, videoId: track.id, trackId: track.id },
     });
     rec(name, 'history.write', hist.status >= 200 && hist.status < 500, `status=${hist.status}`);
   }

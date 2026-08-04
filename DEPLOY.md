@@ -224,6 +224,18 @@ Tes réglages finaux (à garder) :
 
 ---
 
+### ☐ 6b. Mot de passe admin (SEED) — si login prod refuse le .env
+
+Dans Portainer → stack `ytmusic` → Environment, ajoute :
+
+```
+SEED_EMAIL=dev@delhomme.ovh
+SEED_PASSWORD=<le même que ton .env local>
+AUTH_SEED_SYNC=1
+```
+
+Puis **Pull and redeploy**. Au boot l’API aligne le hash mot de passe.
+
 ### ☐ 7. Cookies YouTube (obligatoire pour le son sur le VPS)
 
 Sans ça : login OK mais **aucune lecture** (« Sign in to confirm you’re not a bot »).  

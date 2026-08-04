@@ -110,6 +110,7 @@ import {
   registerLocal,
   sessionCookieOptions,
   signToken,
+  syncSeedCredentials,
   verifyToken,
 } from './auth.js';
 import { rateLimit } from './rateLimit.js';
@@ -1043,12 +1044,14 @@ app.get('/api/track/:id', accountRequired, async (req, res) => {
 
 app.post('/api/history', accountRequired, (req, res) => {
   try {
-    const track = req.body as Track;
-    if (!track?.id) {
+    const body = req.body || {};
+    const track = (body.track && typeof body.track === 'object' ? body.track : body) as Track;
+    const id = String(track?.id || body.videoId || body.trackId || body.id || '').trim();
+    if (!id) {
       res.status(400).json({ error: 'track requis' });
       return;
     }
-    addHistory(req.userId!, track, { bumpCount: false });
+    addHistory(req.userId!, { ...track, id }, { bumpCount: false });
     res.json({ ok: true, history: getHistory(req.userId!, 500) });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -1767,6 +1770,11 @@ wss.on('connection', (ws, req) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
+  try {
+    syncSeedCredentials();
+  } catch (err) {
+    console.error('[auth] seed sync', err);
+  }
   console.log(`YTMusic API → http://localhost:${PORT}`);
   console.log(`YTMusic LAN → http://0.0.0.0:${PORT} (toutes interfaces)`);
   console.log(`YTMusic WS  → ws://localhost:${PORT}/ws`);
