@@ -1,0 +1,572 @@
+import type { Track } from './types.js';
+
+export type Thumb = { url: string; width?: number; height?: number };
+
+/** Normalise un TextRuns / string Innertube en string affichable. */
+export function asText(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    const v = value as { text?: unknown; runs?: Array<{ text?: string }>; toString?: () => string };
+    if (typeof v.text === 'string') return v.text;
+    if (Array.isArray(v.runs)) {
+      const joined = v.runs.map((r) => (typeof r?.text === 'string' ? r.text : '')).join('');
+      if (joined) return joined;
+    }
+    if (typeof v.toString === 'function') {
+      const s = v.toString();
+      if (s && s !== '[object Object]') return s;
+    }
+  }
+  return '';
+}
+
+export function formatDurationClock(totalSeconds: number): string {
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00';
+  const total = Math.floor(totalSeconds);
+  const s = total % 60;
+  const m = Math.floor(total / 60) % 60;
+  const h = Math.floor(total / 3600);
+  const ss = s.toString().padStart(2, '0');
+  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${ss}`;
+  return `${m}:${ss}`;
+}
+
+/** Corrige les textes type `164:16` → `2:44:16`. */
+export function normalizeDurationText(raw: string): string {
+  const parts = raw.trim().split(':').map((p) => Number(p));
+  if (parts.some((n) => !Number.isFinite(n))) return raw;
+  if (parts.length === 3) return formatDurationClock(parts[0] * 3600 + parts[1] * 60 + parts[2]);
+  if (parts.length === 2) {
+    const [m, s] = parts;
+    if (m >= 60) return formatDurationClock(m * 60 + s);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+  return raw;
+}
+
+/**
+ * Garantit `duration` string (clients Moshi / JSON strict).
+ * Anciens payloads DB peuvent avoir `duration: 212` (secondes).
+ */
+export function sanitizeTrack(track: Track): Track {
+  const raw = track as Track & { duration?: unknown };
+  let durationSeconds =
+    typeof track.durationSeconds === 'number' && Number.isFinite(track.durationSeconds)
+      ? Math.floor(track.durationSeconds)
+      : undefined;
+  let duration: string | undefined;
+
+  if (typeof raw.duration === 'number' && Number.isFinite(raw.duration)) {
+    durationSeconds = durationSeconds ?? Math.floor(raw.duration);
+    duration = formatDurationClock(raw.duration);
+  } else if (typeof raw.duration === 'string' && raw.duration.trim()) {
+    duration = normalizeDurationText(raw.duration.trim());
+  } else if (durationSeconds != null) {
+    duration = formatDurationClock(durationSeconds);
+  }
+
+  return {
+    ...track,
+    artists: Array.isArray(track.artists)
+      ? track.artists.filter((a) => a?.name && !isJunkArtistName(String(a.name)))
+      : track.artists,
+    duration,
+    durationSeconds,
+  };
+}
+
+/** Nettoie un payload album/artiste de biblio (métadonnées YTM type « 4 songs »). */
+export function sanitizeLibraryItem<T extends { artists?: { name: string; id?: string }[]; title?: string; name?: string }>(
+  item: T,
+): T {
+  if (!item || typeof item !== 'object') return item;
+  if (!Array.isArray(item.artists)) return item;
+  return {
+    ...item,
+    artists: item.artists.filter((a) => a?.name && !isJunkArtistName(String(a.name))),
+  };
+}
+
+/** Collect every possible thumbnail array from a YT Music node */
+export function extractThumbs(...sources: any[]): Thumb[] {
+  const out: Thumb[] = [];
+  const seen = new Set<string>();
+
+  const pushList = (list: any) => {
+    if (!list) return;
+    const arr = Array.isArray(list)
+      ? list
+      : Array.isArray(list.contents)
+        ? list.contents
+        : Array.isArray(list.thumbnails)
+          ? list.thumbnails
+          : list.url
+            ? [list]
+            : [];
+    for (const t of arr) {
+      const url = String(t?.url || '').trim();
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      out.push({
+        url,
+        width: typeof t.width === 'number' ? t.width : undefined,
+        height: typeof t.height === 'number' ? t.height : undefined,
+      });
+    }
+  };
+
+  for (const src of sources) {
+    if (!src) continue;
+    pushList(src.thumbnails);
+    pushList(src.thumbnail);
+    pushList(src.thumbnail?.contents);
+    pushList(src.thumbnail?.thumbnails);
+    pushList(src.header?.thumbnail?.contents);
+    pushList(src.header?.thumbnails);
+    pushList(src.header?.thumbnail);
+    // Cropped / immersive variants
+    pushList(src.thumbnailRenderer?.musicThumbnailRenderer?.thumbnail?.thumbnails);
+    pushList(src.musicThumbnailRenderer?.thumbnail?.thumbnails);
+  }
+
+  return out.sort((a, b) => (b.width || 0) - (a.width || 0));
+}
+
+/** Upscale / normalize image URL for crisp display */
+export function resizeThumbUrl(url: string, size = 544): string {
+  if (!url) return '';
+  let u = url;
+
+  // googleusercontent / yt3 : =w544-h544-l90-rj or =w544-h544
+  if (/=w\d+-h\d+/.test(u)) {
+    u = u.replace(/=w\d+-h\d+(-[^=]*)?/, `=w${size}-h${size}$1`);
+  } else if (/=s\d+/.test(u)) {
+    u = u.replace(/=s\d+(-[^=]*)?/, `=s${size}$1`);
+  } else if (/googleusercontent\.com/.test(u) && !/[?&=]/.test(u.split('/').pop() || '')) {
+    // bare lh3 id without size — append
+    u = `${u}=s${size}`;
+  }
+
+  // YouTube video thumbs → highest quality available
+  const vi = u.match(/i\.ytimg\.com\/vi\/([^/]+)\//);
+  if (vi) {
+    const id = vi[1];
+    if (size >= 640) return `https://i.ytimg.com/vi/${id}/hq720.jpg`;
+    if (size >= 320) return `https://i.ytimg.com/vi/${id}/sddefault.jpg`;
+    return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+  }
+
+  return u;
+}
+
+export function bestThumbUrl(thumbs: Thumb[], size = 544): string {
+  if (!thumbs?.length) return '';
+  const sorted = [...thumbs].sort((a, b) => (b.width || 0) - (a.width || 0));
+  return resizeThumbUrl(sorted[0].url, size);
+}
+
+export function isJunkArtistName(name: string) {
+  return (
+    !name ||
+    name === '•' ||
+    /^(song|album|playlist|video|ep|single|artist|inconnu|unknown|n\/a|various artists|va)$/i.test(
+      name,
+    ) ||
+    /^\d+:\d+$/.test(name) ||
+    /^\d{4}$/.test(name) ||
+    /^\d+\s*songs?$/i.test(name.trim()) ||
+    /^\d+\s*titres?$/i.test(name.trim()) ||
+    /^\d+\s*(min|mins|minutes?|sec|secs|seconds?|h|hr|hrs|hours?)$/i.test(name.trim()) ||
+    /^\d+\s*(song|album|playlist|video)s?$/i.test(name.trim()) ||
+    /^\d+\s*hours?(?:,?\s*\d+\s*minutes?)?$/i.test(name.trim()) ||
+    /^\d+\s*hour,\s*\d+\s*minutes?$/i.test(name.trim()) ||
+    /^(?:\d+\s*)?(?:hour|hours|minute|minutes|second|seconds)(?:\s*,\s*\d+\s*(?:hour|hours|minute|minutes|second|seconds))?$/i.test(
+      name.trim(),
+    ) ||
+    /plays?/i.test(name) ||
+    /views?/i.test(name) ||
+    /monthly audience/i.test(name)
+  );
+}
+
+/** Extrait une année propre depuis un sous-titre type « Album • 2026 ». */
+export function extractYear(raw: unknown): string | undefined {
+  const text =
+    typeof raw === 'string'
+      ? raw
+      : asText(raw) || (raw && typeof raw === 'object' && 'text' in (raw as object)
+          ? String((raw as { text?: string }).text || '')
+          : '');
+  const m = String(text).match(/\b((?:19|20)\d{2})\b/);
+  return m?.[1];
+}
+
+function pageTypeOf(run: any): string {
+  return (
+    run?.endpoint?.payload?.browseEndpointContextSupportedConfigs
+      ?.browseEndpointContextMusicConfig?.pageType ||
+    run?.endpoint?.metadata?.page_type ||
+    ''
+  );
+}
+
+function artistsFromRuns(runs: any[] | undefined): { name: string; id?: string }[] {
+  if (!Array.isArray(runs)) return [];
+  const out: { name: string; id?: string }[] = [];
+  for (const r of runs) {
+    const name = String(r?.text || '')
+      .replace(/^[&,•]\s*/, '')
+      .replace(/\s*[&,•]\s*$/, '')
+      .trim();
+    if (isJunkArtistName(name)) continue;
+    const browseId = r?.endpoint?.payload?.browseId as string | undefined;
+    const pageType = pageTypeOf(r);
+    const isArtist =
+      Boolean(browseId?.startsWith('UC')) ||
+      pageType.includes('ARTIST') ||
+      (!pageType && browseId && !browseId.startsWith('MPREb_') && !browseId.startsWith('VL') && !browseId.startsWith('OLAK5'));
+    if (browseId && isArtist) {
+      out.push({ name, id: browseId });
+    } else if (!browseId && name && !/^[•&|,]+$/.test(name)) {
+      if (!out.some((a) => a.name === name)) out.push({ name });
+    }
+  }
+  return out;
+}
+
+function splitAuthorString(author: string, channelId?: string): { name: string; id?: string }[] {
+  const parts = author
+    .split(/\s*(?:&|,| feat\.? | ft\.? | featuring )\s*/i)
+    .map((p) => p.trim())
+    .filter((p) => p && !isJunkArtistName(p));
+  return parts.map((name, i) => ({
+    name,
+    id: i === 0 ? channelId : undefined,
+  }));
+}
+
+/** Artists depuis un header album / playlist Innertube (author, subtitle runs, byline…). */
+export function artistsFromHeader(header: any): { name: string; id?: string }[] {
+  if (!header) return [];
+
+  const collected: { name: string; id?: string }[] = [];
+  const push = (list: { name: string; id?: string }[]) => {
+    for (const a of list) {
+      if (isJunkArtistName(a.name)) continue;
+      if (!collected.some((x) => x.name === a.name && x.id === a.id)) collected.push(a);
+    }
+  };
+
+  push(artistsFrom(header));
+
+  if (header.author) {
+    if (typeof header.author === 'string') {
+      push(splitAuthorString(header.author, header.channel_id || header.author_id));
+    } else if (header.author.name) {
+      push(
+        splitAuthorString(
+          String(header.author.name),
+          header.author.channel_id || header.author.id,
+        ),
+      );
+    } else {
+      push(artistsFromRuns(header.author?.runs));
+    }
+  }
+
+  push(artistsFromRuns(header.subtitle?.runs));
+  push(artistsFromRuns(header.second_subtitle?.runs));
+  push(artistsFromRuns(header.strapline_text?.runs));
+  push(artistsFromRuns(header.byline?.runs));
+  push(artistsFromRuns(header.description?.runs));
+
+  // Sous-titre texte « Album • Artist • 2026 »
+  const subText = asText(header.subtitle) || asText(header.strapline_text);
+  if (subText.includes('•')) {
+    const parts = subText.split('•').map((p) => p.trim());
+    for (const part of parts) {
+      if (isJunkArtistName(part)) continue;
+      if (/^(album|ep|single|playlist)$/i.test(part)) continue;
+      if (extractYear(part) === part) continue;
+      push(splitAuthorString(part));
+    }
+  }
+
+  // Préférer ceux avec id
+  const withIds = collected.filter((a) => a.id);
+  return withIds.length ? withIds : collected;
+}
+
+export function artistsFrom(item: any): { name: string; id?: string }[] {
+  if (Array.isArray(item?.artists) && item.artists.length) {
+    return item.artists
+      .map((a: any) => ({
+        name: String(a.name || '').trim(),
+        id: a.channel_id || a.id,
+      }))
+      .filter((a: { name: string }) => !isJunkArtistName(a.name));
+  }
+
+  if (item?.author?.name) {
+    return splitAuthorString(String(item.author.name), item.author.channel_id);
+  }
+
+  if (typeof item?.author === 'string' && item.author.trim()) {
+    return splitAuthorString(item.author, item.channel_id);
+  }
+
+  if (Array.isArray(item?.authors) && item.authors.length) {
+    return item.authors
+      .map((a: any) => ({
+        name: String(a.name || '').trim(),
+        id: a.channel_id || a.id,
+      }))
+      .filter((a: { name: string }) => !isJunkArtistName(a.name));
+  }
+
+  const flex = item?.flex_columns || [];
+  for (let i = 1; i < flex.length; i++) {
+    const fromRuns = artistsFromRuns(flex[i]?.title?.runs);
+    const withIds = fromRuns.filter((a) => a.id);
+    if (withIds.length) return withIds;
+  }
+  for (let i = 1; i < flex.length; i++) {
+    const fromRuns = artistsFromRuns(flex[i]?.title?.runs).filter(
+      (a) => a.id || !isJunkArtistName(a.name),
+    );
+    const cleaned = fromRuns.filter((a) => a.id || (a.name.length < 80 && !a.name.includes(' - ')));
+    if (cleaned.some((a) => a.id)) return cleaned.filter((a) => a.id);
+    if (cleaned.length && cleaned.every((a) => a.name.length < 60)) return cleaned;
+  }
+
+  for (let i = 1; i < flex.length; i++) {
+    const text = asText(flex[i]?.title);
+    if (!text.includes('•')) continue;
+    const parts = text.split('•').map((p: string) => p.trim());
+    const start = /^(song|album|playlist|video|ep|single)$/i.test(parts[0] || '') ? 1 : 0;
+    for (let j = start; j < parts.length; j++) {
+      const chunk = parts[j];
+      if (!chunk || isJunkArtistName(chunk)) continue;
+      if (/^\d/.test(chunk) || /views?/i.test(chunk) || extractYear(chunk) === chunk) continue;
+      return splitAuthorString(chunk);
+    }
+  }
+
+  // subtitle runs on two-row / album cards
+  const fromSub = artistsFromRuns(item?.subtitle?.runs);
+  if (fromSub.length) return fromSub;
+
+  return [];
+}
+
+function inferType(id: string, item: any): Track['type'] {
+  const explicit = item.item_type;
+  if (
+    explicit === 'song' ||
+    explicit === 'video' ||
+    explicit === 'album' ||
+    explicit === 'playlist' ||
+    explicit === 'artist'
+  ) {
+    return explicit;
+  }
+
+  const pageType =
+    item.endpoint?.payload?.browseEndpointContextSupportedConfigs
+      ?.browseEndpointContextMusicConfig?.pageType || '';
+
+  if (pageType.includes('ARTIST') || id.startsWith('UC')) return 'artist';
+  if (pageType.includes('ALBUM') || id.startsWith('MPREb_') || id.startsWith('OLAK5')) return 'album';
+  if (pageType.includes('PLAYLIST') || id.startsWith('PL') || id.startsWith('VL') || id.startsWith('RD'))
+    return 'playlist';
+  // Tuiles Moods & genres / Charts (browse FE…) — pas des titres jouables
+  if (id.startsWith('mood:') || id.startsWith('FE') || id.includes('moods_and_genres')) return 'playlist';
+  if (/^[a-zA-Z0-9_-]{11}$/.test(id)) return 'song';
+  return 'unknown';
+}
+
+/** Tuiles colorées Explore « Chill / Focus / … » (MusicNavigationButton). */
+export function mapNavigationButton(item: any): Track | null {
+  if (!item) return null;
+  const isNav =
+    item.type === 'MusicNavigationButton' ||
+    (typeof item.button_text === 'string' && item.endpoint?.payload?.browseId);
+  if (!isNav) return null;
+
+  const browseId = String(item.endpoint?.payload?.browseId || '').trim();
+  const params = String(item.endpoint?.payload?.params || '').trim();
+  const title =
+    asText(item.button_text) || asText(item.text) || asText(item.title) || 'Sans titre';
+  if (!browseId && !params) return null;
+
+  // Même browseId pour toutes les catégories — l’unicité est dans `params`
+  const id = params
+    ? `mood:${params}`
+    : browseId.startsWith('FE')
+      ? `mood:${browseId}`
+      : browseId;
+
+  return {
+    id,
+    title,
+    artists: [],
+    album: browseId ? { name: title, id: browseId } : undefined,
+    thumbnails: [],
+    type: 'playlist',
+  };
+}
+
+export function mapListItem(item: any, fallbackThumbs?: Thumb[]): Track | null {
+  if (!item || item.type === 'Message') return null;
+
+  const id =
+    item.id ||
+    item.endpoint?.payload?.videoId ||
+    item.overlay?.content?.endpoint?.payload?.videoId ||
+    item.overlay?.endpoint?.payload?.videoId ||
+    item.menu?.top_level_buttons?.[0]?.endpoint?.payload?.videoId ||
+    item.endpoint?.payload?.browseId ||
+    item.endpoint?.payload?.playlistId;
+
+  if (!id) return null;
+
+  let title = asText(item.title) || asText(item.name);
+  if (!title) {
+    title = asText(item.flex_columns?.[0]?.title);
+  }
+  if (!title && item.item_type === 'artist') {
+    title = 'Artiste';
+  }
+  if (!title) title = 'Sans titre';
+
+  const durationTextRaw = item.duration?.text || asText(item.duration);
+  const durationSeconds =
+    typeof item.duration?.seconds === 'number'
+      ? item.duration.seconds
+      : undefined;
+  let duration = durationTextRaw || undefined;
+  if (typeof durationSeconds === 'number') {
+    duration = formatDurationClock(durationSeconds);
+  } else if (duration) {
+    duration = normalizeDurationText(duration);
+  }
+  const type = inferType(String(id), item);
+
+  let artists = artistsFrom(item);
+  if (type === 'artist' && !artists.length) {
+    artists = [{ name: title, id: String(id) }];
+  }
+
+  let thumbnails = extractThumbs(item);
+  if (!thumbnails.length && fallbackThumbs?.length) thumbnails = fallbackThumbs;
+
+  // Video id fallback art
+  if (!thumbnails.length && /^[a-zA-Z0-9_-]{11}$/.test(String(id))) {
+    thumbnails = [
+      { url: `https://i.ytimg.com/vi/${id}/hq720.jpg`, width: 1280, height: 720 },
+      { url: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, width: 480, height: 360 },
+    ];
+  }
+
+  return {
+    id: String(id),
+    title,
+    artists,
+    album: item.album
+      ? { name: String(item.album.name), id: item.album.id }
+      : undefined,
+    duration,
+    durationSeconds,
+    thumbnails,
+    type,
+  };
+}
+
+export function mapTwoRowItem(item: any, fallbackThumbs?: Thumb[]): Track | null {
+  if (!item) return null;
+  const id =
+    item.id ||
+    item.endpoint?.payload?.browseId ||
+    item.endpoint?.payload?.videoId ||
+    item.endpoint?.payload?.playlistId ||
+    item.navigationEndpoint?.browseEndpoint?.browseId ||
+    item.navigationEndpoint?.watchEndpoint?.videoId ||
+    item.endpoint?.browseEndpoint?.browseId ||
+    item.endpoint?.watchEndpoint?.videoId;
+  if (!id) return null;
+
+  const title =
+    asText(item.title) ||
+    asText(item.title?.runs) ||
+    (Array.isArray(item.title?.runs) ? item.title.runs.map((r: any) => r.text || '').join('') : '') ||
+    'Sans titre';
+  // Normalise endpoint pour inferType
+  if (!item.endpoint?.payload && (item.navigationEndpoint || item.endpoint?.browseEndpoint)) {
+    const ne = item.navigationEndpoint || item.endpoint;
+    item = {
+      ...item,
+      endpoint: {
+        payload: {
+          browseId: ne.browseEndpoint?.browseId || ne.payload?.browseId,
+          videoId: ne.watchEndpoint?.videoId || ne.payload?.videoId,
+          playlistId: ne.watchEndpoint?.playlistId || ne.payload?.playlistId,
+          browseEndpointContextSupportedConfigs:
+            ne.browseEndpoint?.browseEndpointContextSupportedConfigs ||
+            ne.payload?.browseEndpointContextSupportedConfigs,
+        },
+      },
+    };
+  }
+  const type = inferType(String(id), item);
+  let artists = artistsFrom(item);
+  if (type === 'artist' && !artists.length) {
+    artists = [{ name: title, id: String(id) }];
+  }
+
+  let thumbnails = extractThumbs(item);
+  if (!thumbnails.length && fallbackThumbs?.length) thumbnails = fallbackThumbs;
+  if (!thumbnails.length && /^[a-zA-Z0-9_-]{11}$/.test(String(id))) {
+    thumbnails = [
+      { url: `https://i.ytimg.com/vi/${id}/hq720.jpg`, width: 1280, height: 720 },
+      { url: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, width: 480, height: 360 },
+    ];
+  }
+
+  return {
+    id: String(id),
+    title,
+    artists,
+    thumbnails,
+    type,
+    duration: item.duration?.text,
+  };
+}
+
+export function mapAny(item: any, fallbackThumbs?: Thumb[]): Track | null {
+  if (!item) return null;
+  if (item.type === 'MusicCardShelf') {
+    const nested = item.contents?.[0] || item.header;
+    return mapAny(nested, fallbackThumbs);
+  }
+  if (item.type === 'ItemSection') {
+    const nested = item.contents?.[0];
+    return mapAny(nested, fallbackThumbs);
+  }
+  const nav = mapNavigationButton(item);
+  if (nav) return nav;
+  if (item.type === 'MusicResponsiveListItem' || item.flex_columns) {
+    return mapListItem(item, fallbackThumbs);
+  }
+  if (item.type === 'MusicTwoRowItem') return mapTwoRowItem(item, fallbackThumbs);
+  return mapListItem(item, fallbackThumbs) || mapTwoRowItem(item, fallbackThumbs);
+}
+
+export function parseAuthorField(author: string, channelId?: string) {
+  return splitAuthorString(author, channelId);
+}
+
+export function bestThumb(track: Track, size = 544): string {
+  return bestThumbUrl(track.thumbnails || [], size);
+}

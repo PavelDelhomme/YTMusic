@@ -1,0 +1,1585 @@
+import { create } from 'zustand';
+import { api, artistNames, type Track } from '../api';
+import { resolvePlayUrl } from '../lib/offlineCache';
+import { prefetchAround, resolvePrefetchedPlayUrl, warmFormat, warmHead, bumpPrefetchGeneration, isPrefetchBlobUrl } from '../lib/streamPrefetch';
+import { useSession } from './session';
+import { useLibrary } from './library';
+
+type RepeatMode = 'off' | 'all' | 'one';
+
+function refreshMediaSession() {
+  void import('../lib/mediaKeys').then((m) => m.updateMediaSessionMetadata()).catch(() => undefined);
+}
+
+type PlayerState = {
+  current: Track | null;
+  queue: Track[];
+  queueIndex: number;
+  /** Fin exclusive de la file « utilisateur » (album / playlist lancée). Au-delà = autoplay. */
+  userQueueEnd: number;
+  /** Suggestions automatiques après la file (style YTM). */
+  autoplay: boolean;
+  isPlaying: boolean;
+  isLoading: boolean;
+  shuffle: boolean;
+  repeat: RepeatMode;
+  volume: number;
+  progress: number;
+  duration: number;
+  showQueue: boolean;
+  showLyrics: boolean;
+  lyrics: string | null;
+  lyricsTimed: { startMs: number; text: string }[] | null;
+  related: Track[];
+  relatedLoading: boolean;
+  relatedError: string | null;
+  hydrated: boolean;
+  play: (
+    track: Track,
+    queue?: Track[],
+    opts?: { preserveQueue?: boolean; noAutoRadio?: boolean; keepUserBoundary?: boolean },
+  ) => Promise<void>;
+  playQueue: (tracks: Track[], startIndex?: number) => Promise<void>;
+  playAt: (index: number) => Promise<void>;
+  toggle: () => void;
+  next: (opts?: { fromEnded?: boolean }) => Promise<void>;
+  prev: () => Promise<void>;
+  setProgress: (n: number) => void;
+  seek: (n: number) => void;
+  setDuration: (n: number) => void;
+  setVolume: (n: number) => void;
+  toggleShuffle: () => void;
+  cycleRepeat: () => void;
+  toggleQueue: () => void;
+  toggleLyrics: () => void;
+  toggleAutoplay: () => void;
+  setAutoplay: (on: boolean) => void;
+  /** Relance le remplissage de la zone « À suivre ». */
+  topUpAutoplay: () => void;
+  addNext: (track: Track) => void;
+  addToQueue: (track: Track) => void;
+  moveInQueue: (fromIndex: number, toIndex: number) => void;
+  removeFromQueue: (index: number) => void;
+  /** Retire les titres avant l’index courant (section « Déjà joués »). */
+  clearPlayedFromQueue: () => void;
+  appendRelated: (tracks: Track[]) => void;
+  clearQueue: () => void;
+  relatedLoading: boolean;
+  relatedError: string | null;
+  startMix: (track: Track) => Promise<void>;
+  /** Radio style YTM : depuis un titre, album ou artiste. */
+  startRadio: (opts: {
+    kind: 'track' | 'album' | 'artist';
+    id: string;
+    seed?: Track;
+    /** Si true, favorise les titres du même artiste (quand kind=track). */
+    stayClose?: boolean;
+  }) => Promise<void>;
+  hydrate: () => Promise<void>;
+  applyRemoteState: (state: Partial<PlayerState> & { current?: Track | null }, playAudio?: boolean) => Promise<void>;
+  loadRelated: (trackId: string) => Promise<void>;
+  sleepLabel: string | null;
+  sleepUntilEnd: boolean;
+  playError: string | null;
+  /** Timer actif : pause auto après délai, ou à la fin de la piste. */
+  setSleepTimer: (delayMs: number | 'end' | null, label: string | null) => void;
+  clearPlayError: () => void;
+  audioEl: HTMLAudioElement | null;
+  bindAudio: (el: HTMLAudioElement | null) => void;
+};
+
+let sleepTimerHandle: number | null = null;
+
+function clearSleepTimerInternal() {
+  if (sleepTimerHandle != null) {
+    window.clearTimeout(sleepTimerHandle);
+    sleepTimerHandle = null;
+  }
+}
+
+function isPlayable(t: Track) {
+  return /^[a-zA-Z0-9_-]{11}$/.test(t.id);
+}
+
+/** Interleave par artiste — max ~1/4 du seed, pas de rafales même auteur. */
+function diversifyByArtist(
+  tracks: Track[],
+  seedArtist?: { id?: string; name?: string } | null,
+): Track[] {
+  const seedKey = (seedArtist?.id || seedArtist?.name || '').toLowerCase();
+  const buckets = new Map<string, Track[]>();
+  for (const t of tracks) {
+    if (!isPlayable(t)) continue;
+    const key = (t.artists?.[0]?.id || t.artists?.[0]?.name || t.id).toLowerCase();
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(t);
+  }
+  const keys = [...buckets.keys()].sort((a, b) => {
+    if (a === seedKey) return 1;
+    if (b === seedKey) return -1;
+    return (buckets.get(b)?.length || 0) - (buckets.get(a)?.length || 0);
+  });
+  const out: Track[] = [];
+  const seen = new Set<string>();
+  let seedHits = 0;
+  let guard = 0;
+  while (out.length < 80 && guard++ < 400) {
+    let added = false;
+    for (const k of keys) {
+      const bucket = buckets.get(k);
+      if (!bucket?.length) continue;
+      if (seedKey && k === seedKey && seedHits >= Math.max(1, Math.floor(out.length / 4) + 1)) {
+        continue;
+      }
+      const t = bucket.shift()!;
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      out.push(t);
+      if (seedKey && k === seedKey) seedHits += 1;
+      added = true;
+      if (out.length >= 80) break;
+    }
+    if (!added) break;
+  }
+  return out;
+}
+
+function mergeArtists(
+  local: Track['artists'] = [],
+  remote: Track['artists'] = [],
+): Track['artists'] {
+  if (!remote.length) return local;
+  if (!local.length) return remote;
+  return remote.map((r, i) => {
+    const l = local.find((x) => x.name.toLowerCase() === r.name.toLowerCase()) || local[i];
+    return {
+      name: r.name || l?.name || 'Artiste',
+      id: r.id || l?.id,
+    };
+  });
+}
+
+const PLAYER_STORAGE_KEY = 'ytm_player_v1';
+/** Conserve un historique court + une longue suite (évite de saturer localStorage). */
+const QUEUE_KEEP_BEFORE = 48;
+const QUEUE_KEEP_AFTER = 80;
+
+type PersistedPlayer = {
+  v?: number;
+  current: Track | null;
+  queue: Track[];
+  queueIndex: number;
+  userQueueEnd?: number;
+  autoplay?: boolean;
+  volume: number;
+  shuffle: boolean;
+  repeat: RepeatMode;
+  progress: number;
+  savedAt?: number;
+};
+
+function slimTrack(t: Track): Track {
+  const thumbs = (t.thumbnails || []).slice(0, 2);
+  return {
+    id: t.id,
+    title: t.title,
+    type: t.type,
+    artists: t.artists,
+    album: t.album,
+    duration: t.duration,
+    thumbnails: thumbs,
+  };
+}
+
+function trimQueueForPersist(
+  queue: Track[],
+  queueIndex: number,
+  userQueueEnd: number,
+): { queue: Track[]; queueIndex: number; userQueueEnd: number } {
+  if (queue.length <= QUEUE_KEEP_BEFORE + 1 + QUEUE_KEEP_AFTER) {
+    return {
+      queue: queue.map(slimTrack),
+      queueIndex,
+      userQueueEnd: Math.min(userQueueEnd, queue.length),
+    };
+  }
+  const start = Math.max(0, queueIndex - QUEUE_KEEP_BEFORE);
+  const end = Math.min(queue.length, queueIndex + 1 + QUEUE_KEEP_AFTER);
+  return {
+    queue: queue.slice(start, end).map(slimTrack),
+    queueIndex: queueIndex - start,
+    userQueueEnd: Math.max(0, Math.min(userQueueEnd, end) - start),
+  };
+}
+
+function loadPersisted(): Partial<PersistedPlayer> {
+  try {
+    const raw = localStorage.getItem(PLAYER_STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as PersistedPlayer;
+  } catch {
+    return {};
+  }
+}
+
+function persistPlayer() {
+  try {
+    const s = usePlayer.getState();
+    if (!s.current && (!s.queue || s.queue.length === 0)) {
+      localStorage.removeItem(PLAYER_STORAGE_KEY);
+      return;
+    }
+
+    let progress = s.progress;
+    const audio = s.audioEl;
+    if (audio && Number.isFinite(audio.currentTime) && audio.currentTime > 0) {
+      progress = audio.currentTime;
+    }
+
+    const trimmed = trimQueueForPersist(
+      s.queue || [],
+      s.queueIndex || 0,
+      typeof s.userQueueEnd === 'number' ? s.userQueueEnd : (s.queue || []).length,
+    );
+    const payload: PersistedPlayer = {
+      v: 3,
+      current: s.current ? slimTrack(s.current) : null,
+      queue: trimmed.queue,
+      queueIndex: trimmed.queueIndex,
+      userQueueEnd: trimmed.userQueueEnd,
+      autoplay: s.autoplay !== false,
+      volume: s.volume,
+      shuffle: s.shuffle,
+      repeat: s.repeat,
+      progress,
+      savedAt: Date.now(),
+    };
+
+    try {
+      localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // Quota : garder un historique avant + la suite (pas seulement le titre courant)
+      const qi = Math.max(0, s.queueIndex || 0);
+      const full = s.queue || [];
+      const start = Math.max(0, qi - 24);
+      const end = Math.min(full.length, qi + 40);
+      const q = full.slice(start, end).map(slimTrack);
+      const newQi = qi - start;
+      const oldEnd = typeof s.userQueueEnd === 'number' ? s.userQueueEnd : full.length;
+      const compact: PersistedPlayer = {
+        v: 3,
+        current: s.current ? slimTrack(s.current) : q[newQi] || q[0] || null,
+        queue: q.length ? q : s.current ? [slimTrack(s.current)] : [],
+        queueIndex: q.length ? newQi : 0,
+        userQueueEnd: Math.max(0, Math.min(oldEnd, end) - start),
+        autoplay: s.autoplay !== false,
+        volume: s.volume,
+        shuffle: s.shuffle,
+        repeat: s.repeat,
+        progress,
+        savedAt: Date.now(),
+      };
+      localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(compact));
+    }
+  } catch {
+    /* private mode / quota */
+  }
+}
+
+/** Flush immédiat (fermeture onglet / app / arrière-plan). */
+export function flushPlayerPersist() {
+  persistPlayer();
+}
+
+function installPersistLifecycle() {
+  if (typeof window === 'undefined') return;
+  const flush = () => {
+    try {
+      persistPlayer();
+    } catch {
+      /* ignore */
+    }
+  };
+  window.addEventListener('pagehide', flush);
+  window.addEventListener('beforeunload', flush);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flush();
+  });
+  // PWA / mobile : freeze de la page
+  window.addEventListener('freeze', flush);
+}
+
+installPersistLifecycle();
+
+let lastHttpPublishAt = 0;
+let lastHttpSignature = '';
+
+function publish() {
+  // Sync off → file / titre / progress restent locaux (compte partagé seulement).
+  if (!useSession.getState().receiveRemoteSync) {
+    persistPlayer();
+    return;
+  }
+  const s = usePlayer.getState();
+  const payload = {
+    current: s.current,
+    queue: s.queue,
+    queueIndex: s.queueIndex,
+    userQueueEnd: s.userQueueEnd,
+    autoplay: s.autoplay,
+    isPlaying: s.isPlaying,
+    progress: s.progress,
+    duration: s.duration,
+    volume: s.volume,
+    shuffle: s.shuffle,
+    repeat: s.repeat,
+    updatedAt: Date.now(),
+  };
+  // WS (temps réel entre appareils connectés)
+  useSession.getState().publishState(payload);
+
+  // HTTP → SQLite : pour que le mobile récupère titre + timecode au cold start
+  const sig = `${s.current?.id || ''}|${s.queueIndex}|${s.isPlaying}|${Math.floor(s.progress)}`;
+  const now = Date.now();
+  // Important = changement de piste / play-pause ; sinon throttle ~4s pour le progress
+  const trackOrPlayChanged =
+    lastHttpSignature.split('|').slice(0, 3).join('|') !== sig.split('|').slice(0, 3).join('|');
+  if (trackOrPlayChanged || now - lastHttpPublishAt > 4000) {
+    lastHttpPublishAt = now;
+    lastHttpSignature = sig;
+    void import('../api')
+      .then(({ api }) => api.publishSessionState(payload))
+      .catch(() => undefined);
+  }
+
+  persistPlayer();
+  void import('../lib/backgroundAudio')
+    .then(({ setNativePlaybackNotification }) =>
+      setNativePlaybackNotification({
+        playing: s.isPlaying,
+        title: s.current?.title,
+        artist: s.current ? artistNames(s.current) : 'Lecture en cours',
+      }),
+    )
+    .catch(() => undefined);
+}
+
+async function restoreAudioFromPersisted() {
+  const { audioEl, current, progress, volume } = usePlayer.getState();
+  if (!audioEl || !current || !isPlayable(current)) return;
+  // Déjà chargé pour ce titre
+  if (audioEl.dataset.trackId === current.id && audioEl.src) return;
+  try {
+    const src = await resolvePlayUrl(current.id);
+    // Ne pas révoquer un blob encore dans le cache prefetch (skip suivant)
+    if (audioEl.src.startsWith('blob:') && !isPrefetchBlobUrl(audioEl.src)) {
+      URL.revokeObjectURL(audioEl.src);
+    }
+    audioEl.src = src;
+    audioEl.dataset.trackId = current.id;
+    audioEl.volume = volume;
+    const seekTo = progress > 0 ? progress : 0;
+    const applySeek = () => {
+      try {
+        if (seekTo > 0 && Number.isFinite(audioEl.duration) && seekTo < audioEl.duration) {
+          audioEl.currentTime = seekTo;
+        } else if (seekTo > 0) {
+          audioEl.currentTime = seekTo;
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    if (audioEl.readyState >= 1) applySeek();
+    else audioEl.addEventListener('loadedmetadata', applySeek, { once: true });
+    void usePlayer.getState().loadRelated(current.id);
+  } catch (err) {
+    console.error('restore playback', err);
+  }
+}
+
+function isActivePlayer() {
+  // Sync titre off → contrôles 100 % locaux (deux appareils = deux musiques).
+  if (!useSession.getState().receiveRemoteSync) return true;
+  return useSession.getState().isActivePlayer;
+}
+
+function sendCmd(command: Record<string, unknown>) {
+  useSession.getState().sendCommand(command);
+}
+
+/**
+ * Prend la main audio sur CET appareil.
+ * Sync off → pas de claim hub (chaque appareil joue pour soi).
+ */
+function claimLocalPlayer() {
+  if (!useSession.getState().receiveRemoteSync) {
+    useSession.setState({ isActivePlayer: true });
+    return;
+  }
+  if (isActivePlayer()) return;
+  const s = useSession.getState();
+  const me = s.deviceId;
+  if (me) s.setActive(me);
+  else s.transferHere();
+  useSession.setState({ isActivePlayer: true });
+}
+
+/** Dès qu'un titre démarre (même 1s) → historique + listen_events */
+function recordStarted(track: Track) {
+  void useLibrary.getState().recordPlay(track);
+  void api
+    .listen({ trackId: track.id, event: 'start', progressPct: 0, track })
+    .catch(() => undefined);
+}
+
+let listenTrackId: string | null = null;
+let listenStartedAt = 0;
+let lastProgressSent = 0;
+let completedForTrack: string | null = null;
+
+export function reportListenProgress(progress: number, duration: number) {
+  const current = usePlayer.getState().current;
+  if (!current?.id || !duration) return;
+  if (listenTrackId !== current.id) {
+    listenTrackId = current.id;
+    listenStartedAt = Date.now();
+    lastProgressSent = 0;
+    completedForTrack = null;
+  }
+  const pct = Math.min(100, (progress / duration) * 100);
+  if (pct - lastProgressSent >= 25 && pct < 90) {
+    lastProgressSent = pct;
+    void api
+      .listen({ trackId: current.id, event: 'progress', progressPct: pct })
+      .catch(() => undefined);
+  }
+  if (pct >= 90 && completedForTrack !== current.id) {
+    completedForTrack = current.id;
+    void api
+      .listen({
+        trackId: current.id,
+        event: 'complete',
+        progressPct: pct,
+        durationMs: Math.round(duration * 1000),
+        track: current,
+      })
+      .catch(() => undefined);
+  }
+}
+
+export function reportSkipIfEarly(progress: number) {
+  const current = usePlayer.getState().current;
+  if (!current?.id) return;
+  const elapsed = Date.now() - listenStartedAt;
+  if (progress < 15 || elapsed < 15_000) {
+    void api
+      .listen({
+        trackId: current.id,
+        event: 'skip',
+        progressPct: Math.min(100, (progress / Math.max(1, usePlayer.getState().duration)) * 100),
+        durationMs: elapsed,
+      })
+      .catch(() => undefined);
+  }
+}
+
+/** Génération pour ignorer les play() obsolètes si l’utilisateur saute vite */
+let playGeneration = 0;
+
+async function resolveCachedUrl(trackId: string) {
+  // 1) Cache offline IndexedDB
+  // 2) Prefetch full (Cache Storage) → play instantané
+  // 3) Stream API (tête déjà préchauffée en parallèle)
+  const prefetched = await resolvePrefetchedPlayUrl(trackId);
+  if (prefetched) return prefetched;
+  void warmFormat(trackId);
+  void warmHead(trackId);
+  return resolvePlayUrl(trackId);
+}
+
+function schedulePrefetch(queue: Track[], queueIndex: number) {
+  const playable = queue.filter(isPlayable);
+  const ids = playable.map((t) => t.id);
+  if (!ids.length) return;
+  const currentId = queue[queueIndex]?.id;
+  let idx = currentId ? ids.indexOf(currentId) : -1;
+  if (idx < 0) idx = Math.min(Math.max(0, queueIndex), ids.length - 1);
+  // Modéré : laisse de la bande passante au titre en cours (surtout Linux / navigateur).
+  const saveData =
+    typeof navigator !== 'undefined' &&
+    ((navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection
+      ?.saveData ||
+      /^(2g|slow-2g|3g)$/i.test(
+        (navigator as Navigator & { connection?: { effectiveType?: string } }).connection?.effectiveType ||
+          '',
+      ));
+  prefetchAround(ids, idx, {
+    ahead: saveData ? 1 : 2,
+    behind: 1,
+    fullAhead: saveData ? 0 : 1,
+    delayFullMs: 2000,
+  });
+}
+
+/** Un seul remplissage autoplay à la fois (évite tempête related×N au skip). */
+let autoRadioInflight: { seedId: string; promise: Promise<void> } | null = null;
+let autoRadioSeq = 0;
+
+/** Ajoute des titres en zone autoplay dès qu’un pool arrive (sans attendre les autres APIs). */
+function mergeAutoTracks(seedId: string, pool: Track[], relatedUpdate?: Track[]) {
+  const state = usePlayer.getState();
+  if (state.autoplay === false) return;
+  // Ignore les réponses obsolètes (titre déjà changé)
+  if (state.current?.id && state.current.id !== seedId) return;
+  const boundary = Math.max(state.userQueueEnd || 0, state.queueIndex + 1);
+  const autoLen = state.queue.length - boundary;
+  if (autoLen >= 40) return;
+  const existing = new Set(state.queue.map((t) => t.id));
+  const extra: Track[] = [];
+  for (const t of pool) {
+    if (!t?.id || t.id === seedId || existing.has(t.id) || !isPlayable(t)) continue;
+    existing.add(t.id);
+    extra.push(t);
+    if (extra.length >= 80) break;
+  }
+  if (!extra.length && !relatedUpdate?.length) return;
+  const patch: Partial<PlayerState> = {};
+  if (extra.length) {
+    patch.queue = [...state.queue, ...extra];
+  }
+  if (relatedUpdate?.length) {
+    patch.related = relatedUpdate;
+  }
+  if (!Object.keys(patch).length) return;
+  usePlayer.setState(patch);
+  if (patch.queue) schedulePrefetch(patch.queue, state.queueIndex);
+  publish();
+}
+
+/** Remplit la zone autoplay (après userQueueEnd) — progressive, dédupliquée. */
+async function ensureAutoRadio(seedId: string) {
+  const cur = usePlayer.getState();
+  if (cur.autoplay === false) return;
+  const userEnd = Math.max(cur.userQueueEnd || 0, cur.queueIndex + 1);
+  const autoUpcoming = cur.queue.slice(userEnd).filter(isPlayable);
+  if (autoUpcoming.length >= 40) {
+    schedulePrefetch(cur.queue, cur.queueIndex);
+    return;
+  }
+  if (!isPlayable({ id: seedId } as Track)) return;
+
+  if (autoRadioInflight?.seedId === seedId) {
+    return autoRadioInflight.promise;
+  }
+
+  const seq = ++autoRadioSeq;
+  const promise = (async () => {
+    // Déjà des related en mémoire pour ce titre → injecte immédiatement
+    const snap = usePlayer.getState();
+    if (snap.related?.length && snap.current?.id === seedId) {
+      mergeAutoTracks(seedId, snap.related);
+    }
+
+    const relatedP = api
+      .related(seedId)
+      .then((r) => {
+        if (seq !== autoRadioSeq) return r;
+        const pool = [...(r.related || []), ...(r.radio || [])];
+        mergeAutoTracks(seedId, pool, pool.length ? pool : undefined);
+        return r;
+      })
+      .catch((err) => {
+        console.warn('auto-radio related', err);
+        return null;
+      });
+
+    await relatedP;
+  })();
+
+  autoRadioInflight = { seedId, promise };
+  try {
+    await promise;
+  } finally {
+    if (autoRadioInflight?.seedId === seedId) autoRadioInflight = null;
+  }
+}
+
+async function playLocal(track: Track, state: PlayerState, gen: number) {
+  const audio = state.audioEl;
+  if (!audio) return;
+
+  // Stream d’abord (fluide), métadonnées en parallèle
+  const srcPromise = resolveCachedUrl(track.id);
+  const metaPromise = api.track(track.id).catch(() => undefined);
+
+  // Enrichissement rapide local (thumbs) pendant le fetch stream
+  let enriched = track;
+  if (/^[a-zA-Z0-9_-]{11}$/.test(track.id)) {
+    const ytimg = [
+      { url: `https://i.ytimg.com/vi/${track.id}/maxresdefault.jpg`, width: 1280, height: 720 },
+      { url: `https://i.ytimg.com/vi/${track.id}/hq720.jpg`, width: 1280, height: 720 },
+      ...(track.thumbnails || []),
+    ];
+    enriched = { ...track, thumbnails: ytimg };
+    if (gen === playGeneration) {
+      usePlayer.setState((s) => ({
+        current: enriched,
+        queue: s.queue.map((t, i) =>
+          i === s.queueIndex || t.id === track.id ? { ...t, thumbnails: t.thumbnails?.length ? t.thumbnails : ytimg } : t,
+        ),
+      }));
+      refreshMediaSession();
+    }
+  }
+
+  const src = await srcPromise;
+  if (gen !== playGeneration) return;
+  if (!src) throw new Error('Source audio indisponible');
+
+  // Soft fade out → swap → fade in (feel YTM, pas un vrai crossfade dual)
+  const targetVol = state.volume;
+  const fadeMs = 110;
+  const startVol = audio.volume;
+  if (!audio.paused && startVol > 0.02) {
+    const t0 = performance.now();
+    await new Promise<void>((resolve) => {
+      const step = (now: number) => {
+        if (gen !== playGeneration) {
+          resolve();
+          return;
+        }
+        const p = Math.min(1, (now - t0) / fadeMs);
+        audio.volume = Math.max(0, startVol * (1 - p));
+        if (p < 1) requestAnimationFrame(step);
+        else resolve();
+      };
+      requestAnimationFrame(step);
+    });
+  }
+  if (gen !== playGeneration) return;
+
+  // Ne pas révoquer les blob: gérés par streamPrefetch (réutilisés au skip suivant).
+  audio.src = src;
+  audio.dataset.trackId = track.id;
+  audio.volume = 0;
+  // démarrer dès que possible
+  let playPromise: Promise<void>;
+  try {
+    playPromise = audio.play();
+  } catch {
+    audio.volume = targetVol;
+    return;
+  }
+  void playPromise.then(() => {
+    if (gen !== playGeneration) return;
+    const t1 = performance.now();
+    const fadeIn = (now: number) => {
+      if (gen !== playGeneration) return;
+      const p = Math.min(1, (now - t1) / 160);
+      audio.volume = targetVol * p;
+      if (p < 1) requestAnimationFrame(fadeIn);
+      else audio.volume = targetVol;
+    };
+    requestAnimationFrame(fadeIn);
+  }).catch(() => {
+    audio.volume = targetVol;
+  });
+
+  const meta = await metaPromise;
+  if (gen !== playGeneration) {
+    try {
+      audio.pause();
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  if (meta?.track) {
+    const thumbs =
+      meta.track.thumbnails?.length
+        ? meta.track.thumbnails
+        : enriched.thumbnails?.length
+          ? enriched.thumbnails
+          : track.thumbnails;
+    enriched = {
+      ...meta.track,
+      ...enriched,
+      title: meta.track.title || enriched.title,
+      artists: mergeArtists(enriched.artists, meta.track.artists),
+      thumbnails: thumbs,
+      album: meta.track.album || enriched.album,
+    };
+    usePlayer.setState((s) => ({
+      current: enriched,
+      queue: s.queue.map((t, i) =>
+        i === s.queueIndex || t.id === enriched.id
+          ? { ...t, ...enriched, thumbnails: enriched.thumbnails?.length ? enriched.thumbnails : t.thumbnails }
+          : t,
+      ),
+    }));
+    refreshMediaSession();
+  }
+
+  try {
+    await playPromise;
+  } catch (err) {
+    if (gen !== playGeneration) return;
+    const name = err instanceof DOMException ? err.name : '';
+    // Skip / changement de titre : abort normal, pas une erreur utilisateur
+    if (name === 'AbortError') return;
+    // NotSupported / autoplay : une nouvelle tentative après load()
+    try {
+      audio.load();
+      await audio.play();
+    } catch (err2) {
+      if (gen !== playGeneration) return;
+      const n2 = err2 instanceof DOMException ? err2.name : '';
+      if (n2 === 'AbortError') return;
+      throw new Error('Lecture bloquée ou interrompue');
+    }
+  }
+  if (gen !== playGeneration) return;
+
+  // Prefetch agressif de la suite pendant que le titre courant joue
+  // (déjà déclenché après play() — évite un 2ᵉ full-download concurrent)
+  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+  refreshMediaSession();
+}
+
+export const usePlayer = create<PlayerState>((set, get) => ({
+  current: null,
+  queue: [],
+  queueIndex: 0,
+  userQueueEnd: 0,
+  autoplay: true,
+  isPlaying: false,
+  isLoading: false,
+  shuffle: false,
+  repeat: 'off',
+  volume: 0.9,
+  progress: 0,
+  duration: 0,
+  showQueue: false,
+  showLyrics: false,
+  lyrics: null,
+  lyricsTimed: null,
+  related: [],
+  relatedLoading: false,
+  relatedError: null,
+  hydrated: false,
+  audioEl: null,
+  sleepLabel: null,
+  sleepUntilEnd: false,
+  playError: null,
+
+  bindAudio: (el) => {
+    set({ audioEl: el });
+    if (el) {
+      const sync = () => refreshMediaSession();
+      el.addEventListener('play', sync);
+      el.addEventListener('pause', sync);
+      el.addEventListener('ended', () => {
+        sync();
+        const s = get();
+        if (s.sleepUntilEnd) {
+          clearSleepTimerInternal();
+          el.pause();
+          set({ isPlaying: false });
+        }
+      });
+      let recovering = false;
+      el.addEventListener('error', () => {
+        void (async () => {
+          if (recovering) return;
+          const track = get().current;
+          if (!track?.id) return;
+          // Ignore si on a déjà changé de titre
+          if (el.dataset.trackId && el.dataset.trackId !== track.id) return;
+          recovering = true;
+          const gen = playGeneration;
+          try {
+            const fresh = await resolvePlayUrl(track.id);
+            if (gen !== playGeneration || get().current?.id !== track.id) return;
+            const bust = fresh.includes('?') ? `${fresh}&r=${Date.now()}` : `${fresh}?r=${Date.now()}`;
+            el.src = bust.startsWith('blob:') ? fresh : bust;
+            el.dataset.trackId = track.id;
+            el.load();
+            await el.play();
+            set({ isPlaying: true, isLoading: false });
+            refreshMediaSession();
+          } catch {
+            if (gen === playGeneration && get().current?.id === track.id) {
+              void get().next({ fromEnded: true });
+            }
+          } finally {
+            recovering = false;
+          }
+        })();
+      });
+    }
+    if (el && get().hydrated && get().current) {
+      void restoreAudioFromPersisted();
+    }
+  },
+
+  setSleepTimer: (delayMs, label) => {
+    clearSleepTimerInternal();
+    if (delayMs == null || label == null) {
+      set({ sleepLabel: null, sleepUntilEnd: false });
+      return;
+    }
+    if (delayMs === 'end') {
+      set({ sleepLabel: label, sleepUntilEnd: true });
+      return;
+    }
+    set({ sleepLabel: label, sleepUntilEnd: false });
+    sleepTimerHandle = window.setTimeout(() => {
+      const audio = get().audioEl;
+      audio?.pause();
+      clearSleepTimerInternal();
+      set({ isPlaying: false, sleepLabel: null, sleepUntilEnd: false });
+    }, delayMs);
+  },
+
+  clearPlayError: () => set({ playError: null }),
+
+  hydrate: async () => {
+    if (get().hydrated) return;
+    const saved = loadPersisted();
+    const queue = Array.isArray(saved.queue) ? saved.queue : [];
+    const queueIndex = Math.min(
+      Math.max(0, saved.queueIndex || 0),
+      Math.max(0, queue.length - 1),
+    );
+    const current =
+      saved.current ||
+      (queue.length ? queue[queueIndex] || queue[0] : null) ||
+      null;
+    const userQueueEnd =
+      typeof saved.userQueueEnd === 'number'
+        ? Math.min(Math.max(saved.userQueueEnd, queue.length ? queueIndex + 1 : 0), queue.length)
+        : queue.length;
+    set({
+      current,
+      queue,
+      queueIndex: queue.length ? queueIndex : 0,
+      userQueueEnd,
+      autoplay: saved.autoplay !== false,
+      volume: typeof saved.volume === 'number' ? saved.volume : 0.9,
+      shuffle: Boolean(saved.shuffle),
+      repeat: saved.repeat || 'off',
+      progress: typeof saved.progress === 'number' ? saved.progress : 0,
+      isPlaying: false,
+      hydrated: true,
+    });
+    await restoreAudioFromPersisted();
+  },
+
+  playQueue: async (tracks, startIndex = 0) => {
+    const playable = tracks.filter(isPlayable);
+    if (!playable.length) return;
+    const idx = Math.min(Math.max(0, startIndex), playable.length - 1);
+    await get().play(playable[idx], playable, { preserveQueue: true });
+  },
+
+  play: async (track, queue, opts) => {
+    // Clic Lecture sur cet appareil → son ici (pas seulement remote cmd)
+    claimLocalPlayer();
+
+    const filtered = (queue || []).filter(isPlayable);
+    // Ne jamais lancer un ID non-vidéo (album/playlist/mood) comme stream
+    if (!isPlayable(track) && !filtered.length) {
+      set({ isLoading: false, isPlaying: false });
+      return;
+    }
+    const nextQueue = filtered.length ? filtered : isPlayable(track) ? [track] : [];
+    if (!nextQueue.length) {
+      set({ isLoading: false, isPlaying: false });
+      return;
+    }
+    const playTrack = isPlayable(track) ? track : nextQueue[0];
+    const idx = Math.max(0, nextQueue.findIndex((t) => t.id === playTrack.id));
+    const keepBoundary = Boolean(opts?.keepUserBoundary);
+    set({
+      current: playTrack,
+      queue: nextQueue,
+      queueIndex: idx >= 0 ? idx : 0,
+      userQueueEnd: keepBoundary
+        ? Math.min(Math.max(get().userQueueEnd || 0, (idx >= 0 ? idx : 0) + 1), nextQueue.length)
+        : nextQueue.length,
+      isLoading: true,
+      progress: 0,
+      lyrics: null,
+      lyricsTimed: null,
+    });
+
+    const gen = ++playGeneration;
+    bumpPrefetchGeneration();
+
+    // Un seul pipeline suggestions (évite related×2 + upNext en parallèle parasite)
+    if (!opts?.noAutoRadio && get().autoplay !== false) {
+      void ensureAutoRadio(playTrack.id);
+    } else {
+      void get().loadRelated(playTrack.id);
+    }
+
+    try {
+      await playLocal(playTrack, get(), gen);
+      if (gen !== playGeneration) return;
+      recordStarted(get().current || playTrack);
+      set({ isPlaying: true, isLoading: false, playError: null });
+      publish();
+      // Prefetch léger une fois le titre lancé (pas pendant le démarrage)
+      schedulePrefetch(get().queue, get().queueIndex);
+    } catch (err) {
+      console.error(err);
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === 'string'
+            ? err
+            : 'Lecture impossible';
+      set({ isLoading: false, isPlaying: false, playError: msg });
+      publish();
+    }
+  },
+
+  playAt: async (index) => {
+    const { queue } = get();
+    const track = queue[index];
+    if (!track) return;
+    claimLocalPlayer();
+    await get().play(track, queue, { preserveQueue: true, keepUserBoundary: true });
+    set({ queueIndex: index });
+    publish();
+  },
+
+  toggle: () => {
+    claimLocalPlayer();
+    const { audioEl, current, queue, progress } = get();
+    if (!audioEl) {
+      if (current) {
+        void get().play(current, queue.length ? queue : [current], { preserveQueue: true });
+      }
+      return;
+    }
+    // Source de vérité = élément audio (évite icône pause alors que ça joue encore)
+    const actuallyPlaying = !audioEl.paused && !audioEl.ended;
+    if (actuallyPlaying) {
+      audioEl.pause();
+      set({ isPlaying: false });
+      refreshMediaSession();
+      persistPlayer();
+      publish();
+      return;
+    }
+    const needsLoad =
+      !audioEl.src ||
+      audioEl.src === window.location.href ||
+      (current && audioEl.dataset.trackId !== current.id);
+    if (needsLoad && current) {
+      void (async () => {
+        set({ isLoading: true });
+        try {
+          await restoreAudioFromPersisted();
+          if (progress > 0) {
+            try {
+              audioEl.currentTime = progress;
+            } catch {
+              /* ignore */
+            }
+          }
+          await audioEl.play();
+          set({ isPlaying: true, isLoading: false });
+          refreshMediaSession();
+          publish();
+          if (current.id) void ensureAutoRadio(current.id);
+        } catch (err) {
+          console.error(err);
+          await get().play(current, queue.length ? queue : [current], {
+            preserveQueue: true,
+            noAutoRadio: false,
+          });
+        }
+      })();
+      return;
+    }
+    void audioEl
+      .play()
+      .then(() => {
+        set({ isPlaying: true, isLoading: false });
+        refreshMediaSession();
+        publish();
+      })
+      .catch((err) => {
+        console.error(err);
+        if (current) {
+          void get().play(current, queue.length ? queue : [current], { preserveQueue: true });
+        }
+      });
+  },
+
+  next: async (opts) => {
+    claimLocalPlayer();
+    const { queue, queueIndex, repeat, shuffle, current, progress } = get();
+    if (!queue.length) {
+      if (current?.id) {
+        await ensureAutoRadio(current.id);
+        const q = get().queue;
+        const idx = get().queueIndex;
+        if (idx + 1 < q.length) await get().playAt(idx + 1);
+      }
+      return;
+    }
+    reportSkipIfEarly(progress);
+    // Boucle 1 titre : seulement à la fin naturelle du morceau.
+    // Next manuel (bouton / clavier) → passe au suivant et boucle sur celui-là.
+    if (repeat === 'one' && opts?.fromEnded) {
+      await get().playAt(queueIndex);
+      return;
+    }
+    let nextIndex = queueIndex + 1;
+    const end = get().userQueueEnd || 0;
+    if (get().autoplay === false && nextIndex >= end) {
+      const audio = get().audioEl;
+      if (audio) audio.pause();
+      set({ isPlaying: false });
+      refreshMediaSession();
+      persistPlayer();
+      publish();
+      return;
+    }
+    if (nextIndex >= queue.length) {
+      if (repeat === 'all' || repeat === 'one') {
+        nextIndex = 0;
+      } else if (current?.id) {
+        await ensureAutoRadio(current.id);
+        const q = get().queue;
+        const idx = get().queueIndex;
+        if (idx + 1 < q.length) {
+          await get().playAt(idx + 1);
+        }
+        return;
+      } else {
+        return;
+      }
+    }
+    if (shuffle && queue.length > 1) {
+      const candidates = queue
+        .map((t, i) => ({ t, i }))
+        .filter((x) => x.i !== queueIndex);
+      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      if (pick) {
+        await get().playAt(pick.i);
+        return;
+      }
+    }
+    await get().playAt(nextIndex);
+    // ensureAutoRadio déjà lancé dans play() — pas de 2ᵉ tempête ici
+    schedulePrefetch(get().queue, get().queueIndex);
+  },
+
+  prev: async () => {
+    claimLocalPlayer();
+    const { audioEl, progress, queueIndex, queue } = get();
+    // Source de vérité = audio (progress Zustand peut être en retard d’1 tick)
+    const t = audioEl && Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : progress;
+    // Style YouTube Music / Google Music : > 4 s → recommence le titre ; sinon titre précédent
+    if (t > 4) {
+      if (audioEl) {
+        try {
+          audioEl.currentTime = 0;
+        } catch {
+          /* ignore */
+        }
+      }
+      set({ progress: 0 });
+      publish();
+      return;
+    }
+    if (queueIndex > 0) {
+      await get().playAt(queueIndex - 1);
+      schedulePrefetch(get().queue, get().queueIndex);
+      return;
+    }
+    // Début de file : restart le titre courant
+    if (audioEl) {
+      try {
+        audioEl.currentTime = 0;
+      } catch {
+        /* ignore */
+      }
+      set({ progress: 0 });
+      if (audioEl.paused) void get().toggle();
+      publish();
+    } else if (queue[0]) {
+      await get().playAt(0);
+    }
+  },
+
+  setProgress: (n) => {
+    const prev = get().progress;
+    const now = Date.now();
+    const jumped = Math.abs(n - prev) > 1.2;
+    const last = (get() as PlayerState & { _lastProgressAt?: number })._lastProgressAt || 0;
+    // Throttle UI store ~2.5 Hz (la barre lit aussi audioEl en live)
+    if (!jumped && now - last < 400) return;
+    (get() as PlayerState & { _lastProgressAt?: number })._lastProgressAt = now;
+    set({ progress: n });
+    const { duration, isPlaying } = get();
+    if ('mediaSession' in navigator && duration) {
+      try {
+        navigator.mediaSession.setPositionState({
+          duration,
+          position: Math.min(n, duration),
+          playbackRate: get().audioEl?.playbackRate || 1,
+        });
+      } catch {
+        /* ignore */
+      }
+      navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+    }
+    const now2 = Date.now();
+    const lastPersist = (get() as PlayerState & { _lastPersist?: number })._lastPersist || 0;
+    if (now2 - lastPersist > 4000) {
+      (get() as PlayerState & { _lastPersist?: number })._lastPersist = now2;
+      persistPlayer();
+    }
+    // Publie le timecode pour les autres appareils (throttle via publish())
+    if (isPlaying && isActivePlayer() && now2 - lastHttpPublishAt > 3000) {
+      publish();
+    }
+  },
+
+  seek: (n) => {
+    if (!isActivePlayer()) {
+      sendCmd({ action: 'seek', time: n });
+      set({ progress: n });
+      return;
+    }
+    const { audioEl } = get();
+    if (audioEl) audioEl.currentTime = n;
+    set({ progress: n });
+    publish();
+  },
+
+  setDuration: (n) => set({ duration: n }),
+
+  setVolume: (n) => {
+    if (!isActivePlayer()) {
+      sendCmd({ action: 'volume', volume: n });
+      set({ volume: n });
+      return;
+    }
+    const { audioEl } = get();
+    if (audioEl) audioEl.volume = n;
+    set({ volume: n });
+    publish();
+  },
+
+  toggleShuffle: () => {
+    set((s) => ({ shuffle: !s.shuffle }));
+    if (!isActivePlayer()) sendCmd({ action: 'shuffle', value: get().shuffle });
+    else publish();
+  },
+
+  cycleRepeat: () => {
+    set((s) => ({
+      repeat: s.repeat === 'off' ? 'all' : s.repeat === 'all' ? 'one' : 'off',
+    }));
+    if (!isActivePlayer()) sendCmd({ action: 'repeat', value: get().repeat });
+    else publish();
+  },
+
+  toggleQueue: () => set((s) => ({ showQueue: !s.showQueue, showLyrics: false })),
+
+  toggleLyrics: async () => {
+    const { showLyrics, current } = get();
+    if (showLyrics) {
+      set({ showLyrics: false });
+      return;
+    }
+    set({ showLyrics: true, showQueue: false });
+    if (current) {
+      try {
+        const { lyrics, timed } = await api.lyrics(current.id);
+        set({ lyrics, lyricsTimed: timed || null });
+      } catch {
+        set({ lyrics: null, lyricsTimed: null });
+      }
+    }
+  },
+
+  toggleAutoplay: () => {
+    get().setAutoplay(!get().autoplay);
+  },
+
+  setAutoplay: (on) => {
+    if (!on) {
+      set((s) => {
+        const end = Math.max(s.userQueueEnd || 0, s.queueIndex + 1, s.current ? 1 : 0);
+        const trimmed = s.queue.slice(0, Math.min(end, s.queue.length));
+        return {
+          autoplay: false,
+          queue: trimmed,
+          userQueueEnd: trimmed.length,
+          queueIndex: Math.min(s.queueIndex, Math.max(0, trimmed.length - 1)),
+        };
+      });
+      persistPlayer();
+      publish();
+      return;
+    }
+    set({ autoplay: true });
+    persistPlayer();
+    publish();
+    const cur = get().current;
+    if (cur?.id) void ensureAutoRadio(cur.id);
+  },
+
+  topUpAutoplay: () => {
+    const cur = get().current;
+    if (cur?.id && get().autoplay !== false) void ensureAutoRadio(cur.id);
+  },
+
+  addNext: (track) => {
+    const state = get();
+    const empty = !state.current || state.queue.length === 0;
+    if (empty) {
+      void get().play(track, [track], { preserveQueue: true });
+      return;
+    }
+    if (!isActivePlayer()) {
+      sendCmd({ action: 'add_next', track });
+    }
+    set((s) => {
+      const q = [...s.queue];
+      const insertAt = s.queueIndex + 1;
+      q.splice(insertAt, 0, track);
+      let end = typeof s.userQueueEnd === 'number' ? s.userQueueEnd : s.queue.length;
+      if (insertAt < end) end += 1;
+      else end = insertAt + 1;
+      return { queue: q, userQueueEnd: end };
+    });
+    publish();
+  },
+
+  addToQueue: (track) => {
+    const state = get();
+    const empty = !state.current || state.queue.length === 0;
+    if (empty) {
+      void get().play(track, [track], { preserveQueue: true });
+      return;
+    }
+    if (!isActivePlayer()) sendCmd({ action: 'add_queue', track });
+    set((s) => {
+      const q = [...s.queue];
+      let end = typeof s.userQueueEnd === 'number' ? s.userQueueEnd : s.queue.length;
+      end = Math.min(Math.max(end, s.queueIndex + 1), q.length);
+      q.splice(end, 0, track);
+      return { queue: q, userQueueEnd: end + 1 };
+    });
+    publish();
+  },
+
+  moveInQueue: (fromIndex, toIndex) => {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
+    set((s) => {
+      if (fromIndex >= s.queue.length || toIndex >= s.queue.length) return s;
+      const q = [...s.queue];
+      const [item] = q.splice(fromIndex, 1);
+      q.splice(toIndex, 0, item);
+      let qi = s.queueIndex;
+      if (fromIndex === qi) qi = toIndex;
+      else if (fromIndex < qi && toIndex >= qi) qi -= 1;
+      else if (fromIndex > qi && toIndex <= qi) qi += 1;
+      let end = typeof s.userQueueEnd === 'number' ? s.userQueueEnd : s.queue.length;
+      if (fromIndex < end) end -= 1;
+      if (toIndex < end) end += 1;
+      return { queue: q, queueIndex: qi, userQueueEnd: Math.max(qi + 1, end) };
+    });
+    publish();
+  },
+
+  removeFromQueue: (index) => {
+    set((s) => {
+      if (index < 0 || index >= s.queue.length) return s;
+      // Ne pas retirer le titre en cours via cette action (utiliser next)
+      if (index === s.queueIndex) return s;
+      const q = s.queue.filter((_, i) => i !== index);
+      const qi = index < s.queueIndex ? s.queueIndex - 1 : s.queueIndex;
+      let end = typeof s.userQueueEnd === 'number' ? s.userQueueEnd : s.queue.length;
+      if (index < end) end -= 1;
+      return {
+        queue: q,
+        queueIndex: Math.max(0, Math.min(qi, q.length - 1)),
+        userQueueEnd: Math.min(end, q.length),
+      };
+    });
+    publish();
+  },
+
+  clearPlayedFromQueue: () => {
+    set((s) => {
+      if (s.queueIndex <= 0) return s;
+      const drop = s.queueIndex;
+      const q = s.queue.slice(drop);
+      const prevEnd = typeof s.userQueueEnd === 'number' ? s.userQueueEnd : s.queue.length;
+      const end = Math.max(0, prevEnd - drop);
+      return {
+        queue: q,
+        queueIndex: 0,
+        userQueueEnd: Math.min(end, q.length),
+      };
+    });
+    publish();
+  },
+
+  appendRelated: (tracks) => {
+    set((s) => {
+      if (s.autoplay === false) return s;
+      const ids = new Set(s.queue.map((t) => t.id));
+      const extra = tracks.filter((t) => isPlayable(t) && !ids.has(t.id));
+      // Zone auto uniquement — ne pas étendre userQueueEnd
+      return { queue: [...s.queue, ...extra], related: tracks };
+    });
+    publish();
+  },
+
+  clearQueue: () => {
+    set({ queue: [], queueIndex: 0, userQueueEnd: 0 });
+    publish();
+  },
+
+  startMix: async (track) => {
+    await get().startRadio({ kind: 'track', id: track.id, seed: track });
+  },
+
+  startRadio: async ({ kind, id, seed, stayClose }) => {
+    set({ isLoading: true, showQueue: true, showLyrics: false });
+    try {
+      let seedTrack: Track | null = seed && isPlayable(seed) ? seed : null;
+      let pool: Track[] = [];
+
+      if (kind === 'track') {
+        const trackId = id;
+        // related API = déjà similarForUser ranked (style) — 1 round-trip
+        const rel = await api
+          .related(trackId)
+          .catch(() => ({ related: [] as Track[], radio: [] as Track[], tracks: [] as Track[] }));
+        const raw = [...(rel.related || []), ...(rel.radio || []), ...((rel as { tracks?: Track[] }).tracks || [])];
+        pool = raw.filter((t) => t.id !== trackId && isPlayable(t));
+        if (stayClose && seedTrack?.artists?.[0]) {
+          const artistKey = (
+            seedTrack.artists[0].id ||
+            seedTrack.artists[0].name ||
+            ''
+          ).toLowerCase();
+          const close = pool.filter((t) =>
+            (t.artists || []).some(
+              (a) => (a.id || a.name || '').toLowerCase() === artistKey,
+            ),
+          );
+          const far = pool.filter(
+            (t) =>
+              !(t.artists || []).some(
+                (a) => (a.id || a.name || '').toLowerCase() === artistKey,
+              ),
+          );
+          // stayClose = un peu du même artiste, majorité style voisin
+          pool = [...close.slice(0, 10), ...far].slice(0, 80);
+        } else {
+          // Radio / mix : même style, artistes variés (pas une discographie)
+          pool = diversifyByArtist(pool, seedTrack?.artists?.[0]);
+        }
+        if (!seedTrack) {
+          seedTrack = { id: trackId, title: 'Radio', artists: [], thumbnails: [], type: 'song' };
+        }
+      } else if (kind === 'album') {
+        const [radioRes, albumRes] = await Promise.all([
+          api.albumRadio(id).catch(() => ({ tracks: [] as Track[] })),
+          api.album(id).catch(() => null),
+        ]);
+        const albumTracks = (albumRes?.tracks || []).filter(isPlayable);
+        seedTrack = seedTrack || albumTracks[0] || null;
+        // Radio album = similaires (souvent hors album) + un peu de l’album en amorçage
+        const radio = (radioRes.tracks || []).filter(
+          (t) => isPlayable(t) && t.id !== seedTrack?.id,
+        );
+        const albumRest = albumTracks.filter((t) => t.id !== seedTrack?.id).slice(0, 6);
+        pool = [...radio, ...albumRest];
+      } else {
+        const [radioRes, artistRes] = await Promise.all([
+          api.artistRadio(id).catch(() => ({ tracks: [] as Track[] })),
+          api.artist(id).catch(() => null),
+        ]);
+        const songs = (artistRes?.songs || []).filter(isPlayable);
+        seedTrack = seedTrack || songs[0] || (radioRes.tracks || []).find(isPlayable) || null;
+        const radio = (radioRes.tracks || []).filter(
+          (t) => isPlayable(t) && t.id !== seedTrack?.id,
+        );
+        // Amorçage avec tops artiste puis radio (similaires liés / voisins)
+        pool = [...songs.filter((t) => t.id !== seedTrack?.id).slice(0, 8), ...radio];
+      }
+
+      // Dédup
+      const seen = new Set<string>();
+      const uniq: Track[] = [];
+      for (const t of pool) {
+        if (!t.id || seen.has(t.id)) continue;
+        seen.add(t.id);
+        uniq.push(t);
+        if (uniq.length >= 90) break;
+      }
+      pool = uniq;
+
+      if (!seedTrack || !isPlayable(seedTrack)) {
+        seedTrack = pool[0] || null;
+        if (seedTrack) pool = pool.slice(1);
+      }
+      if (!seedTrack) return;
+
+      const mix = [seedTrack, ...pool.filter((t) => t.id !== seedTrack!.id)];
+      set({ related: pool });
+      await get().play(seedTrack, mix, { preserveQueue: true, noAutoRadio: false });
+    } catch (err) {
+      console.error('startRadio', err);
+      if (seed && isPlayable(seed)) {
+        await get().play(seed, [seed], { preserveQueue: true });
+      }
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  loadRelated: async (trackId) => {
+    set({ relatedLoading: true, relatedError: null });
+    try {
+      const rel = await api
+        .related(trackId)
+        .catch(() => ({ related: [] as Track[], radio: [] as Track[] }));
+      if (usePlayer.getState().current?.id && usePlayer.getState().current?.id !== trackId) {
+        set({ relatedLoading: false });
+        return;
+      }
+      const pool = (rel.related?.length ? rel.related : rel.radio || []).filter(isPlayable);
+      const diversified = diversifyByArtist(
+        pool,
+        usePlayer.getState().current?.artists?.[0],
+      );
+      set({
+        related: diversified,
+        relatedLoading: false,
+        relatedError: diversified.length ? null : 'Aucune suggestion pour ce titre.',
+      });
+      if (get().autoplay !== false && diversified.length) {
+        mergeAutoTracks(trackId, diversified);
+      }
+    } catch (e) {
+      if (usePlayer.getState().current?.id === trackId) {
+        set({
+          relatedLoading: false,
+          relatedError: e instanceof Error ? e.message : 'Suggestions indisponibles',
+        });
+      } else {
+        set({ relatedLoading: false });
+      }
+    }
+  },
+
+  applyRemoteState: async (state, playAudio = false) => {
+    set({
+      current: state.current ?? get().current,
+      queue: state.queue ?? get().queue,
+      queueIndex: state.queueIndex ?? get().queueIndex,
+      userQueueEnd: state.userQueueEnd ?? get().userQueueEnd,
+      autoplay: state.autoplay ?? get().autoplay,
+      isPlaying: state.isPlaying ?? get().isPlaying,
+      progress: state.progress ?? get().progress,
+      duration: state.duration ?? get().duration,
+      volume: state.volume ?? get().volume,
+      shuffle: state.shuffle ?? get().shuffle,
+      repeat: state.repeat ?? get().repeat,
+    });
+
+    if (playAudio && state.current && isActivePlayer()) {
+      try {
+        set({ isLoading: true });
+        const gen = ++playGeneration;
+        await playLocal(state.current, get(), gen);
+        const audio = get().audioEl;
+        if (audio && typeof state.progress === 'number') audio.currentTime = state.progress;
+        if (state.isPlaying === false) {
+          audio?.pause();
+          set({ isPlaying: false, isLoading: false });
+        } else {
+          set({ isPlaying: true, isLoading: false });
+        }
+        refreshMediaSession();
+      } catch (err) {
+        // Abort / NotSupported déjà gérés dans playLocal — log discret
+        console.warn('applyRemoteState play', err);
+        set({ isLoading: false });
+      }
+    }
+  },
+}));
+
+// Wire remote events once
+let wired = false;
+export function wireRemotePlayer() {
+  if (wired || typeof window === 'undefined') return;
+  wired = true;
+
+  window.addEventListener('ytm-remote-command', ((ev: CustomEvent) => {
+    if (!isActivePlayer()) return;
+    const cmd = ev.detail || {};
+    const p = usePlayer.getState();
+    switch (cmd.action) {
+      case 'play':
+        void p.play(cmd.track, cmd.queue, { preserveQueue: true });
+        break;
+      case 'play_at':
+        void p.playAt(cmd.index);
+        break;
+      case 'pause':
+        if (p.isPlaying) p.toggle();
+        break;
+      case 'resume':
+        if (!p.isPlaying) p.toggle();
+        break;
+      case 'next':
+        void p.next();
+        break;
+      case 'prev':
+        void p.prev();
+        break;
+      case 'seek':
+        p.seek(cmd.time);
+        break;
+      case 'volume':
+        p.setVolume(cmd.volume);
+        break;
+      case 'shuffle':
+        if (p.shuffle !== cmd.value) p.toggleShuffle();
+        break;
+      case 'repeat':
+        while (usePlayer.getState().repeat !== cmd.value) p.cycleRepeat();
+        break;
+      case 'add_next':
+        p.addNext(cmd.track);
+        break;
+      case 'add_queue':
+        p.addToQueue(cmd.track);
+        break;
+      default:
+        break;
+    }
+  }) as EventListener);
+
+  window.addEventListener('ytm-become-player', ((ev: CustomEvent) => {
+    const { state, autoplay } = ev.detail || {};
+    void usePlayer.getState().applyRemoteState(state || {}, Boolean(autoplay ?? true));
+  }) as EventListener);
+}
