@@ -76,7 +76,7 @@ fun LibraryScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val filterStore = remember { LibraryFilterStore(context) }
-    val hidden by filterStore.hiddenIds.collectAsState(initial = emptySet())
+    val hidden by filterStore.hiddenIds.collectAsState(initial = LibraryFilter.defaultHidden)
 
     var lib by remember { mutableStateOf<LibraryResponse?>(null) }
     var loading by remember { mutableStateOf(true) }

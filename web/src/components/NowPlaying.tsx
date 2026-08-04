@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ListMusic, Mic2, Radio, Save, Sparkles } from 'lucide-react';
+import { ListMusic, Mic2, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles } from 'lucide-react';
 import { api, thumb, type Track } from '../api';
 import { usePlayer } from '../store/player';
 import { CoverImage } from './CoverImage';
@@ -154,9 +154,14 @@ export function NowPlaying({
   const autoplay = usePlayer((s) => s.autoplay);
   const related = usePlayer((s) => s.related);
   const playAt = usePlayer((s) => s.playAt);
+  const clearPlayedFromQueue = usePlayer((s) => s.clearPlayedFromQueue);
   const appendRelated = usePlayer((s) => s.appendRelated);
   const loadRelated = usePlayer((s) => s.loadRelated);
   const toggleAutoplay = usePlayer((s) => s.toggleAutoplay);
+  const shuffle = usePlayer((s) => s.shuffle);
+  const repeat = usePlayer((s) => s.repeat);
+  const toggleShuffle = usePlayer((s) => s.toggleShuffle);
+  const cycleRepeat = usePlayer((s) => s.cycleRepeat);
   const topUpAutoplay = usePlayer((s) => s.topUpAutoplay);
   const audioEl = usePlayer((s) => s.audioEl);
   const isPlaying = usePlayer((s) => s.isPlaying);
@@ -428,7 +433,7 @@ export function NowPlaying({
             {tab === 'queue' && (
               <div>
                 <section>
-                  <div className="mb-3 flex items-center justify-between gap-2 px-1 pt-1">
+                    <div className="mb-3 flex items-center justify-between gap-2 px-1 pt-1">
                     <p className="min-w-0 truncate text-xs text-yt-muted">
                       <span className="font-medium text-white">File d&apos;attente</span>
                       <span className="ml-2 tabular-nums text-yt-muted">
@@ -436,23 +441,60 @@ export function NowPlaying({
                         {userRemaining} restant{userRemaining > 1 ? 's' : ''}
                       </span>
                     </p>
-                    <button
-                      type="button"
-                      disabled={saveTracks.length === 0}
-                      onClick={() => setSaveOpen(true)}
-                      className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/16 disabled:opacity-40"
-                      title="Enregistrer la file dans une playlist"
-                    >
-                      <Save className="h-3.5 w-3.5" />
-                      Enregistrer
-                    </button>
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={cycleRepeat}
+                        title={
+                          repeat === 'off'
+                            ? 'Boucle désactivée'
+                            : repeat === 'all'
+                              ? 'Boucler toute la file'
+                              : 'Boucler le titre'
+                        }
+                        className={`flex h-8 w-8 items-center justify-center rounded-full transition ${
+                          repeat !== 'off' ? 'text-yt-red' : 'text-yt-muted hover:bg-white/10 hover:text-white'
+                        }`}
+                      >
+                        {repeat === 'one' ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={toggleShuffle}
+                        title={shuffle ? 'Aléatoire activé' : 'Aléatoire'}
+                        className={`flex h-8 w-8 items-center justify-center rounded-full transition ${
+                          shuffle ? 'text-yt-red' : 'text-yt-muted hover:bg-white/10 hover:text-white'
+                        }`}
+                      >
+                        <Shuffle className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={saveTracks.length === 0}
+                        onClick={() => setSaveOpen(true)}
+                        className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/16 disabled:opacity-40"
+                        title="Enregistrer la file dans une playlist"
+                      >
+                        <Save className="h-3.5 w-3.5" />
+                        Enregistrer
+                      </button>
+                    </div>
                   </div>
 
                   {playedBefore.length > 0 && (
                     <div className="mb-3">
-                      <p className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide text-yt-muted">
-                        Déjà joués
-                      </p>
+                      <div className="mb-1.5 flex items-center justify-between gap-2 px-1">
+                        <p className="text-[11px] font-medium uppercase tracking-wide text-yt-muted">
+                          Déjà joués
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => clearPlayedFromQueue()}
+                          className="text-[11px] font-medium text-yt-muted hover:text-white"
+                        >
+                          Effacer
+                        </button>
+                      </div>
                       <div className="opacity-70">
                         {playedBefore.map((t, i) => (
                           <TrackRow

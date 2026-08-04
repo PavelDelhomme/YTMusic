@@ -431,6 +431,22 @@ class PlayerController(
         syncFrom(p)
     }
 
+    /** Retire les titres avant le titre en cours (section « déjà joués »). */
+    fun clearPlayedFromQueue() {
+        val p = player() ?: return
+        val cur = p.currentMediaItemIndex.coerceAtLeast(0)
+        if (cur <= 0) return
+        val queue = PlaybackService.Holder.queue.toMutableList()
+        if (cur >= queue.size) return
+        repeat(cur) {
+            if (queue.isNotEmpty()) queue.removeAt(0)
+            if (p.mediaItemCount > 0) p.removeMediaItem(0)
+        }
+        userQueueEnd = (userQueueEnd - cur).coerceAtLeast(0).coerceAtMost(queue.size)
+        PlaybackService.Holder.queue = queue
+        syncFrom(p)
+    }
+
     fun moveInQueue(from: Int, to: Int) {
         val p = player() ?: return
         val queue = PlaybackService.Holder.queue.toMutableList()

@@ -857,8 +857,12 @@ fun NowPlayingScreen(
                         QueueSectionHeader(
                             title = "File d'attente",
                             count = "${ui.userQueueEnd.coerceIn(0, ui.queue.size)}",
+                            shuffle = ui.shuffle,
+                            repeat = ui.repeat,
                             onExpand = { expandQueue() },
                             onSave = { showSaveQueue = true },
+                            onToggleShuffle = player::toggleShuffle,
+                            onCycleRepeat = player::cycleRepeat,
                             onQueueDrag = ::onQueueDrag,
                             onQueueDragEnd = { settleQueue(it) },
                         )
@@ -1001,8 +1005,12 @@ private fun SecondaryChip(
 private fun QueueSectionHeader(
     title: String,
     count: String,
+    shuffle: Boolean,
+    repeat: RepeatMode,
     onExpand: () -> Unit,
     onSave: () -> Unit,
+    onToggleShuffle: () -> Unit,
+    onCycleRepeat: () -> Unit,
     onQueueDrag: (Float) -> Unit,
     onQueueDragEnd: (velocityY: Float) -> Unit,
 ) {
@@ -1045,6 +1053,24 @@ private fun QueueSectionHeader(
                 Text(title, fontWeight = FontWeight.SemiBold, color = PlayerFg, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Text(count, style = MaterialTheme.typography.labelMedium, color = PlayerMuted)
+            IconButton(onClick = onCycleRepeat) {
+                Icon(
+                    if (repeat == RepeatMode.One) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                    contentDescription = when (repeat) {
+                        RepeatMode.Off -> "Boucle désactivée"
+                        RepeatMode.All -> "Boucler toute la file"
+                        RepeatMode.One -> "Boucler le titre"
+                    },
+                    tint = if (repeat != RepeatMode.Off) MaterialTheme.colorScheme.primary else PlayerFg,
+                )
+            }
+            IconButton(onClick = onToggleShuffle) {
+                Icon(
+                    Icons.Default.Shuffle,
+                    contentDescription = if (shuffle) "Aléatoire activé" else "Aléatoire",
+                    tint = if (shuffle) MaterialTheme.colorScheme.primary else PlayerFg,
+                )
+            }
             IconButton(onClick = onSave) {
                 Icon(Icons.Default.Save, "Enregistrer la file", tint = PlayerFg)
             }
@@ -1251,15 +1277,40 @@ private fun QueueExpandedBody(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     "${userTracks.size} titre${if (userTracks.size > 1) "s" else ""}",
-                    Modifier.weight(1f),
+                    Modifier
+                        .weight(1f)
+                        .padding(start = 8.dp),
                     style = MaterialTheme.typography.labelMedium,
                     color = PlayerMuted,
                 )
+                if (ui.queueIndex > 0) {
+                    TextButton(onClick = { player.clearPlayedFromQueue() }) {
+                        Text("Effacer déjà joués")
+                    }
+                }
+                IconButton(onClick = player::cycleRepeat) {
+                    Icon(
+                        if (ui.repeat == RepeatMode.One) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                        contentDescription = when (ui.repeat) {
+                            RepeatMode.Off -> "Boucle désactivée"
+                            RepeatMode.All -> "Boucler toute la file"
+                            RepeatMode.One -> "Boucler le titre"
+                        },
+                        tint = if (ui.repeat != RepeatMode.Off) MaterialTheme.colorScheme.primary else PlayerFg,
+                    )
+                }
+                IconButton(onClick = player::toggleShuffle) {
+                    Icon(
+                        Icons.Default.Shuffle,
+                        contentDescription = if (ui.shuffle) "Aléatoire activé" else "Aléatoire",
+                        tint = if (ui.shuffle) MaterialTheme.colorScheme.primary else PlayerFg,
+                    )
+                }
                 TextButton(onClick = onSave) {
                     Text("Enregistrer")
                 }

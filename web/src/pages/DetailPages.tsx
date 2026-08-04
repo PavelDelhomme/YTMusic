@@ -9,6 +9,38 @@ import { useLibrary } from '../store/library';
 import { Play, Download, Library, Heart, Radio, Check, UserPlus, UserMinus, Shuffle, ChevronRight } from 'lucide-react';
 import { ArtistLinks } from '../components/ArtistLinks';
 import { BackButton } from '../components/BackButton';
+import { HomeShelfSkeleton } from '../components/HomeShelfSkeleton';
+
+function DetailLoading() {
+  return (
+    <div>
+      <BackButton />
+      <div className="mb-6 flex gap-4">
+        <div className="h-40 w-40 shrink-0 animate-pulse rounded-lg bg-yt-border/50 sm:h-48 sm:w-48" />
+        <div className="flex min-w-0 flex-1 flex-col justify-end gap-3 pb-1">
+          <div className="h-8 w-2/3 max-w-md animate-pulse rounded bg-yt-border/45" />
+          <div className="h-3 w-1/3 animate-pulse rounded bg-yt-border/30" />
+          <div className="mt-2 flex gap-2">
+            <div className="h-9 w-28 animate-pulse rounded-full bg-yt-border/40" />
+            <div className="h-9 w-28 animate-pulse rounded-full bg-yt-border/30" />
+          </div>
+        </div>
+      </div>
+      <HomeShelfSkeleton rows={1} />
+      <div className="mt-6 space-y-2" aria-hidden>
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-3 py-2">
+            <div className="h-12 w-12 shrink-0 animate-pulse rounded bg-yt-border/55" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="h-3 w-2/3 animate-pulse rounded bg-yt-border/45" />
+              <div className="h-2.5 w-2/5 animate-pulse rounded bg-yt-border/30" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function ArtistPage() {
   const { id = '' } = useParams();
@@ -56,12 +88,7 @@ export function ArtistPage() {
   }, [loadArtist]);
 
   if (loading && !data) {
-    return (
-      <div>
-        <BackButton />
-        <p className="text-yt-muted">Chargement…</p>
-      </div>
-    );
+    return <DetailLoading />;
   }
 
   if (error || !data) {
@@ -364,7 +391,19 @@ export function ArtistSongsPage() {
         </div>
       </div>
 
-      {loading && <p className="text-yt-muted">Chargement des titres…</p>}
+      {loading && (
+        <div className="space-y-2" aria-hidden>
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 py-2">
+              <div className="h-12 w-12 shrink-0 animate-pulse rounded bg-yt-border/55" />
+              <div className="min-w-0 flex-1 space-y-2">
+                <div className="h-3 w-2/3 animate-pulse rounded bg-yt-border/45" />
+                <div className="h-2.5 w-2/5 animate-pulse rounded bg-yt-border/30" />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       {error && <p className="text-sm text-red-400">{error}</p>}
       {!loading && !error && tracks.length === 0 && (
         <p className="text-yt-muted">Aucun titre trouvé pour cet artiste.</p>
@@ -401,12 +440,7 @@ export function AlbumPage() {
   }, [id]);
 
   if (loading && !data) {
-    return (
-      <div>
-        <BackButton />
-        <p className="text-yt-muted">Chargement…</p>
-      </div>
-    );
+    return <DetailLoading />;
   }
 
   if (error || !data) {
@@ -540,12 +574,7 @@ export function PlaylistPage() {
   }, [loadPlaylist]);
 
   if (loading && !data) {
-    return (
-      <div>
-        <BackButton />
-        <p className="text-yt-muted">Chargement…</p>
-      </div>
-    );
+    return <DetailLoading />;
   }
 
   if (error || !data) {

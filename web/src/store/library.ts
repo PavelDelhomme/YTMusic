@@ -3,6 +3,7 @@ import { api, type LibraryData, type Track } from '../api';
 
 type LibraryState = LibraryData & {
   loaded: boolean;
+  error: string | null;
   refresh: () => Promise<void>;
   applyLibrary: (lib: LibraryData | null | undefined) => void;
   toggleLike: (track: Track) => Promise<boolean>;
@@ -102,12 +103,13 @@ const bootCache = typeof sessionStorage !== 'undefined' ? readLibraryCache() : n
 export const useLibrary = create<LibraryState>((set, get) => ({
   ...(bootCache || empty),
   loaded: Boolean(bootCache),
+  error: null,
 
   applyLibrary: (lib) => {
     if (!lib || typeof lib !== 'object') return;
     const merged = mergeLibrary(lib);
     writeLibraryCache(merged);
-    set({ ...merged, loaded: true });
+    set({ ...merged, loaded: true, error: null });
   },
 
   refresh: async () => {
@@ -115,9 +117,12 @@ export const useLibrary = create<LibraryState>((set, get) => ({
       const data = await api.library();
       const merged = mergeLibrary(data);
       writeLibraryCache(merged);
-      set({ ...merged, loaded: true });
-    } catch {
-      set({ loaded: true });
+      set({ ...merged, loaded: true, error: null });
+    } catch (e) {
+      set({
+        loaded: true,
+        error: e instanceof Error ? e.message : 'Bibliothèque indisponible',
+      });
     }
   },
 
