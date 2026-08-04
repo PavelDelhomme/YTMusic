@@ -81,9 +81,14 @@ if [[ "$RESOLVED" != "$DEVICE" ]]; then
 fi
 DEVICE="$RESOLVED"
 
-echo "==> adb reverse tcp:8787 + tcp:5173…"
-adb -s "$DEVICE" reverse tcp:8787 tcp:8787 || true
-adb -s "$DEVICE" reverse tcp:5173 tcp:5173 || true
+if [[ "$API_BASE_URL" == https://* ]] && [[ "$API_BASE_URL" != *127.0.0.1* ]] && [[ "$API_BASE_URL" != *localhost* ]]; then
+  echo "==> API distante ($API_BASE_URL) — pas de adb reverse local"
+  adb -s "$DEVICE" reverse --remove-all >/dev/null 2>&1 || true
+else
+  echo "==> adb reverse tcp:8787 + tcp:5173…"
+  adb -s "$DEVICE" reverse tcp:8787 tcp:8787 || true
+  adb -s "$DEVICE" reverse tcp:5173 tcp:5173 || true
+fi
 
 echo "==> Install…"
 adb -s "$DEVICE" install -r "$APK"
