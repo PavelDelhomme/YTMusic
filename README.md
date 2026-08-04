@@ -1,23 +1,37 @@
 # YTMusic
 
-Client YouTube Music multi-plateforme : **web**, **PWA mobile**, **desktop Electron**, avec compte utilisateur, sync bibliothèque, import YouTube et mode offline.
+Client YouTube Music multi-plateforme : **web**, **API**, **Android Kotlin**, **desktop Electron**.
+
+## Structure
+
+```
+api/              Backend Express + SQLite + WS
+web/              React / Vite / PWA
+mobile-android/   App Android Kotlin (Compose + Media3)
+desktop/          Electron
+scripts/          seed, android, ops
+```
 
 ## Démarrage rapide
 
 ```bash
-cp .env.example .env
-npm install
-npm run dev
+cp .env.example .env   # comptes de test : SEED_EMAIL / SEED_PASSWORD
+make install           # ou npm install
+make seed-users        # crée/maj dev@ + paul@
+make help
+make dev               # API :8787 + Vite :5173
+make android           # APK Kotlin sur device ADB
 ```
 
 - Web / PWA : http://localhost:5173  
 - API : http://localhost:8787  
+- Prod : https://ytmusic.delhomme.ovh — DNS & install : [`docs/DNS-ET-INSTALL.md`](docs/DNS-ET-INSTALL.md)
 
 ### Desktop
 
 ```bash
 # Terminal 1
-npm run dev
+make dev
 
 # Terminal 2
 cd desktop && npm install && npm start
@@ -25,9 +39,14 @@ cd desktop && npm install && npm start
 
 ### Mobile
 
-1. Ouvre http://localhost:5173 sur le téléphone (même réseau, ou tunnel)
-2. « Ajouter à l’écran d’accueil » → PWA installable
-3. Lecture arrière-plan via Media Session + cache IndexedDB
+```bash
+make mobile-hint   # guide Android / iPhone
+make mobile-qr     # URLs LAN
+```
+
+1. Ouvre l’URL LAN ou le domaine prod sur le téléphone  
+2. Bannière « Installer » / « Comment installer » (guide selon OS)  
+3. Compte app → sync biblio entre appareils (sans pubs)
 
 ## Multi-appareils & Cast
 

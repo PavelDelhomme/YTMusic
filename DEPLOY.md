@@ -1,292 +1,266 @@
-# Déploiement YTMusic — VPS / Portainer / Nginx Proxy Manager
+# Déploiement YTMusic — VPS / Portainer / Mobile
 
-Ce guide couvre le **fix Vite 504**, le **déploiement prod** sur ton VPS (comme Nextcloud), et le **flux git prod/dev**.
+Guide **actionnable**. Deux canaux distincts :
+
+| Quoi | Où | Comment |
+|------|-----|---------|
+| **Web + API** | Portainer (Docker) | Image GHCR → stack `ytmusic` → NPM |
+| **APK Android** | Admin du site + volume Docker | Compile **en local**, upload vers le serveur |
+
+Le conteneur Docker **n’a pas** le SDK Android → on ne compile pas l’APK dans Portainer.
+
+---
+
+## TL;DR — première mise en ligne
+
+### A. Web (Portainer)
+
+```bash
+# 1. Sur ta machine : merger vers prod pour builder l’image
+git checkout prod && git merge origin/dev && git push origin prod
+# → GitHub Actions pousse ghcr.io/paveldelhomme/ytmusic:latest
+```
+
+2. Portainer → **Stacks** → Add stack (ou ouvre la stack `ytmusic`)
+3. Compose = contenu de `deploy/portainer-template.yml` (ou git `docker-compose.yml` branche `prod`)
+4. Variables d’env (copie `.env.production.example`) — **obligatoire** :
+   - `JWT_SECRET` = `openssl rand -hex 32`
+   - `SMTP_PASS` = mot de passe maily
+   - `ADMIN_EMAILS` = ton email
+   - `APP_URL` / `WEBAUTHN_*` = `https://ytmusic.delhomme.ovh`
+5. Deploy → conteneur `ytmusic` healthy
+6. NPM → Proxy Host `ytmusic.delhomme.ovh` → `ytmusic:8787`, SSL + **Websockets ON**
+
+Mise à jour web ensuite : push `prod` → Portainer **Pull and redeploy** (ne coche pas « Remove volumes »).
+
+### B. Mobile (APK)
+
+```bash
+# Sur ta machine (avec Android SDK) — une commande :
+ADMIN_EMAIL=toi@email.com ADMIN_PASSWORD='…' make android-upload-apk
+```
+
+Ça compile l’APK pointant vers `https://ytmusic.delhomme.ovh`, puis l’upload
+dans le volume Portainer. Ensuite :
+
+1. Ouvre `https://ytmusic.delhomme.ovh` → **Admin** → **Déploiement mobile**
+2. Scanne le QR / ouvre `https://ytmusic.delhomme.ovh/api/deploy/apk`
+3. Installe l’APK sur le téléphone
+
+Sans CLI : Admin → **Uploader une APK** (fichier `data/public/android/ytmusic.apk`
+après `API_BASE_URL=https://ytmusic.delhomme.ovh make android-publish`).
 
 ---
 
 ## 1. Erreur Vite `504 Outdated Optimize Dep`
 
-Ça arrive quand Vite a mis en cache d’anciennes deps (`@simplewebauthn/browser`, `qrcode.react`) puis que tu ajoutes/réinstalles des paquets.
-
-**Correction locale (déjà appliquée dans le projet) :**
-
 ```bash
-rm -rf client/node_modules/.vite node_modules/.vite
-# Relancer npm run dev
+rm -rf web/node_modules/.vite node_modules/.vite
+# Relancer npm run dev + Ctrl+Shift+R
 ```
-
-Puis **hard refresh** du navigateur (`Ctrl+Shift+R`).
-
-Si ça revient : ferme tous les `vite`, vide le cache, relance une seule fois `npm run dev`.
 
 ---
 
-## 2. Architecture prod (recommandée)
-
-Un **seul conteneur** `ytmusic` (léger) :
-
-- API Express + WebSocket `/ws`
-- Frontend web / PWA (fichiers `client/dist`)
-- SQLite + caches dans le volume `ytmusic_data`
-
-Nginx Proxy Manager pointe vers `http://ytmusic:8787` (comme `nextcloud` → `nextcloud:80`).
+## 2. Architecture prod
 
 ```
 Internet → NPM (HTTPS ytmusic.delhomme.ovh)
               ↓
          conteneur ytmusic:8787  (API + SPA + WS)
+              ↓
+         volume ytmusic_data  (/app/data → SQLite + APK publique)
 ```
 
-Mobile = **même PWA** que le web (pas de Play Store) : mise à jour via service worker à la prochaine visite.
+Mobile natif = APK qui parle à la même URL HTTPS (API figée au build).
 
 ---
 
 ## 3. DNS OVH
 
-Dans la zone `delhomme.ovh`, ajoute :
+Voir [`docs/DNS-ET-INSTALL.md`](docs/DNS-ET-INSTALL.md).
 
 | Type | Nom | Cible |
 |------|-----|--------|
-| A ou CNAME | `ytmusic` | IP du VPS (ou CNAME vers le même host que nextcloud) |
-
-Ex. `ytmusic.delhomme.ovh` → `95.111.227.204` (adapte si ton IP a changé).
+| A ou CNAME | `ytmusic` | IP du VPS |
 
 ---
 
 ## 4. GitHub — branches
 
-| Branche | Rôle |
-|---------|------|
-| **`prod`** (défaut) | Production — images `ghcr.io/<user>/ytmusic:latest` et `:prod` |
-| **`dev`** | Intégration / tests — image `:dev` |
-| `feat/…`, `fix/…`, `misc/…`, `err/…`, `tests/…` | Travail depuis **dev** (voir `.cursor/rules/git-branches.mdc`) |
+| Branche | Image Docker |
+|---------|--------------|
+| **`prod`** | `:latest` + `:prod` |
+| **`dev`** | `:dev` |
 
-### Première fois (depuis ta machine)
+Travail courant = `feat/…` → PR vers **`dev`** → plus tard **`dev` → `prod`**.
 
-```bash
-cd /chemin/YTMusic
-git init
-git add .
-git commit -m "chore: bootstrap YTMusic avec déploiement Docker"
-git branch -M prod
-# Crée le repo vide sur GitHub puis :
-git remote add origin git@github.com:TON_USER/YTMusic.git
-git push -u origin prod
-git checkout -b dev
-git push -u origin dev
-```
+Portainer Registry GHCR (si privé) : PAT avec `read:packages`.
 
-Active **Packages** sur le repo (GHCR). Après un push sur `prod`, l’action `.github/workflows/docker.yml` build et push l’image.
-
-Remplace `OWNER` dans :
-
-- `docker-compose.yml` → `YTMUSIC_IMAGE`
-- `deploy/portainer-template.yml` → `image:`
-
-par `ton-user/ytmusic` (minuscules).
-
-Pour que Portainer pull GHCR privé : Settings → Registries → add GitHub avec un PAT `read:packages`.
+Image : `ghcr.io/paveldelhomme/ytmusic:latest` (déjà dans les compose).
 
 ---
 
-## 5. Stack Portainer
+## 5. Stack Portainer (détail)
 
 ### Option A — Custom Template
 
-1. Portainer → **App Templates** → **Custom Templates** → Create  
-2. Title : `YTMusic`  
-3. Description : `API + PWA YouTube Music`  
-4. Type : **Compose**  
-5. Colle le contenu de `deploy/portainer-template.yml` (avec ton image GHCR)  
-6. Deploy / crée la stack
+1. App Templates → Custom Templates → Create  
+2. Colle `deploy/portainer-template.yml`  
+3. Renseigne les env (JWT, SMTP, APP_URL…)  
+4. Deploy
 
 ### Option B — Stack depuis Git
 
 1. Stacks → Add stack → **Repository**  
-2. URL du repo GitHub  
-3. Reference : `refs/heads/prod`  
-4. Compose path : `docker-compose.yml`  
-5. Environnement : copie `.env.production.example` (JWT_SECRET, ADMIN_EMAILS, domaine passkeys, image)
+2. Repo GitHub, ref `refs/heads/prod`  
+3. Compose path : `docker-compose.yml`  
+4. Env = `.env.production.example` rempli
 
-Réseaux **externes** déjà présents chez toi :
+Réseaux **externes** (déjà chez toi) :
 
 - `nginx-proxy-manager_npm-network`
 - `shared-network-copy`
 
-Le compose les déclare en `external: true`.
-
 ---
 
-## 6. Nginx Proxy Manager (comme Nextcloud)
-
-**Nouveau Proxy Host**
-
-### Détails
+## 6. Nginx Proxy Manager
 
 | Champ | Valeur |
 |--------|--------|
-| Domain Names | `ytmusic.delhomme.ovh` |
+| Domain | `ytmusic.delhomme.ovh` |
 | Scheme | `http` |
-| Forward Hostname / IP | `ytmusic` |
+| Forward Hostname | `ytmusic` |
 | Forward Port | `8787` |
-| Cache Assets | optionnel (désactivé recommandé au début) |
-| Block Common Exploits | activé |
-| Websockets Support | **activé** (obligatoire pour `/ws`) |
-| Access List | Publicly Accessible |
-
-### SSL
-
-- Certificate Let’s Encrypt pour `ytmusic.delhomme.ovh`
-- Force SSL : activé  
-- HTTP/2 : activé  
-
-### Advanced
-
-Rien de obligatoire. Si le WS pose problème, tu peux ajouter :
-
-```nginx
-# Custom Nginx Configuration
-proxy_set_header Upgrade $http_upgrade;
-proxy_set_header Connection "upgrade";
-proxy_read_timeout 86400;
-```
-
-(souvent inutile si « Websockets Support » est déjà coché.)
+| Websockets | **ON** |
+| SSL | Let’s Encrypt + Force SSL |
 
 ---
 
-## 7. Variables d’environnement critiques
+## 7. Variables critiques
 
 ```env
 JWT_SECRET=<openssl rand -hex 32>
 ADMIN_EMAILS=toi@email.com
+APP_URL=https://ytmusic.delhomme.ovh
 WEBAUTHN_RP_ID=ytmusic.delhomme.ovh
 WEBAUTHN_ORIGIN=https://ytmusic.delhomme.ovh
+SMTP_PASS=…
+YTMUSIC_IMAGE=ghcr.io/paveldelhomme/ytmusic:latest
 ```
-
-Sans ça, les **passkeys** échoueront en prod (RP ID ≠ domaine).
 
 ---
 
-## 8. Mises à jour automatiques
+## 8. Déploiement mobile — interface Admin
 
-### Backend / web (conteneur)
+Dans l’app web (compte admin) → **Admin** → bloc **Déploiement mobile** :
 
-1. Merge `dev` → `prod` sur GitHub  
-2. L’action Docker pousse `ghcr.io/.../ytmusic:latest`  
-3. Dans Portainer : Stack → **Pull and redeploy**  
-   ou active **Watchtower** (label déjà sur le service) pour pull auto
+| Action | Quand |
+|--------|--------|
+| **Compiler & publier** | Seulement si l’API tourne **sur une machine avec SDK** (ton PC, pas le conteneur) |
+| **Uploader une APK** | **Cas Portainer** : APK buildée en local |
+| QR / Télécharger | Install sur téléphone (même hors Wi‑Fi) |
 
-### Application mobile (PWA)
+### Commandes locales
 
-Pas de Play Store : l’utilisateur ouvre `https://ytmusic.delhomme.ovh`  
-Le service worker (`registerType: 'autoUpdate'`) récupère la nouvelle version au prochain chargement.  
-Même URL = même version web & mobile installée.
+```bash
+# Build seule (fichier dans data/public/android/ytmusic.apk)
+API_BASE_URL=https://ytmusic.delhomme.ovh make android-publish
 
-### Desktop Electron
+# Build + upload vers le VPS
+ADMIN_EMAIL=toi@email.com ADMIN_PASSWORD='…' make android-upload-apk
 
-Rebuild / redistribue depuis la branche `prod` quand tu veux (hors Portainer).
+# Ou avec un token déjà connecté
+ADMIN_TOKEN='eyJ…' BUILD_FIRST=0 make android-upload-apk
+```
+
+L’APK est stockée dans le volume Docker :
+
+`/app/data/public/android/ytmusic.apk` → URL publique `/api/deploy/apk`.
 
 ---
 
-## 9. Flux de travail quotidien
+## 9. Flux quotidien
 
 ```
-feature → branche dev → tests locaux
+feat → PR → dev → (tests)
               ↓
-         merge PR vers prod
+         merge → prod
               ↓
          GitHub Actions → image :latest
               ↓
-         Portainer Pull & Redeploy
+         Portainer Pull & Redeploy   ← web à jour
               ↓
-         NPM sert déjà ytmusic.delhomme.ovh
-              ↓
-         Clients web/PWA se mettent à jour seuls
+         make android-upload-apk    ← mobile à jour (quand tu veux)
 ```
 
-### Dev local (sans Docker)
-
-```bash
-npm run dev
-# UI http://localhost:5173  API http://localhost:8787
-```
-
-### Dev local en conteneur
-
-```bash
-cp .env.production.example .env
-# édite JWT_SECRET
-docker compose -f docker-compose.dev.yml up --build -d
-# http://localhost:8787
-```
-
-### Prod VPS
-
-Uniquement via Portainer + image `prod` / `:latest`.
+PWA : se met à jour toute seule au prochain chargement (service worker).  
+APK : il faut republier + réinstaller (ou proposer le QR aux utilisateurs).
 
 ---
 
-## 10. Admin
+## 10. Checklist go-live
 
-1. Crée un compte sur le site (ou utilise le premier compte → admin auto)  
-2. Ou définis `ADMIN_EMAILS=ton@email.com`  
-3. Menu **Admin** → QR mobile, build status, URLs LAN (utile en local)
-
-Compte démo local historique : `demo@ytmusic.local` / `demo1234` (à ne pas utiliser en prod).
-
----
-
-## 11. Checklist go-live
-
-- [ ] Repo GitHub avec `prod` + `dev`  
-- [ ] Action Docker verte (image sur GHCR)  
-- [ ] DNS `ytmusic.delhomme.ovh`  
-- [ ] Stack Portainer healthy  
-- [ ] Conteneur sur `nginx-proxy-manager_npm-network`  
-- [ ] Proxy Host NPM + SSL + Websockets  
-- [ ] `JWT_SECRET` + `WEBAUTHN_*` corrects  
-- [ ] Connexion compte + passkey testés en HTTPS  
-- [ ] Install PWA sur téléphone (même Wi‑Fi ou 4G)
+- [ ] DNS `ytmusic.delhomme.ovh`
+- [ ] Push `prod` → image GHCR verte
+- [ ] Stack Portainer healthy (réseau npm)
+- [ ] NPM + SSL + Websockets
+- [ ] Login admin + passkey OK
+- [ ] `make android-upload-apk` → QR Admin installable
+- [ ] Volume `ytmusic_data` **non** supprimé au redeploy
 
 ---
 
-## 12. Dépannage rapide
+## 11. Dépannage
 
-| Symptôme | Cause probable | Fix |
-|----------|----------------|-----|
-| 502 Bad Gateway NPM | mauvais hostname / réseau | Conteneur doit être sur `npm-network`, nom `ytmusic` |
-| WS cast KO | websockets off | Cocher Websockets Support |
-| Passkey KO | mauvais RP ID | `WEBAUTHN_RP_ID` = hostname sans https |
-| Image pull denied | GHCR privé | Registry + PAT dans Portainer |
-| Vite 504 Optimize Dep | cache deps | `rm -rf **/ .vite` + restart |
-
----
-
-Fichiers utiles dans le repo :
-
-- `Dockerfile` — image prod  
-- `docker-compose.yml` — stack Portainer  
-- `docker-compose.dev.yml` — test local conteneur (+ Mailhog)  
-- `deploy/portainer-template.yml` — template Custom  
-- `.env.production.example` — variables  
-- `.github/workflows/docker.yml` — build auto  
-- `packages/platform-kit/` — socle réutilisable (env, auth longue, mail, telemetry)
+| Symptôme | Fix |
+|----------|-----|
+| 502 NPM | Conteneur sur `npm-network`, hostname `ytmusic` |
+| Pull denied GHCR | Registry + PAT `read:packages` dans Portainer |
+| Admin « Compiler » KO sur VPS | Normal → **Uploader** ou `make android-upload-apk` |
+| APK 404 | Pas encore uploadée → Admin ou script |
+| Passkey KO | `WEBAUTHN_RP_ID` = hostname sans `https://` |
+| Comptes perdus | Tu as coché Remove volumes — restore backup DB |
 
 ---
 
-## 13. Auth, email, 2FA, analytics (multi-env)
+## Fichiers utiles
 
-| Variable | Local | Préprod / Prod |
-|----------|-------|----------------|
-| `APP_ENV` | `local` | `preprod` / `production` |
+- `Dockerfile` / `docker-compose.yml` / `deploy/portainer-template.yml`
+- `.env.production.example`
+- `.github/workflows/docker.yml`
+- `scripts/android-publish-apk.sh` — build local
+- `scripts/publish-apk-remote.sh` — upload vers prod
+- `make deploy-hint` / `make android-upload-apk`
+
+---
+
+## Auth / email / volume (rappel)
+
+Voir aussi sections historiques ci-dessous + [`docs/SMTP-MAILY.md`](docs/SMTP-MAILY.md).
+
+| Action Portainer | Données (users, APK) |
+|------------------|----------------------|
+| Pull & Redeploy | **Conservées** |
+| Delete stack **avec** volumes | **Perdues** |
+
+---
+
+## 12. Auth, email, 2FA (multi-env)
+
+| Variable | Local | Prod |
+|----------|-------|------|
+| `APP_ENV` | `local` | `production` |
 | `APP_URL` | `http://localhost:5173` | `https://ytmusic.delhomme.ovh` |
-| `SMTP_*` | optionnel (outbox admin) | recommandé |
-| `JWT_ACCESS_TTL` | `14d` | idem |
-| Refresh cookie | ~400 jours | idem + `COOKIE_SECURE=1` |
+| `SMTP_*` | maily.ovh / Mailhog | secrets Portainer |
+| `COOKIE_SECURE` | `0` | `1` |
 
-- Inscription → email de validation (`/verify-email?token=…`)
-- Profil → activer TOTP 2FA
-- Admin → Analytics (erreurs, perf, batterie) + boîte mail outbox
-- Install PWA : bannière seulement si l’app n’est **pas** déjà en mode standalone (tous hosts)  
+```bash
+make seed-users   # comptes admin locaux
+```
 
+### Validation email
+
+| Env | Lien |
+|-----|------|
+| Prod | `https://ytmusic.delhomme.ovh/verify-email?token=…` |
+| Local + ADB | `make test-register-adb` |

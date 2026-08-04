@@ -2,24 +2,32 @@
   "name": "ytmusic",
   "version": "1.0.0",
   "private": true,
-  "description": "YouTube Music — web, mobile PWA & desktop",
+  "description": "YouTube Music — web, API, Android Kotlin & desktop",
   "scripts": {
-    "dev": "concurrently -n server,client -c red,cyan \"npm run dev -w server\" \"npm run dev -w client\"",
-    "dev:server": "npm run dev -w server",
-    "dev:client": "npm run dev -w client",
+    "dev": "npm run dev:web",
+    "dev:all": "concurrently -n api,web -c red,cyan \"npm run dev -w api\" \"npm run dev -w web\"",
+    "dev:api": "npm run dev -w api",
+    "dev:server": "npm run dev -w api",
+    "dev:web": "npm run dev -w web",
+    "dev:client": "npm run dev -w web",
     "dev:desktop": "npm run start --prefix desktop",
-    "build": "npm run build -w client",
-    "start": "npm run start -w server",
+    "build": "npm run build -w web",
+    "start": "npm run start -w api",
     "deploy:local": "npm run build && npm start",
     "docker:dev": "docker compose -f docker-compose.dev.yml up --build -d",
     "docker:dev:down": "docker compose -f docker-compose.dev.yml down",
-    "docker:build": "docker build -t ytmusic:local ."
+    "docker:build": "docker build -t ytmusic:local .",
+    "seed-users": "node scripts/seed-users.mjs"
   },
   "workspaces": [
-    "server",
-    "client"
+    "api",
+    "web"
   ],
   "devDependencies": {
     "concurrently": "^9.2.1"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.1": true,
+    "esbuild@0.28.1": true
   }
 }

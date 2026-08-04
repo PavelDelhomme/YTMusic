@@ -1,7 +1,9 @@
 node_modules/
 dist/
-data/
+/data/
+logs/
 *.log
+.ytmusic-stack-mode
 .DS_Store
 .env
 .env.local
@@ -10,3 +12,15 @@ data/
 desktop/node_modules/
 *.db
 *.db-*
+web/android/.gradle/
+web/android/app/build/
+web/android/build/
+web/android/capacitor-cordova-android-plugins/build/
+web/android/local.properties
+web/capacitor.config.json
+mobile-android/.gradle/
+mobile-android/app/build/
+mobile-android/build/
+mobile-android/local.properties
+*.apk
+*.aab

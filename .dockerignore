@@ -6,7 +6,7 @@ data
 *.db
 *.db-*
 desktop/node_modules
-client/dist
+web/dist
 .env
 .env.*
 !.env.example
@@ -18,3 +18,6 @@ desktop
 *.log
 README.md
 DEPLOY.md
+mobile-android/.gradle
+mobile-android/app/build
+mobile-android/build
