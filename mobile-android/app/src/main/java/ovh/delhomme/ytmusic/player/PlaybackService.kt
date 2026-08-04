@@ -36,6 +36,7 @@ import ovh.delhomme.ytmusic.MainActivity
 import ovh.delhomme.ytmusic.R
 import ovh.delhomme.ytmusic.YtMusicApp
 import ovh.delhomme.ytmusic.data.TrackDto
+import ovh.delhomme.ytmusic.debug.AppLog
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -55,6 +56,7 @@ class PlaybackService : MediaSessionService() {
     private val cmdToggleShuffle = SessionCommand(ACTION_TOGGLE_SHUFFLE, Bundle.EMPTY)
 
     private val recoverGen = AtomicInteger(0)
+    private val streamFailStreak = AtomicInteger(0)
 
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
@@ -69,6 +71,13 @@ class PlaybackService : MediaSessionService() {
             }
             if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
                 warmUpcoming(player.currentMediaItemIndex)
+            }
+            if (
+                events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED) &&
+                player.playbackState == Player.STATE_READY &&
+                player.playWhenReady
+            ) {
+                streamFailStreak.set(0)
             }
             // Pause volontaire uniquement — pas pendant rebuffer / skip
             // (sinon on tue le prefetch du titre suivant).
@@ -92,15 +101,27 @@ class PlaybackService : MediaSessionService() {
                 delay(200)
                 if (attempt != recoverGen.get()) return@launch
                 if (exo.currentMediaItem?.mediaId != id) return@launch
-                runCatching {
+                val recovered = runCatching {
                     val pos = exo.currentPosition.coerceAtLeast(0L)
                     exo.setMediaItem(item, pos)
                     exo.prepare()
                     exo.playWhenReady = true
-                }.onFailure {
-                    // 2) skip si toujours mort
-                    if (exo.hasNextMediaItem()) exo.seekToNextMediaItem()
-                    else exo.stop()
+                    true
+                }.getOrDefault(false)
+                if (recovered) return@launch
+                // 2) Ne pas skipper en cascade (VPS sans cookies YouTube) —
+                // un seul essai sur le titre suivant, sinon stop.
+                delay(400)
+                if (attempt != recoverGen.get()) return@launch
+                if (exo.currentMediaItem?.mediaId != id) return@launch
+                val streak = streamFailStreak.incrementAndGet()
+                if (streak <= 1 && exo.hasNextMediaItem()) {
+                    exo.seekToNextMediaItem()
+                } else {
+                    streamFailStreak.set(0)
+                    exo.playWhenReady = false
+                    exo.stop()
+                    AppLog.w("PlaybackService", "stream KO après recovery (streak=$streak) — stop")
                 }
             }
         }

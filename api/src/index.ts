@@ -228,12 +228,18 @@ const authBurst = rateLimit({ windowMs: 60_000, max: 20 });
 const authStrict = rateLimit({ windowMs: 15 * 60_000, max: 40 });
 
 app.get('/api/health', (_req, res) => {
+  const ytCookies = youtubeCookiesStatus();
   res.json({
     ok: true,
     version: process.env.BUILD_SHA || process.env.npm_package_version || 'dev',
     ref: process.env.BUILD_REF || 'local',
     ytdlp: existsSync(join(ROOT, 'bin', 'yt-dlp')),
     auth: authConfig(),
+    youtubeCookies: {
+      configured: ytCookies.configured,
+      source: ytCookies.source,
+      hint: ytCookies.hint,
+    },
   });
 });
 
