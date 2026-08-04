@@ -186,10 +186,17 @@ class AppContainer(context: Context) {
         .build()
         .create(YtMusicApi::class.java)
 
-    fun streamUrl(trackId: String): String =
+    fun streamUrl(trackId: String): String {
         // Toujours via proxy API : les URLs googlevideo sont liées à l’IP du serveur
         // (?redirect=1 → 403 depuis le téléphone / autre réseau).
-        resolvedApiBase() + "/api/stream/$trackId"
+        val base = resolvedApiBase() + "/api/stream/$trackId"
+        val token = tokenStore.peekAccess()
+        return if (!token.isNullOrBlank()) {
+            "$base?access_token=${java.net.URLEncoder.encode(token, Charsets.UTF_8.name())}"
+        } else {
+            base
+        }
+    }
 
     /** Pré-chauffe le resolve youtubei côté API (piste courante + suivantes). */
     fun warmStreamUrl(trackId: String): String =

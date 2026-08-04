@@ -1,15 +1,20 @@
 # Template Portainer CE — Custom Templates
-# Title: YTMusic
-# Description: YouTube Music self-hosted (API + PWA) derrière Nginx Proxy Manager
+# Title: YTMusic (perso / un compte)
+# Description: YouTube Music self-hosted derrière Nginx Proxy Manager
 # Platform: Linux / Compose
 #
-# NPM Proxy Host (comme taskflow.delhomme.ovh → taskflow:3003) :
-#   Domain : ytmusic.delhomme.ovh
-#   Scheme : http
+# === Nginx Proxy Manager (comme tes autres apps) ===
+#   Domain           : ytmusic.delhomme.ovh
+#   Scheme           : http
 #   Forward Hostname : ytmusic
-#   Forward Port : 8787
-#   SSL : Let's Encrypt + Force SSL + Websockets ON
-# Réseau : nginx-proxy-manager_npm-network (external)
+#   Forward Port     : 8787
+#   SSL              : Let's Encrypt + Force SSL
+#   Websockets       : ON (obligatoire pour /ws)
+# Réseau Docker      : nginx-proxy-manager_npm-network (external)
+#
+# === Mise à jour quotidienne ===
+#   git push origin prod  →  GHCR :latest
+#   Portainer → Stack → Pull and redeploy  (NE PAS cocher Remove volumes)
 
 version: "3.8"
 
@@ -27,7 +32,13 @@ services:
       JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-14d}
       AUTH_COOKIE_MS: ${AUTH_COOKIE_MS:-34560000000}
       COOKIE_SECURE: "1"
-      ADMIN_EMAILS: ${ADMIN_EMAILS:-paul@delhomme.ovh,dev@delhomme.ovh}
+      # Instance privée : un (ou quelques) emails seulement
+      AUTH_PRIVATE: ${AUTH_PRIVATE:-1}
+      AUTH_ALLOW_REGISTER: ${AUTH_ALLOW_REGISTER:-0}
+      AUTH_ALLOW_GUEST: ${AUTH_ALLOW_GUEST:-0}
+      AUTH_ALLOWED_EMAILS: ${AUTH_ALLOWED_EMAILS:-}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:?set ADMIN_EMAILS}
+      APK_DOWNLOAD_TOKEN: ${APK_DOWNLOAD_TOKEN:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-ytmusic.delhomme.ovh}
       WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-https://ytmusic.delhomme.ovh}
