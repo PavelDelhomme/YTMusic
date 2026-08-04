@@ -49,8 +49,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type:gha
-          cache-to: type:gha,mode:max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           build-args: |
             BUILD_SHA=${{ github.sha }}
             BUILD_REF=${{ github.ref_name }}
@@ -61,7 +61,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
           PKG="ytmusic"
           OWNER="${{ github.repository_owner }}"
           if gh api --method PATCH "/user/packages/container/${PKG}" -f visibility=public; then
@@ -71,4 +70,5 @@ jobs:
           else
             echo "::warning::API visibility KO — passe le package en Public manuellement :"
             echo "https://github.com/users/${OWNER}/packages/container/${PKG}/settings"
+            exit 0
           fi
