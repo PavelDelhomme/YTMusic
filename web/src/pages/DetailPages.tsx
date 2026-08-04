@@ -161,7 +161,7 @@ export function ArtistPage() {
                   void useLibrary.getState().recordEntityPlay({
                     id: data.artist.id,
                     kind: 'artist',
-                    title: data.artist.name || data.artist.title,
+                    title: data.artist.name,
                     thumbnails: data.artist.thumbnails,
                   });
                   void playQueue(data.songs, 0);

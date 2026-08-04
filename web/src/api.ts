@@ -8,7 +8,7 @@ export type Track = {
   duration?: string;
   durationSeconds?: number;
   thumbnails: { url: string; width?: number; height?: number }[];
-  type: 'song' | 'video' | 'album' | 'playlist' | 'artist' | 'unknown';
+  type: 'song' | 'video' | 'album' | 'playlist' | 'artist' | 'mix' | 'unknown';
 };
 
 export type Shelf = {

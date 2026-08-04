@@ -64,8 +64,6 @@ type PlayerState = {
   clearPlayedFromQueue: () => void;
   appendRelated: (tracks: Track[]) => void;
   clearQueue: () => void;
-  relatedLoading: boolean;
-  relatedError: string | null;
   startMix: (track: Track) => Promise<void>;
   /** Radio style YTM : depuis un titre, album ou artiste. */
   startRadio: (opts: {
