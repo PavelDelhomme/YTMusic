@@ -1,14 +1,21 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { apiUrl } from '../api';
 
+type Health = {
+  ok?: boolean;
+  youtubeCookies?: { configured?: boolean; hint?: string };
+};
+
 /**
- * Détecte un Vite proxy mort (/api → HTML SPA) — cause typique d’UI « cassée » en local.
+ * - Local DEV : Vite proxy mort (/api → HTML SPA)
+ * - Prod : cookies YouTube absents → play/pause OK mais skip / silence
  */
 export function ProxyHealthBanner() {
-  const [broken, setBroken] = useState(false);
+  const [proxyBroken, setProxyBroken] = useState(false);
+  const [cookiesMissing, setCookiesMissing] = useState(false);
 
   useEffect(() => {
-    if (!import.meta.env.DEV) return;
     let cancelled = false;
     const check = async () => {
       try {
@@ -16,28 +23,59 @@ export function ProxyHealthBanner() {
         const ctype = res.headers.get('content-type') || '';
         const text = await res.text();
         const looksHtml = ctype.includes('text/html') || text.trimStart().startsWith('<!');
-        if (!cancelled) setBroken(!res.ok || looksHtml || !text.includes('"ok"'));
+        if (import.meta.env.DEV) {
+          if (!cancelled) setProxyBroken(!res.ok || looksHtml || !text.includes('"ok"'));
+        }
+        if (!looksHtml && text.includes('"ok"')) {
+          try {
+            const data = JSON.parse(text) as Health;
+            const missing = data.youtubeCookies?.configured === false;
+            // Afficher surtout hors local (VPS) — en local YouTube marche souvent sans cookies
+            if (!cancelled) {
+              setCookiesMissing(missing && !import.meta.env.DEV);
+            }
+          } catch {
+            /* ignore */
+          }
+        }
       } catch {
-        if (!cancelled) setBroken(true);
+        if (!cancelled && import.meta.env.DEV) setProxyBroken(true);
       }
     };
     void check();
-    const t = window.setInterval(check, 12_000);
+    const t = window.setInterval(check, 20_000);
     return () => {
       cancelled = true;
       window.clearInterval(t);
     };
   }, []);
 
-  if (!broken) return null;
+  if (proxyBroken) {
+    return (
+      <div className="fixed inset-x-0 top-0 z-[100] border-b border-red-500/40 bg-red-950 px-4 py-3 text-sm text-red-100 shadow-lg">
+        <p className="font-medium">API locale injoignable via Vite (proxy :5173 → :8787 mort)</p>
+        <p className="mt-1 text-red-200/90">
+          Dans un terminal : <code className="text-white">make ensure-api</code> puis redémarre Vite (
+          <code className="text-white">make clean-vite && npm run dev:web</code>), ensuite Ctrl+Shift+R.
+        </p>
+      </div>
+    );
+  }
 
-  return (
-    <div className="fixed inset-x-0 top-0 z-[100] border-b border-red-500/40 bg-red-950 px-4 py-3 text-sm text-red-100 shadow-lg">
-      <p className="font-medium">API locale injoignable via Vite (proxy :5173 → :8787 mort)</p>
-      <p className="mt-1 text-red-200/90">
-        Dans un terminal : <code className="text-white">make ensure-api</code> puis redémarre Vite (
-        <code className="text-white">make clean-vite && npm run dev:web</code>), ensuite Ctrl+Shift+R.
-      </p>
-    </div>
-  );
+  if (cookiesMissing) {
+    return (
+      <div className="fixed inset-x-0 top-0 z-[100] border-b border-amber-500/40 bg-amber-950 px-4 py-3 text-sm text-amber-50 shadow-lg">
+        <p className="font-medium">Pas de son / titres qui sautent : cookies YouTube manquants sur le serveur</p>
+        <p className="mt-1 text-amber-100/90">
+          YouTube bloque l’IP du VPS. Va dans{' '}
+          <Link to="/admin" className="underline hover:text-white">
+            Admin → Cookies YouTube
+          </Link>{' '}
+          et colle le header Cookie depuis youtube.com (DevTools), ou utilise Importer → cookies YTM.
+        </p>
+      </div>
+    );
+  }
+
+  return null;
 }

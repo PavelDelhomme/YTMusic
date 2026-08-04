@@ -661,6 +661,42 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   audio.src = src;
   audio.dataset.trackId = track.id;
   audio.volume = 0;
+
+  // Attendre un buffer réel — sinon play() « réussit » puis error → skip infini
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error('Timeout chargement audio'));
+    }, 28_000);
+    const onReady = () => {
+      cleanup();
+      resolve();
+    };
+    const onErr = () => {
+      cleanup();
+      reject(
+        new Error(
+          'Stream indisponible — Admin → Cookies YouTube (anti-bot VPS), ou page Importer',
+        ),
+      );
+    };
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      audio.removeEventListener('canplay', onReady);
+      audio.removeEventListener('loadeddata', onReady);
+      audio.removeEventListener('error', onErr);
+    };
+    audio.addEventListener('canplay', onReady, { once: true });
+    audio.addEventListener('loadeddata', onReady, { once: true });
+    audio.addEventListener('error', onErr, { once: true });
+    try {
+      audio.load();
+    } catch {
+      /* ignore */
+    }
+  });
+  if (gen !== playGeneration) return;
+
   // démarrer dès que possible
   let playPromise: Promise<void>;
   try {
@@ -803,12 +839,40 @@ export const usePlayer = create<PlayerState>((set, get) => ({
             el.src = bust.startsWith('blob:') ? fresh : bust;
             el.dataset.trackId = track.id;
             el.load();
+            await new Promise<void>((resolve, reject) => {
+              const t = window.setTimeout(() => reject(new Error('timeout')), 20_000);
+              const ok = () => {
+                window.clearTimeout(t);
+                resolve();
+              };
+              const bad = () => {
+                window.clearTimeout(t);
+                reject(new Error('stream'));
+              };
+              el.addEventListener('canplay', ok, { once: true });
+              el.addEventListener('error', bad, { once: true });
+            });
+            if (gen !== playGeneration || get().current?.id !== track.id) return;
             await el.play();
-            set({ isPlaying: true, isLoading: false });
+            set({ isPlaying: true, isLoading: false, playError: null });
             refreshMediaSession();
           } catch {
+            // Ne PAS enchaîner next() : sinon skip infini quand le VPS est bloqué par YouTube
             if (gen === playGeneration && get().current?.id === track.id) {
-              void get().next({ fromEnded: true });
+              try {
+                el.pause();
+              } catch {
+                /* ignore */
+              }
+              set({
+                isPlaying: false,
+                isLoading: false,
+                playError:
+                  'Lecture impossible (stream). Sur le VPS : Admin → coller les cookies YouTube, ou Importer → cookies YTM.',
+              });
+              refreshMediaSession();
+              persistPlayer();
+              publish();
             }
           } finally {
             recovering = false;
