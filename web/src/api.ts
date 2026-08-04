@@ -374,6 +374,9 @@ export const api = {
   adminStatus: () => req<any>('/api/admin/status'),
   adminBuild: () => req<any>('/api/admin/build', { method: 'POST', body: '{}' }),
   adminBuildStatus: () => req<any>('/api/admin/build'),
+  adminDeploy: () => req<any>('/api/admin/deploy'),
+  adminDeployStart: (mode: 'web' | 'apk' | 'all') =>
+    req<any>('/api/admin/deploy', { method: 'POST', body: JSON.stringify({ mode }) }),
   adminApk: () => req<any>('/api/admin/apk'),
   adminApkBuild: (target: string = 'auto') =>
     req<any>('/api/admin/apk/build', {

@@ -42,6 +42,9 @@ export function AdminPage() {
   const [smtpTestTo, setSmtpTestTo] = useState(user?.email || '');
   const [smtpResult, setSmtpResult] = useState<string>('');
   const [smtpBusy, setSmtpBusy] = useState(false);
+  const [deployBusy, setDeployBusy] = useState(false);
+  const [deployMsg, setDeployMsg] = useState('');
+  const [repairMsg, setRepairMsg] = useState('');
 
   const refresh = useCallback(() => {
     void api
@@ -129,6 +132,158 @@ export function AdminPage() {
       </div>
 
       {err && <p className="mb-4 text-sm text-red-400">{err}</p>}
+
+      <section className="mb-6 rounded-2xl border border-yt-red/40 bg-yt-surface p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <Rocket className="h-5 w-5 text-yt-red" />
+          <h3 className="font-display text-lg font-semibold">Mise en production (depuis ce PC)</h3>
+        </div>
+        <p className="mb-3 text-sm text-yt-muted">
+          Guide pas-à-pas : <code className="text-white">DEPLOY.md</code>. Portainer CE ={' '}
+          <strong className="text-white">pas de webhook Pro</strong> → installe la stack{' '}
+          <code className="text-white">watchtower</code> une fois (
+          <code className="text-white">deploy/watchtower-compose.yml</code>).
+        </p>
+        <ol className="mb-4 list-decimal space-y-1 pl-5 text-sm text-yt-muted">
+          <li>
+            DNS A <code className="text-white">ytmusic</code> → IP VPS (
+            <code className="text-white">dig +short ytmusic.delhomme.ovh</code>)
+          </li>
+          <li>
+            Portainer : stack <code className="text-white">ytmusic</code> = coller{' '}
+            <code className="text-white">deploy/portainer-template.yml</code> + env (
+            <code className="text-white">JWT_SECRET</code>, <code className="text-white">SMTP_PASS</code>,
+            emails…)
+          </li>
+          <li>
+            Portainer : stack <code className="text-white">watchtower</code> = coller{' '}
+            <code className="text-white">deploy/watchtower-compose.yml</code>
+          </li>
+          <li>
+            NPM : <code className="text-white">ytmusic.delhomme.ovh</code> →{' '}
+            <code className="text-white">http://ytmusic:8787</code> + SSL +{' '}
+            <strong className="text-white">Websockets ON</strong>
+          </li>
+          <li>
+            Ensuite seulement : boutons ci-dessous (Web / APK). Working tree sale → stash auto.
+          </li>
+        </ol>
+        <p className="mb-3 text-sm text-yt-muted">
+          Un clic : pousse <code className="text-white">dev → prod</code> (image GHCR), redeploy VPS
+          via Watchtower / SSH / Access Token CE, et/ou APK sur le VPS.
+        </p>
+        <dl className="mb-4 grid gap-2 text-sm sm:grid-cols-2">
+          <div>
+            <dt className="text-xs text-yt-muted">Cible</dt>
+            <dd className="truncate font-medium">
+              {status?.deploy?.prodUrl || 'https://ytmusic.delhomme.ovh'}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-yt-muted">Autorisé ici</dt>
+            <dd className="font-medium">
+              {status?.deploy?.allowed === false
+                ? 'Non (API pas en local)'
+                : `Oui · env ${status?.deploy?.appEnv || status?.env || '…'}`}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-yt-muted">Redeploy VPS</dt>
+            <dd className="font-medium">
+              {status?.deploy?.redeploy?.label || 'Watchtower / manuel'}
+              {status?.deploy?.redeploy?.ready ? ' ✓' : ' (config optionnelle)'}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-yt-muted">Job</dt>
+            <dd className="font-medium">
+              {status?.deploy?.job?.status || 'idle'}
+              {status?.deploy?.job?.mode ? ` · ${status.deploy.job.mode}` : ''}
+            </dd>
+          </div>
+        </dl>
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              ['web', 'Web (git → image)'],
+              ['apk', 'APK → VPS'],
+              ['all', 'Web + APK'],
+            ] as const
+          ).map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              disabled={
+                deployBusy ||
+                status?.deploy?.allowed === false ||
+                status?.deploy?.job?.status === 'running'
+              }
+              className="rounded-full bg-yt-red px-4 py-2 text-sm font-medium disabled:opacity-50"
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    mode === 'apk'
+                      ? 'Compiler l’APK prod et l’uploader sur le VPS ?'
+                      : `Pousser vers prod (${mode}) ?\nÇa merge origin/dev → prod et push GitHub.`,
+                  )
+                ) {
+                  return;
+                }
+                setDeployBusy(true);
+                setDeployMsg('');
+                void api
+                  .adminDeployStart(mode)
+                  .then((j) => {
+                    setDeployMsg(`Lancé · ${j.status || 'running'} (${mode})`);
+                    refresh();
+                  })
+                  .catch((e) => setDeployMsg(String(e.message || e)))
+                  .finally(() => setDeployBusy(false));
+              }}
+            >
+              {label}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="rounded-full border border-yt-border px-4 py-2 text-sm text-yt-muted hover:text-white"
+            onClick={() => {
+              void (async () => {
+                try {
+                  if ('serviceWorker' in navigator) {
+                    const regs = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(regs.map((r) => r.unregister()));
+                  }
+                  if ('caches' in window) {
+                    const keys = await caches.keys();
+                    await Promise.all(keys.map((k) => caches.delete(k)));
+                  }
+                  setRepairMsg('Caches / SW nettoyés — recharge avec Ctrl+Shift+R');
+                } catch (e) {
+                  setRepairMsg(String((e as Error).message || e));
+                }
+              })();
+            }}
+          >
+            Réparer client local
+          </button>
+        </div>
+        {(deployMsg || repairMsg) && (
+          <p className="mt-3 text-sm text-yt-muted">{deployMsg || repairMsg}</p>
+        )}
+        {status?.deploy?.job?.log && (
+          <pre className="mt-3 max-h-56 overflow-auto rounded-xl bg-black/40 p-3 text-[11px] leading-relaxed text-yt-muted">
+            {String(status.deploy.job.log).slice(-4000)}
+          </pre>
+        )}
+        <p className="mt-3 text-xs text-yt-muted">
+          Redeploy sans Pro : <code className="text-white">deploy/watchtower-compose.yml</code> ·
+          ou <code className="text-white">PORTAINER_URL</code> +{' '}
+          <code className="text-white">PORTAINER_API_KEY</code> (Access Token CE) · ou{' '}
+          <code className="text-white">DEPLOY_SSH</code>. Détail :{' '}
+          <code className="text-white">DEPLOY.md</code>.
+        </p>
+      </section>
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <Stat
@@ -225,34 +380,26 @@ export function AdminPage() {
       <section className="mb-6 rounded-2xl border border-yt-border bg-yt-surface p-5">
         <div className="mb-3 flex items-center gap-2">
           <Rocket className="h-5 w-5 text-yt-red" />
-          <h3 className="font-display text-lg font-semibold">Déploiement NPM / Portainer</h3>
+          <h3 className="font-display text-lg font-semibold">Rappel NPM / Portainer</h3>
         </div>
         <ol className="list-decimal space-y-2 pl-5 text-sm text-yt-muted">
           <li>
-            Stack Portainer : image <code className="text-white">ghcr.io/…/ytmusic:latest</code> (ou{' '}
-            <code className="text-white">:dev</code>), réseau{' '}
+            Stack Portainer : image <code className="text-white">ghcr.io/…/ytmusic:latest</code>, réseau{' '}
             <code className="text-white">nginx-proxy-manager_npm-network</code>, hostname{' '}
             <code className="text-white">ytmusic</code>.
           </li>
           <li>
-            Proxy Host NPM : <code className="text-white">ytmusic.delhomme.ovh</code> →{' '}
-            <code className="text-white">http://ytmusic:8787</code> — SSL Let’s Encrypt, Force SSL,
-            <strong className="text-white"> Websockets ON</strong> (comme taskflow).
+            Proxy NPM : <code className="text-white">ytmusic.delhomme.ovh</code> →{' '}
+            <code className="text-white">http://ytmusic:8787</code> — SSL +{' '}
+            <strong className="text-white">Websockets ON</strong>.
           </li>
           <li>
-            Env stack : <code className="text-white">JWT_SECRET</code>,{' '}
-            <code className="text-white">SMTP_*</code> (maily.ovh),{' '}
-            <code className="text-white">ADMIN_EMAILS</code>,{' '}
-            <code className="text-white">WEBAUTHN_*</code>.
-          </li>
-          <li>
-            MAJ : push <code className="text-white">prod</code> → CI GHCR → Watchtower / Pull &amp;
-            Redeploy. PWA mobile = même URL (SW auto).
+            MAJ quotidienne : bouton <strong className="text-white">Mise en production</strong>{' '}
+            ci-dessus. Pas de webhook Pro — Watchtower / Access Token / SSH (voir DEPLOY.md).
           </li>
         </ol>
         <p className="mt-3 text-xs text-yt-muted">
-          Détail : <code className="text-white">DEPLOY.md</code> ·{' '}
-          <code className="text-white">deploy/portainer-template.yml</code>
+          Détail : <code className="text-white">DEPLOY.md</code>
         </p>
       </section>
 

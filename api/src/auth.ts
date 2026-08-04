@@ -96,7 +96,14 @@ export async function verifyToken(token: string) {
 export function authOptional(req: Request, _res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   const cookie = (req as any).cookies?.ytm_token as string | undefined;
-  const token = header?.startsWith('Bearer ') ? header.slice(7) : cookie;
+  const q =
+    typeof req.query?.access_token === 'string'
+      ? req.query.access_token
+      : typeof req.query?.token === 'string'
+        ? req.query.token
+        : undefined;
+  // Query token : lecteurs média (ExoPlayer / <audio>) qui n’envoient pas Authorization
+  const token = header?.startsWith('Bearer ') ? header.slice(7) : cookie || q;
   if (!token) return next();
   verifyToken(token)
     .then((user) => {
@@ -121,11 +128,60 @@ export function isGuestEmail(email?: string | null) {
   return Boolean(email && email.includes('@local.ytmusic'));
 }
 
+/** Mode perso : un seul (ou une liste) d’emails, pas d’invités / pas d’inscription ouverte. */
+export function authPrivateMode() {
+  const flag = (process.env.AUTH_PRIVATE || '').trim().toLowerCase();
+  if (flag === '0' || flag === 'false' || flag === 'off') return false;
+  if (flag === '1' || flag === 'true' || flag === 'on') return true;
+  const env = process.env.APP_ENV || 'local';
+  return env === 'production' || env === 'preprod';
+}
+
+export function authAllowRegister() {
+  if (!authPrivateMode()) {
+    const v = (process.env.AUTH_ALLOW_REGISTER || '1').trim().toLowerCase();
+    return !(v === '0' || v === 'false' || v === 'off');
+  }
+  const v = (process.env.AUTH_ALLOW_REGISTER || '0').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'on';
+}
+
+export function authAllowGuest() {
+  if (!authPrivateMode()) {
+    const v = (process.env.AUTH_ALLOW_GUEST || '1').trim().toLowerCase();
+    return !(v === '0' || v === 'false' || v === 'off');
+  }
+  const v = (process.env.AUTH_ALLOW_GUEST || '0').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'on';
+}
+
+/** Emails autorisés à se connecter (AUTH_ALLOWED_EMAILS sinon ADMIN_EMAILS). */
+export function allowedEmails(): Set<string> {
+  const raw = process.env.AUTH_ALLOWED_EMAILS || process.env.ADMIN_EMAILS || '';
+  return new Set(
+    raw
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+export function assertEmailAllowed(email: string) {
+  if (!authPrivateMode()) return;
+  const set = allowedEmails();
+  if (!set.size) {
+    throw new Error('AUTH_ALLOWED_EMAILS / ADMIN_EMAILS requis en mode privé');
+  }
+  if (!set.has(String(email || '').trim().toLowerCase())) {
+    throw new Error('Accès réservé — compte non autorisé');
+  }
+}
+
 /** Compte réel obligatoire (pas d’invité) pour prefs / reco / biblio. */
 export function accountRequired(req: Request, res: Response, next: NextFunction) {
   authRequired(req, res, () => {
     if (!req.user || req.user.isGuest || isGuestEmail(req.user.email)) {
-      res.status(401).json({ error: 'Compte requis — connecte-toi ou crée un compte' });
+      res.status(401).json({ error: 'Compte requis — connecte-toi' });
       return;
     }
     next();
@@ -135,6 +191,10 @@ export function accountRequired(req: Request, res: Response, next: NextFunction)
 export function ensureUser(req: Request, res: Response, next: NextFunction) {
   authOptional(req, res, () => {
     if (req.userId) return next();
+    if (!authAllowGuest()) {
+      res.status(401).json({ error: 'Authentification requise' });
+      return;
+    }
 
     const device =
       String(req.headers['x-device-id'] || '') ||
@@ -158,6 +218,10 @@ export function ensureUser(req: Request, res: Response, next: NextFunction) {
 }
 
 export async function registerLocal(email: string, password: string, name: string) {
+  if (!authAllowRegister()) {
+    throw new Error('Inscription désactivée — instance privée');
+  }
+  assertEmailAllowed(email);
   if (findUserByEmail(email)) throw new Error('Email déjà utilisé');
   const user = createUser({
     email,
@@ -192,6 +256,7 @@ export async function loginLocal(
   password: string,
   opts?: { totp?: string; deviceLabel?: string },
 ) {
+  assertEmailAllowed(email);
   const user = findUserByEmail(email);
   if (!user?.password_hash || !verifyPassword(password, user.password_hash)) {
     throw new Error('Identifiants invalides');
@@ -217,6 +282,7 @@ export async function loginGoogle(idToken: string, deviceLabel?: string) {
   });
   const payload = ticket.getPayload();
   if (!payload?.email || !payload.sub) throw new Error('Token Google invalide');
+  assertEmailAllowed(payload.email);
 
   let user = findUserByGoogleId(payload.sub) || findUserByEmail(payload.email);
   if (!user) {
@@ -246,5 +312,8 @@ export function authConfig() {
     googleEnabled: Boolean(GOOGLE_CLIENT_ID),
     accessTtl: ACCESS_TTL,
     appEnv: process.env.APP_ENV || (process.env.NODE_ENV === 'production' ? 'production' : 'local'),
+    privateMode: authPrivateMode(),
+    allowRegister: authAllowRegister(),
+    allowGuest: authAllowGuest(),
   };
 }
