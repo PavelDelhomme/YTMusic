@@ -377,6 +377,14 @@ export const api = {
   adminDeploy: () => req<any>('/api/admin/deploy'),
   adminDeployStart: (mode: 'web' | 'apk' | 'all') =>
     req<any>('/api/admin/deploy', { method: 'POST', body: JSON.stringify({ mode }) }),
+  adminYoutubeCookies: () => req<any>('/api/admin/youtube-cookies'),
+  adminYoutubeCookiesSave: (cookie: string) =>
+    req<any>('/api/admin/youtube-cookies', {
+      method: 'POST',
+      body: JSON.stringify({ cookie }),
+    }),
+  adminYoutubeCookiesClear: () =>
+    req<any>('/api/admin/youtube-cookies', { method: 'DELETE', body: '{}' }),
   adminApk: () => req<any>('/api/admin/apk'),
   adminApkBuild: (target: string = 'auto') =>
     req<any>('/api/admin/apk/build', {

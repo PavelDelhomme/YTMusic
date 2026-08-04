@@ -224,7 +224,22 @@ Tes réglages finaux (à garder) :
 
 ---
 
-### ☐ 7. Première APK (quand le site HTTPS marche)
+### ☐ 7. Cookies YouTube (obligatoire pour le son sur le VPS)
+
+Sans ça : login OK mais **aucune lecture** (« Sign in to confirm you’re not a bot »).  
+En local ça marche souvent ; sur un VPS YouTube bloque l’IP.
+
+1. Navigateur (fenêtre privée) → connecte-toi sur **https://www.youtube.com**  
+2. F12 → **Network** → clique une requête `youtube.com` → Request Headers → copie **Cookie**  
+3. Ouvre **https://ytmusic.delhomme.ovh/admin** (connecté admin)  
+4. Section **Cookies YouTube (stream VPS)** → colle → **Enregistrer cookies**  
+5. Relance une piste sur le téléphone / le site  
+
+Alternative : page **Importer** → coller les cookies YTM (sert aussi au stream serveur).
+
+---
+
+### ☐ 8. Première APK (quand le site HTTPS marche + cookies OK)
 
 Sur ton PC (Android SDK) :
 
@@ -240,7 +255,7 @@ Puis téléphone : ouvre / scanne
 
 ---
 
-### ☐ 8. Ensuite : tout contrôler depuis ton PC
+### ☐ 9. Ensuite : tout contrôler depuis ton PC
 
 **Quotidien / chaque release :**
 
@@ -280,6 +295,7 @@ Laisse B/C (Portainer API / SSH) **commentés**. Watchtower suffit.
 | Pull denied image | Registry GHCR + PAT `read:packages` |
 | Conteneur pas à jour après Web | Étape 4 Watchtower absente, ou attendre 5 min, ou Pull manuel |
 | Inscription impossible | Étape 6 : `AUTH_ALLOW_REGISTER=1` temporaire |
+| Pas de son / stream KO en prod | YouTube anti-bot VPS — Admin → **Cookies YouTube** (coller Cookie DevTools) |
 | Données perdues | Tu as coché Remove volumes |
 
 ---
