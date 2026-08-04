@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import type { Request, Response } from 'express';
 import { getAudioFormat, getVideoFormat, getYT } from './yt.js';
+import { ytDlpCookieArgs } from './youtubeCookies.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -67,6 +68,7 @@ function streamViaYtDlp(videoId: string, res: Response) {
         '--no-playlist',
         '--quiet',
         '--no-warnings',
+        ...ytDlpCookieArgs(),
         `https://www.youtube.com/watch?v=${videoId}`,
       ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
@@ -259,6 +261,7 @@ export async function downloadTrack(videoId: string): Promise<string> {
           '--no-playlist',
           '--quiet',
           '--no-warnings',
+          ...ytDlpCookieArgs(),
           `https://www.youtube.com/watch?v=${videoId}`,
         ],
         { stdio: 'inherit' },
