@@ -140,8 +140,9 @@ export function AdminPage() {
         </div>
         <p className="mb-3 text-sm text-yt-muted">
           Un clic depuis <strong className="text-white">localhost</strong> : pousse{' '}
-          <code className="text-white">dev → prod</code> (image Docker GHCR), optionnellement
-          redeploy Portainer, et/ou compile + upload l’APK sur le VPS.
+          <code className="text-white">dev → prod</code> (image Docker GHCR), redeploy VPS{' '}
+          <strong className="text-white">sans webhook Pro</strong> (SSH / Access Token CE /
+          Watchtower), et/ou APK sur le VPS.
         </p>
         <dl className="mb-4 grid gap-2 text-sm sm:grid-cols-2">
           <div>
@@ -159,9 +160,10 @@ export function AdminPage() {
             </dd>
           </div>
           <div>
-            <dt className="text-xs text-yt-muted">Webhook Portainer</dt>
+            <dt className="text-xs text-yt-muted">Redeploy VPS</dt>
             <dd className="font-medium">
-              {status?.deploy?.portainerWebhookConfigured ? 'Configuré' : 'Absent (Pull manuel)'}
+              {status?.deploy?.redeploy?.label || 'Watchtower / manuel'}
+              {status?.deploy?.redeploy?.ready ? ' ✓' : ' (config optionnelle)'}
             </dd>
           </div>
           <div>
@@ -247,11 +249,11 @@ export function AdminPage() {
           </pre>
         )}
         <p className="mt-3 text-xs text-yt-muted">
-          Optionnel dans <code className="text-white">.env</code> :{' '}
-          <code className="text-white">PORTAINER_WEBHOOK_URL</code> (stack → Webhook) ·{' '}
-          <code className="text-white">DEPLOY_URL</code> · login APK via{' '}
-          <code className="text-white">SEED_PASSWORD</code> /{' '}
-          <code className="text-white">ADMIN_PASSWORD</code>.
+          Redeploy sans Pro : <code className="text-white">deploy/watchtower-compose.yml</code> ·
+          ou <code className="text-white">PORTAINER_URL</code> +{' '}
+          <code className="text-white">PORTAINER_API_KEY</code> (Access Token CE) · ou{' '}
+          <code className="text-white">DEPLOY_SSH</code>. Détail :{' '}
+          <code className="text-white">DEPLOY.md</code>.
         </p>
       </section>
 
@@ -364,8 +366,8 @@ export function AdminPage() {
             <strong className="text-white">Websockets ON</strong>.
           </li>
           <li>
-            MAJ quotidienne : bouton <strong className="text-white">Mise en production</strong> ci-dessus
-            (ou push <code className="text-white">prod</code> + Pull &amp; Redeploy).
+            MAJ quotidienne : bouton <strong className="text-white">Mise en production</strong>{' '}
+            ci-dessus. Pas de webhook Pro — Watchtower / Access Token / SSH (voir DEPLOY.md).
           </li>
         </ol>
         <p className="mt-3 text-xs text-yt-muted">
