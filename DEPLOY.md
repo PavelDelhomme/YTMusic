@@ -143,7 +143,26 @@ Le site web (SPA) reste visible ; sans login, l’API renvoie **401**.
 
 ---
 
-## Mise à jour quotidienne
+### Mise à jour depuis Admin (localhost)
+
+Sur ton PC (`APP_ENV=local`), ouvre `http://localhost:5173/admin` :
+
+| Bouton | Effet |
+|--------|--------|
+| **Web (git → image)** | merge `dev` → `prod` + push → CI GHCR ; si `PORTAINER_WEBHOOK_URL` → redeploy |
+| **APK → VPS** | build APK figée prod + upload `/api/admin/apk/upload` |
+| **Web + APK** | les deux |
+| **Réparer client local** | désinscrit SW + vide caches navigateur |
+
+Dans `.env` local :
+
+```env
+DEPLOY_URL=https://ytmusic.delhomme.ovh
+PORTAINER_WEBHOOK_URL=https://portainer…/api/webhooks/…   # optionnel
+# SEED_PASSWORD ou ADMIN_PASSWORD pour l’upload APK distant
+```
+
+---
 
 ```
 feat/… → merge → dev → (tests)

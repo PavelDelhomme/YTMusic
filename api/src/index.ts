@@ -77,6 +77,12 @@ import {
   startBuild,
 } from './admin.js';
 import {
+  deployAdminHints,
+  getDeployJob,
+  startAdminDeploy,
+  type DeployMode,
+} from './deployRemote.js';
+import {
   beginAuthentication,
   beginRegistration,
   deletePasskey,
@@ -675,7 +681,12 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
 }
 
 app.get('/api/admin/status', requireAdmin, (_req, res) => {
-  res.json({ ...deployInfo(PORT), env: getAppEnv(), telemetry: telemetryStats() });
+  res.json({
+    ...deployInfo(PORT),
+    env: getAppEnv(),
+    telemetry: telemetryStats(),
+    deploy: deployAdminHints(),
+  });
 });
 
 app.get('/api/admin/telemetry', requireAdmin, (req, res) => {
@@ -747,6 +758,20 @@ app.post('/api/admin/apk/upload', requireAdmin, (req, res) => {
 
 app.get('/api/admin/apk', requireAdmin, (_req, res) => {
   res.json(getApkJob());
+});
+
+/** Mise en prod depuis Admin local : web (git→GHCR→webhook) / apk / all */
+app.get('/api/admin/deploy', requireAdmin, (_req, res) => {
+  res.json(deployAdminHints());
+});
+
+app.post('/api/admin/deploy', requireAdmin, (req, res) => {
+  try {
+    const mode = String(req.body?.mode || 'web').trim() as DeployMode;
+    res.json(startAdminDeploy(mode));
+  } catch (err) {
+    res.status(400).json({ ok: false, error: String((err as Error).message || err), job: getDeployJob() });
+  }
 });
 
 function apkDownloadAuthorized(req: import('express').Request) {
