@@ -10,6 +10,7 @@ import { MixCollageCard } from '../components/MixCollageCard';
 import { useItemActions } from '../store/itemActions';
 import { HomeShelfSkeleton } from '../components/HomeShelfSkeleton';
 import { api, type Track } from '../api';
+import { formatTotalDuration, sumTracksDurationSeconds } from '../lib/time';
 
 function shuffleTracks(tracks: Track[]) {
   const copy = [...tracks];
@@ -248,12 +249,25 @@ export function LibraryPage() {
                 {mixes.length} mix{mixes.length > 1 ? 'es' : ''} · lecture depuis ta bibliothèque.
               </p>
               <div className="shelf-scroll">
-                {mixes.map((m: any) => (
+                {mixes.map((m: any) => {
+                  const mixTracks = (m.tracks || m.covers || []) as Track[];
+                  const total = formatTotalDuration(sumTracksDurationSeconds(mixTracks));
+                  return (
                   <MixCollageCard
                     key={m.id}
                     title={m.title}
                     tracks={(m.covers || m.tracks || []) as Track[]}
-                    subtitle="Mix enregistré"
+                    subtitle={
+                      [
+                        'Mix enregistré',
+                        mixTracks.length
+                          ? `${mixTracks.length} titre${mixTracks.length !== 1 ? 's' : ''}`
+                          : '',
+                        total,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')
+                    }
                     saved={hasMix(m.id)}
                     onClick={() => {
                       const tracks = (m.tracks || m.covers || []).filter((t: Track) =>
@@ -274,7 +288,8 @@ export function LibraryPage() {
                       } as Track)
                     }
                   />
-                ))}
+                  );
+                })}
               </div>
             </>
           )}
@@ -373,7 +388,12 @@ export function LibraryPage() {
               </div>
               <div className="font-medium">Titres aimés</div>
               <div className="text-xs text-yt-muted">
-                Playlist automatique · {liked.length} titre{liked.length !== 1 ? 's' : ''}
+                {[
+                  `Playlist automatique · ${liked.length} titre${liked.length !== 1 ? 's' : ''}`,
+                  formatTotalDuration(sumTracksDurationSeconds(liked)),
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
               </div>
             </button>
 
@@ -410,7 +430,14 @@ export function LibraryPage() {
                     />
                   </div>
                   <div className="font-medium">{p.name}</div>
-                  <div className="text-xs text-yt-muted">{p.tracks.length} titres</div>
+                  <div className="text-xs text-yt-muted">
+                    {[
+                      `${p.tracks.length} titre${p.tracks.length !== 1 ? 's' : ''}`,
+                      formatTotalDuration(sumTracksDurationSeconds(p.tracks || [])),
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </div>
                 </Link>
                 <button
                   type="button"

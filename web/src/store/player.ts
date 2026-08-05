@@ -5,12 +5,15 @@ import {
   prefetchAround,
   resolvePrefetchedPlayUrl,
   warmFormat,
-  bumpPrefetchGeneration,
   isPrefetchBlobUrl,
   isStreamDown,
   markStreamFailure,
   markStreamOk,
+  pinFullTrack,
+  clearPinnedFull,
 } from '../lib/streamPrefetch';
+import { rewireEqualizer } from '../lib/equalizer';
+import { trackDurationSeconds, formatClock } from '../lib/time';
 import { useSession } from './session';
 import { useLibrary } from './library';
 
@@ -92,7 +95,10 @@ type PlayerState = {
   setSleepTimer: (delayMs: number | 'end' | null, label: string | null) => void;
   clearPlayError: () => void;
   audioEl: HTMLAudioElement | null;
+  /** Second <audio> : précharge le titre suivant (skip A/B). */
+  standbyEl: HTMLAudioElement | null;
   bindAudio: (el: HTMLAudioElement | null) => void;
+  bindStandbyAudio: (el: HTMLAudioElement | null) => void;
 };
 
 let sleepTimerHandle: number | null = null;
@@ -513,7 +519,6 @@ function schedulePrefetch(queue: Track[], queueIndex: number) {
   const currentId = queue[queueIndex]?.id;
   let idx = currentId ? ids.indexOf(currentId) : -1;
   if (idx < 0) idx = Math.min(Math.max(0, queueIndex), ids.length - 1);
-  // Modéré : laisse de la bande passante au titre en cours (surtout Linux / navigateur).
   const saveData =
     typeof navigator !== 'undefined' &&
     ((navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection
@@ -522,12 +527,88 @@ function schedulePrefetch(queue: Track[], queueIndex: number) {
         (navigator as Navigator & { connection?: { effectiveType?: string } }).connection?.effectiveType ||
           '',
       ));
+  const loopOne = usePlayer.getState().repeat === 'one';
+  const durationsSec = playable.map((t) => trackDurationSeconds(t));
   prefetchAround(ids, idx, {
-    ahead: saveData ? 1 : 2,
+    ahead: saveData ? 1 : 3,
     behind: 1,
-    fullAhead: saveData ? 0 : 1,
-    delayFullMs: 2000,
+    fullAhead: saveData ? 0 : 2,
+    delayFullMs: saveData ? 2500 : 150,
+    durationsSec,
+    loopOne,
   });
+  // Double-buffer : charge le suivant (ou le même en boucle one) dans le standby
+  if (loopOne) {
+    const cur = playable[idx];
+    if (cur) {
+      pinFullTrack(cur.id);
+      void armStandby(cur.id);
+    }
+  } else {
+    clearPinnedFull();
+    const nextTrack = playable[idx + 1];
+    if (nextTrack) void armStandby(nextTrack.id);
+  }
+}
+
+/** Génère un id de « bras » standby pour ignorer les armements obsolètes. */
+let standbyArmGen = 0;
+
+async function armStandby(trackId: string) {
+  if (!/^[a-zA-Z0-9_-]{11}$/.test(trackId) || isStreamDown()) return;
+  const standby = usePlayer.getState().standbyEl;
+  if (!standby) return;
+  if (standby.dataset.trackId === trackId && standby.readyState >= 2) return;
+  const my = ++standbyArmGen;
+  try {
+    void warmFormat(trackId);
+    const src = await resolveCachedUrl(trackId);
+    if (my !== standbyArmGen) return;
+    if (!src) return;
+    if (usePlayer.getState().current?.id === trackId) return; // déjà en lecture
+    standby.pause();
+    standby.src = src;
+    standby.dataset.trackId = trackId;
+    standby.preload = 'auto';
+    standby.load();
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Si le standby a déjà bufferisé ce titre → swap A/B (skip ~instantané). */
+async function swapToStandbyIfReady(
+  trackId: string,
+  targetVol: number,
+): Promise<HTMLAudioElement | null> {
+  const { audioEl, standbyEl } = usePlayer.getState();
+  if (!audioEl || !standbyEl) return null;
+  if (standbyEl.dataset.trackId !== trackId) return null;
+  // HAVE_CURRENT_DATA (2) ou mieux
+  if (standbyEl.readyState < 2) return null;
+
+  try {
+    audioEl.pause();
+  } catch {
+    /* ignore */
+  }
+  standbyEl.muted = false;
+  standbyEl.volume = targetVol;
+  standbyEl.currentTime = 0;
+
+  usePlayer.setState({ audioEl: standbyEl, standbyEl: audioEl });
+  void rewireEqualizer(standbyEl).catch(() => undefined);
+
+  // Ancien actif devient le nouveau standby (vide pour le prochain arm)
+  try {
+    audioEl.removeAttribute('src');
+    audioEl.load();
+    delete audioEl.dataset.trackId;
+  } catch {
+    /* ignore */
+  }
+
+  return standbyEl;
 }
 
 /** Un seul remplissage autoplay à la fois (évite tempête related×N au skip). */
@@ -615,8 +696,57 @@ async function ensureAutoRadio(seedId: string) {
 }
 
 async function playLocal(track: Track, state: PlayerState, gen: number) {
-  const audio = state.audioEl;
+  const t0 = performance.now();
+  let audio = state.audioEl;
   if (!audio) return;
+
+  const targetVol = Math.max(0, Math.min(1, state.volume > 0 ? state.volume : 0.9));
+
+  // Chemin rapide : standby déjà bufferisé pour ce titre
+  const swapped = await swapToStandbyIfReady(track.id, targetVol);
+  if (gen !== playGeneration) return;
+  if (swapped) {
+    audio = swapped;
+    let playPromise: Promise<void>;
+    try {
+      playPromise = audio.play();
+    } catch {
+      audio.volume = targetVol;
+      audio.muted = false;
+      return;
+    }
+    if (gen === playGeneration) {
+      usePlayer.setState({ isLoading: false, isPlaying: true, playError: null });
+    }
+    try {
+      await playPromise;
+    } catch (err) {
+      if (gen !== playGeneration) return;
+      const name = err instanceof DOMException ? err.name : '';
+      if (name === 'AbortError') return;
+      throw err;
+    }
+    if (typeof console !== 'undefined') {
+      console.info(
+        `[play] ${track.id} standby-swap ${(performance.now() - t0).toFixed(0)}ms`,
+      );
+    }
+    // Meta / thumbs en arrière-plan
+    void api.track(track.id).then((meta) => {
+      if (gen !== playGeneration || !meta?.track) return;
+      const next = { ...track, ...meta.track, title: meta.track.title || track.title };
+      usePlayer.setState((s) => ({
+        current: { ...s.current, ...next } as Track,
+        queue: s.queue.map((t, i) =>
+          i === s.queueIndex || t.id === next.id ? { ...t, ...next } : t,
+        ),
+      }));
+      refreshMediaSession();
+    }).catch(() => undefined);
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+    refreshMediaSession();
+    return;
+  }
 
   // Stream d’abord (fluide), métadonnées en parallèle
   const srcPromise = resolveCachedUrl(track.id);
@@ -646,75 +776,27 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   if (gen !== playGeneration) return;
   if (!src) throw new Error('Source audio indisponible');
 
-  const targetVol = Math.max(0, Math.min(1, state.volume > 0 ? state.volume : 0.9));
-  // Soft fade out seulement si déjà en lecture (évite un « trou » silencieux au 1er play)
-  const fadeMs = 90;
-  const startVol = audio.volume;
-  if (!audio.paused && startVol > 0.02) {
-    const t0 = performance.now();
-    await new Promise<void>((resolve) => {
-      const step = (now: number) => {
-        if (gen !== playGeneration) {
-          resolve();
-          return;
-        }
-        const p = Math.min(1, (now - t0) / fadeMs);
-        audio.volume = Math.max(0, startVol * (1 - p));
-        if (p < 1) requestAnimationFrame(step);
-        else resolve();
-      };
-      requestAnimationFrame(step);
-    });
+  // Pas de fade au skip — latence perçue
+  try {
+    audio.pause();
+  } catch {
+    /* ignore */
   }
   if (gen !== playGeneration) return;
 
   // Ne pas révoquer les blob: gérés par streamPrefetch (réutilisés au skip suivant).
   audio.src = src;
   audio.dataset.trackId = track.id;
-  // Volume cible tout de suite — plus de mute permanent si le fadeIn est annulé
   audio.muted = false;
   audio.volume = targetVol;
 
-  // Toujours attendre un event de CE chargement. Après un skip, readyState peut
-  // encore être ≥2 pour l’ancien buffer → on jouerait le mauvais titre (UI OK, son KO).
-  await new Promise<void>((resolve, reject) => {
-    const timeout = window.setTimeout(() => {
-      cleanup();
-      reject(new Error('Timeout chargement audio'));
-    }, 28_000);
-    const onReady = () => {
-      if (gen !== playGeneration || audio.dataset.trackId !== track.id) return;
-      cleanup();
-      resolve();
-    };
-    const onErr = () => {
-      if (gen !== playGeneration || audio.dataset.trackId !== track.id) return;
-      cleanup();
-      reject(
-        new Error(
-          'Stream indisponible — Admin → Cookies YouTube (anti-bot VPS), ou page Importer',
-        ),
-      );
-    };
-    const cleanup = () => {
-      window.clearTimeout(timeout);
-      audio.removeEventListener('canplay', onReady);
-      audio.removeEventListener('loadeddata', onReady);
-      audio.removeEventListener('error', onErr);
-    };
-    audio.addEventListener('canplay', onReady, { once: true });
-    audio.addEventListener('loadeddata', onReady, { once: true });
-    audio.addEventListener('error', onErr, { once: true });
-    try {
-      audio.load();
-    } catch {
-      /* ignore */
-    }
-  });
-  if (gen !== playGeneration) return;
-  if (audio.dataset.trackId !== track.id) return;
+  // play() attend assez de données — ne pas court-circuiter sur readyState (ancien buffer)
+  try {
+    audio.load();
+  } catch {
+    /* ignore */
+  }
 
-  // démarrer dès que possible
   let playPromise: Promise<void>;
   try {
     playPromise = audio.play();
@@ -723,13 +805,12 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
     audio.muted = false;
     return;
   }
-  // UI : fin du spinner dès que play() est lancé (pas après meta / fade)
+  // UI : fin du spinner dès que play() est lancé
   if (gen === playGeneration) {
     usePlayer.setState({ isLoading: false, isPlaying: true, playError: null });
   }
   void playPromise
     .then(() => {
-      // Toujours ré-appliquer le volume (certains navigateurs reset après play())
       const s = usePlayer.getState();
       if (s.audioEl === audio) {
         audio.muted = false;
@@ -743,7 +824,6 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
       }
     });
 
-  // Meta en parallèle — ne pas bloquer isLoading ni pauser si gen change pendant le fetch
   void metaPromise.then((meta) => {
     if (gen !== playGeneration) return;
     if (!meta?.track) return;
@@ -777,9 +857,7 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   } catch (err) {
     if (gen !== playGeneration) return;
     const name = err instanceof DOMException ? err.name : '';
-    // Skip / changement de titre : abort normal, pas une erreur utilisateur
     if (name === 'AbortError') return;
-    // NotSupported / autoplay : une nouvelle tentative après load()
     try {
       audio.load();
       await audio.play();
@@ -792,10 +870,141 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   }
   if (gen !== playGeneration) return;
 
-  // Prefetch agressif de la suite pendant que le titre courant joue
-  // (déjà déclenché après play() — évite un 2ᵉ full-download concurrent)
+  if (typeof console !== 'undefined') {
+    console.info(`[play] ${track.id} cold ${(performance.now() - t0).toFixed(0)}ms`);
+  }
+
+  // Enrichit la durée si absente (affiche en biblio ensuite)
+  if (
+    Number.isFinite(audio.duration) &&
+    audio.duration > 0 &&
+    !trackDurationSeconds(usePlayer.getState().current || track)
+  ) {
+    const sec = Math.floor(audio.duration);
+    usePlayer.setState((s) => {
+      if (!s.current || s.current.id !== track.id) return s;
+      const patched = {
+        ...s.current,
+        durationSeconds: sec,
+        duration: formatClock(sec),
+      };
+      return {
+        current: patched,
+        queue: s.queue.map((t) => (t.id === track.id ? { ...t, ...patched } : t)),
+        duration: sec,
+      };
+    });
+  }
+
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
   refreshMediaSession();
+}
+
+const audioRuntimeBound = new WeakSet<HTMLAudioElement>();
+
+function attachAudioRuntime(
+  el: HTMLAudioElement,
+  get: () => PlayerState,
+  set: (partial: Partial<PlayerState>) => void,
+) {
+  if (audioRuntimeBound.has(el)) return;
+  audioRuntimeBound.add(el);
+  const sync = () => refreshMediaSession();
+  el.addEventListener('play', () => {
+    if (get().audioEl !== el) return;
+    sync();
+  });
+  el.addEventListener('pause', () => {
+    if (get().audioEl !== el) return;
+    sync();
+  });
+  el.addEventListener('ended', () => {
+    if (get().audioEl !== el) return;
+    sync();
+    const s = get();
+    if (s.sleepUntilEnd) {
+      clearSleepTimerInternal();
+      el.pause();
+      set({ isPlaying: false });
+    }
+  });
+  let recovering = false;
+  el.addEventListener('error', () => {
+    void (async () => {
+      if (recovering) return;
+      if (get().audioEl !== el) return;
+      const track = get().current;
+      if (!track?.id) return;
+      if (el.dataset.trackId && el.dataset.trackId !== track.id) return;
+      if (get().playError && isStreamDown()) {
+        try {
+          el.pause();
+        } catch {
+          /* ignore */
+        }
+        set({ isPlaying: false, isLoading: false });
+        return;
+      }
+      recovering = true;
+      const gen = playGeneration;
+      try {
+        markStreamOk();
+        const fresh = await resolvePlayUrl(track.id);
+        if (gen !== playGeneration || get().current?.id !== track.id) return;
+        const bust = fresh.includes('?') ? `${fresh}&r=${Date.now()}` : `${fresh}?r=${Date.now()}`;
+        el.src = bust.startsWith('blob:') ? fresh : bust;
+        el.dataset.trackId = track.id;
+        el.load();
+        await new Promise<void>((resolve, reject) => {
+          const t = window.setTimeout(() => reject(new Error('timeout')), 20_000);
+          const ok = () => {
+            window.clearTimeout(t);
+            resolve();
+          };
+          const bad = () => {
+            window.clearTimeout(t);
+            reject(new Error('stream'));
+          };
+          el.addEventListener('canplay', ok, { once: true });
+          el.addEventListener('error', bad, { once: true });
+        });
+        if (gen !== playGeneration || get().current?.id !== track.id) return;
+        await el.play();
+        markStreamOk();
+        set({ isPlaying: true, isLoading: false, playError: null });
+        refreshMediaSession();
+      } catch {
+        markStreamFailure('audio-error');
+        if (gen === playGeneration && get().current?.id === track.id) {
+          try {
+            el.pause();
+          } catch {
+            /* ignore */
+          }
+          set({
+            isPlaying: false,
+            isLoading: false,
+            playError: 'Connexion / lecture impossible. Nouvel essai automatique…',
+          });
+          refreshMediaSession();
+          persistPlayer();
+          publish();
+          window.setTimeout(() => {
+            if (playGeneration !== gen) return;
+            if (get().current?.id !== track.id) return;
+            markStreamOk();
+            set({ playError: null, isLoading: true });
+            void usePlayer.getState().play(track, usePlayer.getState().queue, {
+              preserveQueue: true,
+              keepUserBoundary: true,
+            });
+          }, 9_000);
+        }
+      } finally {
+        recovering = false;
+      }
+    })();
+  });
 }
 
 export const usePlayer = create<PlayerState>((set, get) => ({
@@ -820,97 +1029,22 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   relatedError: null,
   hydrated: false,
   audioEl: null,
+  standbyEl: null,
   sleepLabel: null,
   sleepUntilEnd: false,
   playError: null,
 
   bindAudio: (el) => {
     set({ audioEl: el });
-    if (el) {
-      const sync = () => refreshMediaSession();
-      el.addEventListener('play', sync);
-      el.addEventListener('pause', sync);
-      el.addEventListener('ended', () => {
-        sync();
-        const s = get();
-        if (s.sleepUntilEnd) {
-          clearSleepTimerInternal();
-          el.pause();
-          set({ isPlaying: false });
-        }
-      });
-      let recovering = false;
-      el.addEventListener('error', () => {
-        void (async () => {
-          if (recovering) return;
-          const track = get().current;
-          if (!track?.id) return;
-          // Ignore si on a déjà changé de titre
-          if (el.dataset.trackId && el.dataset.trackId !== track.id) return;
-          if (isStreamDown() || get().playError) {
-            try {
-              el.pause();
-            } catch {
-              /* ignore */
-            }
-            set({ isPlaying: false, isLoading: false });
-            return;
-          }
-          recovering = true;
-          const gen = playGeneration;
-          try {
-            const fresh = await resolvePlayUrl(track.id);
-            if (gen !== playGeneration || get().current?.id !== track.id) return;
-            const bust = fresh.includes('?') ? `${fresh}&r=${Date.now()}` : `${fresh}?r=${Date.now()}`;
-            el.src = bust.startsWith('blob:') ? fresh : bust;
-            el.dataset.trackId = track.id;
-            el.load();
-            await new Promise<void>((resolve, reject) => {
-              const t = window.setTimeout(() => reject(new Error('timeout')), 20_000);
-              const ok = () => {
-                window.clearTimeout(t);
-                resolve();
-              };
-              const bad = () => {
-                window.clearTimeout(t);
-                reject(new Error('stream'));
-              };
-              el.addEventListener('canplay', ok, { once: true });
-              el.addEventListener('error', bad, { once: true });
-            });
-            if (gen !== playGeneration || get().current?.id !== track.id) return;
-            await el.play();
-            markStreamOk();
-            set({ isPlaying: true, isLoading: false, playError: null });
-            refreshMediaSession();
-          } catch {
-            // Ne PAS enchaîner next() : sinon skip infini quand le serveur est injoignable
-            markStreamFailure('audio-error');
-            if (gen === playGeneration && get().current?.id === track.id) {
-              try {
-                el.pause();
-              } catch {
-                /* ignore */
-              }
-              set({
-                isPlaying: false,
-                isLoading: false,
-                playError:
-                  'Connexion / lecture impossible. Vérifie le serveur, ou Admin → cookies YouTube.',
-              });
-              refreshMediaSession();
-              persistPlayer();
-              publish();
-            }
-          } finally {
-            recovering = false;
-          }
-        })();
-      });
-    }
+    if (el) attachAudioRuntime(el, get, set);
     if (el && get().hydrated && get().current) {
       void restoreAudioFromPersisted();
     }
+  },
+
+  bindStandbyAudio: (el) => {
+    set({ standbyEl: el });
+    if (el) attachAudioRuntime(el, get, set);
   },
 
   setSleepTimer: (delayMs, label) => {
@@ -1011,8 +1145,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     });
 
     const gen = ++playGeneration;
-    bumpPrefetchGeneration();
-    // Stoppe tout de suite l’ancien titre (sinon next change l’UI mais le son reste)
+    // Ne PAS bumpPrefetchGeneration ici : ça tuait le warm/full du titre suivant
+    // juste avant de le jouer (skip lent). schedulePrefetch gère le bump après play.
     {
       const audio = get().audioEl;
       if (audio) {
@@ -1021,6 +1155,15 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         } catch {
           /* ignore */
         }
+      }
+    }
+
+    // Précharge le suivant pendant que le titre courant démarre
+    {
+      const n = nextQueue[(idx >= 0 ? idx : 0) + 1];
+      if (n) {
+        void warmFormat(n.id);
+        void armStandby(n.id);
       }
     }
 
@@ -1036,29 +1179,47 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       }
     }, 1_400);
 
-    try {
-      await playLocal(playTrack, get(), gen);
-      if (gen !== playGeneration) return;
-      markStreamOk();
-      recordStarted(get().current || playTrack);
-      set({ isPlaying: true, isLoading: false, playError: null });
-      publish();
-      // Prefetch léger une fois le titre lancé (pas pendant le démarrage)
-      schedulePrefetch(get().queue, get().queueIndex);
-    } catch (err) {
-      console.error(err);
-      markStreamFailure(err instanceof Error ? err.message : 'play');
-      const msg =
-        err instanceof Error
-          ? err.message
-          : typeof err === 'string'
-            ? err
-            : 'Lecture impossible';
-      set({ isLoading: false, isPlaying: false, playError: msg });
-      publish();
-    }
-  },
+    const attemptPlay = async (attempt: number): Promise<void> => {
+      try {
+        await playLocal(playTrack, get(), gen);
+        if (gen !== playGeneration) return;
+        markStreamOk();
+        recordStarted(get().current || playTrack);
+        set({ isPlaying: true, isLoading: false, playError: null });
+        publish();
+        schedulePrefetch(get().queue, get().queueIndex);
+      } catch (err) {
+        if (gen !== playGeneration) return;
+        console.error(err);
+        markStreamFailure(err instanceof Error ? err.message : 'play');
+        const msg =
+          err instanceof Error
+            ? err.message
+            : typeof err === 'string'
+              ? err
+              : 'Lecture impossible';
+        // 2 retries espacés (2s, 5s) — reteste si le stream revient
+        if (attempt < 2) {
+          set({
+            isLoading: true,
+            isPlaying: false,
+            playError: `${msg} — nouvel essai…`,
+          });
+          publish();
+          const delay = attempt === 0 ? 2_000 : 5_000;
+          await new Promise((r) => window.setTimeout(r, delay));
+          if (gen !== playGeneration) return;
+          if (get().current?.id !== playTrack.id) return;
+          markStreamOk();
+          return attemptPlay(attempt + 1);
+        }
+        set({ isLoading: false, isPlaying: false, playError: msg });
+        publish();
+      }
+    };
 
+    await attemptPlay(0);
+  },
   playAt: async (index) => {
     const { queue } = get();
     const track = queue[index];
@@ -1152,9 +1313,23 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       return;
     }
     reportSkipIfEarly(progress);
-    // Boucle 1 titre : seulement à la fin naturelle du morceau.
-    // Next manuel (bouton / clavier) → passe au suivant et boucle sur celui-là.
+    // Boucle 1 titre : à la fin → seek 0 sans recharger (déjà en mémoire)
     if (repeat === 'one' && opts?.fromEnded) {
+      const audio = get().audioEl;
+      if (audio && current?.id && audio.dataset.trackId === current.id) {
+        try {
+          audio.currentTime = 0;
+          await audio.play();
+          set({ isPlaying: true, progress: 0, playError: null });
+          refreshMediaSession();
+          persistPlayer();
+          publish();
+          schedulePrefetch(queue, queueIndex);
+          return;
+        } catch {
+          /* fallback playAt */
+        }
+      }
       await get().playAt(queueIndex);
       return;
     }
@@ -1313,6 +1488,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     }));
     if (!isActivePlayer()) sendCmd({ action: 'repeat', value: get().repeat });
     else publish();
+    schedulePrefetch(get().queue, get().queueIndex);
   },
 
   toggleQueue: () => set((s) => ({ showQueue: !s.showQueue, showLyrics: false })),

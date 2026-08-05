@@ -5,6 +5,7 @@ import { usePlayer } from '../store/player';
 import { Play } from 'lucide-react';
 import { CoverImage } from '../components/CoverImage';
 import { BackButton } from '../components/BackButton';
+import { formatTotalDuration, sumTracksDurationSeconds } from '../lib/time';
 
 export function LocalPlaylistPage() {
   const { id = '' } = useParams();
@@ -21,6 +22,8 @@ export function LocalPlaylistPage() {
     );
   }
 
+  const totalDur = formatTotalDuration(sumTracksDurationSeconds(pl.tracks));
+
   return (
     <div className="animate-fade-up">
       <BackButton fallback="/library" />
@@ -35,7 +38,14 @@ export function LocalPlaylistPage() {
         <div>
           <p className="text-xs uppercase tracking-widest text-yt-muted">Playlist locale</p>
           <h1 className="font-display text-4xl font-semibold">{pl.name}</h1>
-          <p className="mt-2 text-sm text-yt-muted">{pl.tracks.length} titres</p>
+          <p className="mt-2 text-sm text-yt-muted">
+            {[
+              `${pl.tracks.length} titre${pl.tracks.length !== 1 ? 's' : ''}`,
+              totalDur,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </p>
           {pl.tracks[0] && (
             <button
               type="button"
