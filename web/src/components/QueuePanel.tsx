@@ -30,6 +30,7 @@ export function QueuePanel() {
   const appendRelated = usePlayer((s) => s.appendRelated);
   const loadRelated = usePlayer((s) => s.loadRelated);
   const relatedLoading = usePlayer((s) => s.relatedLoading);
+  const autoRadioLoading = usePlayer((s) => s.autoRadioLoading);
   const relatedError = usePlayer((s) => s.relatedError);
   const play = usePlayer((s) => s.play);
   const [saveOpen, setSaveOpen] = useState(false);
@@ -311,6 +312,23 @@ export function QueuePanel() {
                     />
                   );
                 })}
+              {autoplay && autoTracks.length === 0 && autoRadioLoading && (
+                <p className="px-2 py-3 text-center text-xs text-yt-muted">
+                  Chargement des suggestions…
+                </p>
+              )}
+              {autoplay && autoTracks.length === 0 && !autoRadioLoading && related.length === 0 && (
+                <div className="px-2 py-3 text-center">
+                  <p className="text-xs text-yt-muted">Aucune suggestion pour l’instant.</p>
+                  <button
+                    type="button"
+                    className="mt-2 text-xs text-yt-red hover:underline"
+                    onClick={() => topUpAutoplay()}
+                  >
+                    Réessayer
+                  </button>
+                </div>
+              )}
               {autoplay && autoTracks.length === 0 && related.length > 0 && (
                 <div className="mt-2">
                   <p className="mb-1 px-2 text-[11px] text-yt-muted">Propositions</p>

@@ -960,12 +960,19 @@ async function fetchTrackMeta(videoId: string, light = false) {
   return light ? { track } : { track, info };
 }
 
-export async function getUpNext(videoId: string): Promise<Track[]> {
+export async function getUpNext(
+  videoId: string,
+  opts?: { hydrateLimit?: number },
+): Promise<Track[]> {
   const innertube = await getYT();
   const panel = await innertube.music.getUpNext(videoId, true);
   const contents = (panel as any).contents || [];
   const mapped = contents.map((c: any) => mapListItem(c) || mapAny(c)).filter(Boolean) as Track[];
-  return hydrateTracks(mapped, { limit: 40, concurrency: 5 });
+  // hydrateLimit bas = skip plus rapide (titres faibles OK pour la file, hydratés plus tard)
+  return hydrateTracks(mapped, {
+    limit: opts?.hydrateLimit ?? 40,
+    concurrency: Math.min(5, Math.max(2, opts?.hydrateLimit ?? 40)),
+  });
 }
 
 export async function getRelated(videoId: string): Promise<{

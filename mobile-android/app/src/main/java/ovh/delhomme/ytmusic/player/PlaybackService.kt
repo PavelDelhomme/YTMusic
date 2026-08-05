@@ -414,6 +414,8 @@ class PlaybackService : MediaSessionService() {
         @Volatile var queueTitle: String = "File d'attente"
         @Volatile var likedIds: Set<String> = emptySet()
         @Volatile var onLikedIdsChanged: ((Set<String>) -> Unit)? = null
+        /** Skip à la fin de file (1 titre) → fill autoplay côté UI. */
+        @Volatile var onSkipAtEnd: (() -> Unit)? = null
 
         fun resolvedApiBase(): String {
             val override = service
@@ -478,13 +480,23 @@ private class YtmForwardingPlayer(
         // Chauffe le titre cible + le suivant avant / pendant le seek (notif + UI)
         warmAroundIndex(nextIdx)
         when {
-            exo.hasNextMediaItem() -> exo.seekToNextMediaItem()
-            exo.repeatMode == Player.REPEAT_MODE_ALL && exo.mediaItemCount > 0 ->
+            exo.hasNextMediaItem() -> {
+                exo.seekToNextMediaItem()
+                exo.play()
+            }
+            exo.repeatMode == Player.REPEAT_MODE_ALL && exo.mediaItemCount > 0 -> {
                 exo.seekTo(/* mediaItemIndex */ 0, /* positionMs */ 0L)
-            exo.mediaItemCount > 1 -> exo.seekTo(nextIdx, 0L)
-            else -> exo.seekTo(0L)
+                exo.play()
+            }
+            exo.mediaItemCount > 1 -> {
+                exo.seekTo(nextIdx, 0L)
+                exo.play()
+            }
+            else -> {
+                // Ne pas relancer le même titre — déléguer au fill autoplay
+                PlaybackService.Holder.onSkipAtEnd?.invoke()
+            }
         }
-        exo.play()
         if (wasOne) exo.repeatMode = Player.REPEAT_MODE_ONE
     }
 

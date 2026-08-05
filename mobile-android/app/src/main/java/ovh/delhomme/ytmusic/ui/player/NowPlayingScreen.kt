@@ -113,6 +113,8 @@ import ovh.delhomme.ytmusic.data.RecoFeedbackBody
 import ovh.delhomme.ytmusic.data.TimedLyricLine
 import ovh.delhomme.ytmusic.data.TrackDto
 import ovh.delhomme.ytmusic.data.buildRadioQueue
+import ovh.delhomme.ytmusic.data.fetchAutoplayTracksFast
+import ovh.delhomme.ytmusic.data.fetchAutoplayTracksFull
 import ovh.delhomme.ytmusic.debug.AppLog
 import ovh.delhomme.ytmusic.player.PlayerController
 import ovh.delhomme.ytmusic.player.PlayerUiState
@@ -165,38 +167,16 @@ fun NowPlayingScreen(
     val queueOpen = queueProgress.value > 0.55f
     val queueInteractive = queueProgress.value > 0.02f
 
-    // Remplit la zone « À suivre » — fast d’abord, puis enrichissement
-    LaunchedEffect(ui.track?.id, ui.autoplaySuggestions) {
+    // Remplit la zone « À suivre » — fast puis full ; seuil = titres restants
+    LaunchedEffect(ui.track?.id, ui.autoplaySuggestions, ui.queueIndex, ui.queue.size) {
         if (!ui.autoplaySuggestions) return@LaunchedEffect
         val seed = ui.track?.id ?: return@LaunchedEffect
-        val boundary = ui.userQueueEnd.coerceIn(0, ui.queue.size)
-        val autoLen = (ui.queue.size - boundary).coerceAtLeast(0)
-        if (autoLen >= 12) return@LaunchedEffect
-        // 1) upNext YT (le plus rapide) puis related?fast=1
-        val up = runCatching { container.api.upNext(seed) }.getOrNull()
-        val upPool = up?.tracks.orEmpty()
-            .filter { it.isPlayable() && it.id != seed }
-            .distinctBy { it.id }
-        if (upPool.isNotEmpty() && ui.track?.id == seed) player.appendAutoTracks(upPool)
-        val fast = runCatching { container.api.related(seed, fast = 1) }.getOrNull()
-        val fastPool = (
-            fast?.tracks.orEmpty() +
-                fast?.related.orEmpty() +
-                fast?.radio.orEmpty()
-            )
-            .filter { it.isPlayable() && it.id != seed }
-            .distinctBy { it.id }
-        if (fastPool.isNotEmpty() && ui.track?.id == seed) player.appendAutoTracks(fastPool)
-        // 2) Complet en arrière-plan
-        val related = runCatching { container.api.related(seed) }.getOrNull()
-        val pool = (
-            related?.tracks.orEmpty() +
-                related?.related.orEmpty() +
-                related?.radio.orEmpty()
-            )
-            .filter { it.isPlayable() && it.id != seed }
-            .distinctBy { it.id }
-        if (pool.isNotEmpty() && ui.track?.id == seed) player.appendAutoTracks(pool)
+        val remaining = (ui.queue.size - ui.queueIndex - 1).coerceAtLeast(0)
+        if (remaining >= 8) return@LaunchedEffect
+        val fast = fetchAutoplayTracksFast(container.api, seed)
+        if (fast.isNotEmpty() && ui.track?.id == seed) player.appendAutoTracks(fast)
+        val full = fetchAutoplayTracksFull(container.api, seed)
+        if (full.isNotEmpty() && ui.track?.id == seed) player.appendAutoTracks(full)
     }
 
     fun settleOrClose() {
