@@ -445,7 +445,10 @@ interface YtMusicApi {
     suspend fun track(@Path("id") id: String): TrackInfoResponse
 
     @GET("api/track/{id}/related")
-    suspend fun related(@Path("id") id: String): RelatedResponse
+    suspend fun related(
+        @Path("id") id: String,
+        @Query("fast") fast: Int? = null,
+    ): RelatedResponse
 
     @GET("api/track/{id}/upnext")
     suspend fun upNext(@Path("id") id: String): TracksResponse

@@ -230,7 +230,17 @@ fun ArtistDetailScreen(
                                             if (mix.isEmpty()) {
                                                 Toast.makeText(context, "Radio indisponible", Toast.LENGTH_SHORT).show()
                                             } else {
-                                                onPlayNamed(mix, 0, "Radio")
+                                                val added = (mix.size - 1).coerceAtLeast(0)
+                                                onPlayNamed(mix, 0, "Radio · $name")
+                                                Toast.makeText(
+                                                    context,
+                                                    if (added > 0) {
+                                                        "$added titre${if (added > 1) "s" else ""} en lien avec $name"
+                                                    } else {
+                                                        "Radio artiste démarrée"
+                                                    },
+                                                    Toast.LENGTH_LONG,
+                                                ).show()
                                             }
                                         }
                                     },

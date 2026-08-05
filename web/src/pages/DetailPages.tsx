@@ -71,6 +71,7 @@ export function ArtistPage() {
   const { hasArtist, applyLibrary, liked, albums } = useLibrary();
   const [busy, setBusy] = useState(false);
   const [radioBusy, setRadioBusy] = useState(false);
+  const [radioToast, setRadioToast] = useState<string | null>(null);
   const [following, setFollowing] = useState(false);
   const [followBusy, setFollowBusy] = useState(false);
   const [showBio, setShowBio] = useState(false);
@@ -198,7 +199,17 @@ export function ArtistPage() {
                   kind: 'artist',
                   id: data.artist.id,
                   seed: data.songs[0],
-                }).finally(() => setRadioBusy(false));
+                })
+                  .then((r) => {
+                    const n = r?.added ?? 0;
+                    setRadioToast(
+                      n > 0
+                        ? `${n} titre${n > 1 ? 's' : ''} en lien avec ${data.artist.name} — file mise à jour`
+                        : 'Radio artiste démarrée',
+                    );
+                    window.setTimeout(() => setRadioToast(null), 3200);
+                  })
+                  .finally(() => setRadioBusy(false));
               }}
               className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-4 py-2.5 text-sm text-yt-muted hover:text-white disabled:opacity-60"
               title="Radio artiste — titres similaires liés à cet artiste"
@@ -270,6 +281,14 @@ export function ArtistPage() {
               <Download className="h-4 w-4" /> Offline
             </button>
           </div>
+          {radioToast && (
+            <p
+              className="mt-3 rounded-lg bg-white/10 px-3 py-2 text-sm text-white"
+              role="status"
+            >
+              {radioToast}
+            </p>
+          )}
         </div>
       </div>
 
@@ -710,7 +729,21 @@ export function AlbumPage() {
               kind: 'album',
               id: data.album.id,
               seed: data.tracks.find((t) => t.id?.length === 11) || data.tracks[0],
-            }).finally(() => setRadioBusy(false));
+            })
+              .then((r) => {
+                const n = r?.added ?? 0;
+                // feedback léger via title change on button area — album uses hero
+                if (n > 0) {
+                  const el = document.createElement('div');
+                  el.className =
+                    'fixed bottom-24 left-1/2 z-[80] -translate-x-1/2 rounded-full bg-white/15 px-4 py-2 text-sm text-white shadow-lg backdrop-blur';
+                  el.setAttribute('role', 'status');
+                  el.textContent = `${n} titre${n > 1 ? 's' : ''} similaires ajoutés à la file`;
+                  document.body.appendChild(el);
+                  window.setTimeout(() => el.remove(), 3200);
+                }
+              })
+              .finally(() => setRadioBusy(false));
           }}
         >
           <Radio className="h-7 w-7 text-yt-red" />

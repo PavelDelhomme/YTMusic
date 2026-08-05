@@ -1,5 +1,5 @@
 import type { Track } from './types.js';
-import { getRelated, getTrack, search, getAlbum, getArtist, hydrateTracks } from './yt.js';
+import { getRelated, getTrack, getUpNext, search, getAlbum, getArtist, hydrateTracks } from './yt.js';
 import {
   getPrefs,
   getWeights,
@@ -448,6 +448,35 @@ export async function similarForUser(userId: string, trackId: string, seedTrack?
     mode: 'style',
   });
   return { tracks: ranked, related, radio };
+}
+
+/**
+ * Suite « À suivre » rapide : upNext YT seulement (+ biblio légère), sans getRelated/search/rank.
+ * Pour pouvoir skip dès le play (le full similarForUser enrichit ensuite).
+ */
+export async function similarForUserFast(userId: string, trackId: string, seedTrack?: Track) {
+  let seed =
+    seedTrack ||
+    ({ id: trackId, title: '', artists: [], thumbnails: [], type: 'song' } as Track);
+  if (!seed.title) {
+    try {
+      const meta = await getTrack(trackId, { light: true });
+      if (meta?.track?.title) seed = meta.track;
+    } catch {
+      /* ignore */
+    }
+  }
+  const up = await getUpNext(trackId);
+  let pool = up.filter((t) => t.id !== trackId);
+  try {
+    const taste = getLibraryTasteTracks(userId, 40);
+    const fromLibrary = pickLibraryNearSeed(seed, taste, 8);
+    if (fromLibrary.length) pool = [...pool, ...fromLibrary];
+  } catch {
+    /* ignore */
+  }
+  const tracks = dedupeTracks(pool).slice(0, 40);
+  return { tracks, related: [] as Track[], radio: tracks };
 }
 
 function dedupeTracks(tracks: Track[]): Track[] {
