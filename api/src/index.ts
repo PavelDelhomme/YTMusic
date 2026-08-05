@@ -830,6 +830,16 @@ function apkDownloadAuthorized(req: import('express').Request) {
   return q === secret || header === secret;
 }
 
+/** Relais VPS→maison : autorise le stream sans JWT (API locale privée + header). */
+function isHomeStreamRelay(req: Request): boolean {
+  if (String(req.headers['x-ytm-stream-relay'] || '') !== '1') return false;
+  const env = process.env.APP_ENV || 'local';
+  if (env === 'local' || env === 'development') return true;
+  const secret = (process.env.STREAM_RELAY_TOKEN || '').trim();
+  if (secret && String(req.headers['x-ytm-stream-relay-token'] || '') === secret) return true;
+  return false;
+}
+
 /** Téléchargement APK (QR). Optionnel : APK_DOWNLOAD_TOKEN → ?key=… */
 app.get('/api/deploy/apk', (req, res) => {
   if (!apkDownloadAuthorized(req)) {
@@ -1387,16 +1397,28 @@ app.get('/api/playlist/:id', accountRequired, async (req, res) => {
   }
 });
 
-app.get('/api/stream/:id/url', authRequired, (req, res) => {
-  void handleStreamUrl(req, res);
+app.get('/api/stream/:id/url', (req, res, next) => {
+  if (isHomeStreamRelay(req)) {
+    void handleStreamUrl(req, res);
+    return;
+  }
+  authRequired(req, res, () => {
+    void handleStreamUrl(req, res);
+  });
 });
 
 app.post('/api/stream/warm', accountRequired, (req, res) => {
   void handleStreamWarm(req, res);
 });
 
-app.get('/api/stream/:id', authRequired, (req, res) => {
-  void handleStream(req, res);
+app.get('/api/stream/:id', (req, res, next) => {
+  if (isHomeStreamRelay(req)) {
+    void handleStream(req, res);
+    return;
+  }
+  authRequired(req, res, () => {
+    void handleStream(req, res);
+  });
 });
 
 app.post('/api/download/:id', accountRequired, async (req, res) => {
