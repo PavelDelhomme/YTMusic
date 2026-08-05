@@ -414,7 +414,12 @@ class PlayerController(
 
     fun playAt(index: Int) {
         val p = player() ?: return
-        if (index !in PlaybackService.Holder.queue.indices) return
+        val queue = PlaybackService.Holder.queue
+        if (index !in queue.indices) return
+        // Titre auto (« À suivre ») → passe dans la file utilisateur
+        if (index >= userQueueEnd) {
+            userQueueEnd = (index + 1).coerceAtMost(queue.size)
+        }
         p.seekTo(index, 0L)
         p.play()
         syncFrom(p)
