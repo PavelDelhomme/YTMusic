@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import ovh.delhomme.ytmusic.data.TrackDto
+import ovh.delhomme.ytmusic.YtMusicApp
 
 enum class RepeatMode { Off, All, One }
 
@@ -614,6 +615,8 @@ class PlayerController(
             StreamPrefetcher.warmCurrentBlocking(base, currentId, timeoutMs = 450L)
         }
         warmAround(window, idx) // format + CacheWriter suite (async)
+        ensureAudibleMediaVolume(YtMusicApp.instance)
+        player.volume = 1f
         player.setMediaItems(
             window.map { mediaItem(it) },
             idx,
