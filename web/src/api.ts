@@ -186,7 +186,10 @@ export function thumb(track: Track | { thumbnails?: Track['thumbnails']; id?: st
 }
 
 export function artistNames(track: Track) {
-  return track.artists?.map((a) => a.name).filter(Boolean).join(', ') || 'Artiste';
+  const names = track.artists
+    ?.map((a) => a.name)
+    .filter((n) => n && !/^(artiste|artist|inconnu|unknown|n\/a)$/i.test(n.trim()));
+  return names?.length ? names.join(', ') : 'Artiste';
 }
 
 async function req<T>(url: string, init?: RequestInit, retried = false): Promise<T> {

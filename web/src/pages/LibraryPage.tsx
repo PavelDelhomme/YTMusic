@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useLibrary } from '../store/library';
 import { TrackRow } from '../components/TrackRow';
 import { Heart, Play, Plus, Shuffle, Trash2 } from 'lucide-react';
@@ -11,6 +11,7 @@ import { useItemActions } from '../store/itemActions';
 import { HomeShelfSkeleton } from '../components/HomeShelfSkeleton';
 import { api, type Track } from '../api';
 import { formatTotalDuration, sumTracksDurationSeconds } from '../lib/time';
+import { warmFormats } from '../lib/streamPrefetch';
 
 function shuffleTracks(tracks: Track[]) {
   const copy = [...tracks];
@@ -38,6 +39,7 @@ function LibraryListSkeleton({ rows = 8 }: { rows?: number }) {
 }
 
 export function LibraryPage() {
+  const navigate = useNavigate();
   const { songs, liked, playlists, history, recentEntities, albums, artists, mixes, likedPlaylists, createPlaylist, deletePlaylist, hasMix, loaded, error, refresh } =
     useLibrary();
   const playQueue = usePlayer((s) => s.playQueue);
@@ -255,6 +257,7 @@ export function LibraryPage() {
                   return (
                   <MixCollageCard
                     key={m.id}
+                    id={m.id}
                     title={m.title}
                     tracks={(m.covers || m.tracks || []) as Track[]}
                     subtitle={
@@ -269,14 +272,20 @@ export function LibraryPage() {
                         .join(' · ')
                     }
                     saved={hasMix(m.id)}
-                    onClick={() => {
+                    onOpen={() => navigate(`/mix/${encodeURIComponent(m.id)}`)}
+                    onPlay={() => {
                       const tracks = (m.tracks || m.covers || []).filter((t: Track) =>
                         /^[a-zA-Z0-9_-]{11}$/.test(t.id),
                       );
-                      if (tracks.length) void playQueue(tracks, 0);
-                      else {
+                      if (tracks.length) {
+                        void playQueue(tracks, 0, { sourceId: m.id, sourceKind: 'mix' });
+                        void warmFormats(tracks.slice(0, 3).map((t: Track) => t.id));
+                      } else {
                         void api.recoRadio(m.id).then((r) => {
-                          if (r.tracks?.length) void playQueue(r.tracks, 0);
+                          if (r.tracks?.length) {
+                            void playQueue(r.tracks, 0, { sourceId: m.id, sourceKind: 'mix' });
+                            void warmFormats(r.tracks.slice(0, 3).map((t) => t.id));
+                          }
                         });
                       }
                     }}

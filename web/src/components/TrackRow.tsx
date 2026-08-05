@@ -8,6 +8,7 @@ import { ArtistLinks } from './ArtistLinks';
 import { CoverImage } from './CoverImage';
 import { formatTrackDuration } from '../lib/time';
 import { useItemActions } from '../store/itemActions';
+import { PlayingCoverOverlay } from './PlayingBars';
 
 type Props = {
   track: Track;
@@ -127,9 +128,12 @@ export function TrackRow({
         className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-yt-elevated sm:h-12 sm:w-12"
       >
         <CoverImage item={enriched} size={96} rounded="md" />
-        <span className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition group-hover:opacity-100">
-          <Play className="h-5 w-5 fill-white text-white" />
-        </span>
+        <PlayingCoverOverlay active={active} playing={Boolean(active && isPlaying)} size="sm" />
+        {!active && (
+          <span className="absolute inset-0 z-[2] flex items-center justify-center bg-black/50 opacity-0 transition group-hover:opacity-100">
+            <Play className="h-5 w-5 fill-white text-white" />
+          </span>
+        )}
       </button>
 
       <div className="min-w-0 flex-1 text-left">
@@ -141,9 +145,6 @@ export function TrackRow({
             title={track.title}
           >
             {track.title}
-            {active && isPlaying ? (
-              <span className="ml-1 text-xs font-normal text-yt-muted">· en lecture</span>
-            ) : null}
           </div>
         </button>
         <div className="truncate text-xs text-yt-muted">
