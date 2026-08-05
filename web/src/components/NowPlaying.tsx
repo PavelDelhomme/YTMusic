@@ -123,7 +123,7 @@ export function SyncedLyrics({
             }}
             className={`origin-left cursor-pointer transition-all duration-300 hover:text-white ${
               active
-                ? 'scale-100 py-1 text-3xl font-bold leading-tight text-white sm:text-4xl'
+                ? 'scale-[1.02] py-1.5 text-3xl font-extrabold leading-tight text-white underline decoration-yt-red decoration-2 underline-offset-4 sm:text-4xl'
                 : past
                   ? 'text-base leading-7 text-white/25 sm:text-lg'
                   : 'text-lg leading-8 text-[#9a9a9a] sm:text-xl sm:leading-9'
