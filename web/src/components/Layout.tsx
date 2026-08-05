@@ -218,15 +218,14 @@ export function Layout() {
   useEffect(() => {
     bindAudio(audioRef.current);
     bindStandbyAudio(standbyRef.current);
-    if (audioRef.current) {
-      void wireEqualizer(audioRef.current);
-    }
+    // Mémorise l’élément pour l’EQ — ne crée PAS l’AudioContext ici (warning Chrome)
+    if (audioRef.current) void wireEqualizer(audioRef.current);
   }, [bindAudio, bindStandbyAudio]);
 
   // Play/pause, suivant, précédent : clavier + touches média OS, toutes pages
   useEffect(() => installMediaKeys(), []);
 
-  // Reprend AudioContext EQ après geste utilisateur (autoplay policy)
+  // Reprend AudioContext EQ seulement s’il est déjà activé
   useEffect(() => {
     const resume = () => void resumeEqContext();
     window.addEventListener('pointerdown', resume, { passive: true });
@@ -710,7 +709,6 @@ export function Layout() {
         ref={audioRef}
         preload="auto"
         playsInline
-        crossOrigin="anonymous"
         onPlay={(e) => {
           if (e.currentTarget !== usePlayer.getState().audioEl) return;
           usePlayer.setState({ isPlaying: true });
@@ -751,12 +749,11 @@ export function Layout() {
           setDuration(e.currentTarget.duration || 0);
         }}
       />
-      {/* Standby : précharge le titre suivant pour un skip quasi instantané */}
+      {/* Standby : préchauffe format / blob uniquement (pas de double-stream) */}
       <audio
         ref={standbyRef}
-        preload="auto"
+        preload="none"
         playsInline
-        crossOrigin="anonymous"
         onPlay={(e) => {
           if (e.currentTarget !== usePlayer.getState().audioEl) return;
           usePlayer.setState({ isPlaying: true });
