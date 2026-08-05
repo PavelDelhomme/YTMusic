@@ -746,7 +746,22 @@ export function Layout() {
         }}
         onLoadedMetadata={(e) => {
           if (e.currentTarget !== usePlayer.getState().audioEl) return;
-          setDuration(e.currentTarget.duration || 0);
+          const sec = e.currentTarget.duration || 0;
+          setDuration(sec);
+          const id = e.currentTarget.dataset.trackId;
+          if (!(sec > 0) || !id) return;
+          const clock = `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+          usePlayer.setState((s) => ({
+            current:
+              s.current?.id === id && !s.current.durationSeconds
+                ? { ...s.current, durationSeconds: Math.floor(sec), duration: s.current.duration || clock }
+                : s.current,
+            queue: s.queue.map((t) =>
+              t.id === id && !t.durationSeconds
+                ? { ...t, durationSeconds: Math.floor(sec), duration: t.duration || clock }
+                : t,
+            ),
+          }));
         }}
       />
       {/* Standby : préchauffe format / blob uniquement (pas de double-stream) */}

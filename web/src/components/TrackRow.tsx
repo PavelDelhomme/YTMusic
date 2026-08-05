@@ -190,18 +190,19 @@ export function TrackRow({
           <button
             type="button"
             title="Lancer un mix à partir de ce titre"
+            aria-label="Lancer un mix à partir de ce titre"
             onClick={(e) => {
               e.stopPropagation();
               void startRadio({ kind: 'track', id: track.id, seed: track });
             }}
-            className={`flex h-8 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium text-yt-muted transition hover:bg-white/10 hover:text-white sm:h-9 ${
+            className={`flex h-9 w-9 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white sm:h-10 sm:w-10 ${
               showActions ? 'hidden opacity-100 sm:inline-flex' : 'opacity-0 group-hover:inline-flex'
             }`}
           >
-            <Radio className="h-3.5 w-3.5 text-yt-red" />
-            Mix
+            <Radio className="h-4 w-4 text-yt-red sm:h-5 sm:w-5" />
           </button>
-        )}        <button
+        )}
+        <button
           type="button"
           aria-label="Plus d'options"
           onClick={openMenu}

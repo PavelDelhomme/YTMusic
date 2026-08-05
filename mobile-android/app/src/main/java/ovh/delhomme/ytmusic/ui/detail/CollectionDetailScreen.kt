@@ -29,7 +29,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.QueueMusic
-import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.outlined.PushPin
@@ -77,6 +76,7 @@ import ovh.delhomme.ytmusic.data.resolvePlayableTracks
 import ovh.delhomme.ytmusic.player.PlayerController
 import ovh.delhomme.ytmusic.ui.components.MediaCover
 import ovh.delhomme.ytmusic.ui.components.TrackRow
+import ovh.delhomme.ytmusic.ui.icons.MixIcon
 
 enum class DetailKind { Album, Artist, Playlist }
 
@@ -634,11 +634,12 @@ private fun AlbumHeroHeader(
                 }
             }
             RoundIconAction(
-                icon = Icons.Default.Radio,
-                label = "Mix",
+                icon = MixIcon,
+                label = "",
                 hint = "Lancer un mix radio à partir de cet album",
                 onClick = onRadio,
                 enabled = !radioBusy,
+                tint = Color(0xFFFF0033),
             )
             RoundIconAction(
                 icon = Icons.Default.MoreVert,
@@ -680,18 +681,22 @@ private fun RoundIconAction(
                     icon,
                     contentDescription = hint,
                     tint = if (enabled) tint else tint.copy(alpha = 0.4f),
-                    modifier = Modifier.size(26.dp),
+                    modifier = Modifier.size(if (label.isEmpty()) 28.dp else 26.dp),
                 )
             }
-            Text(
-                label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(
-                    alpha = if (enabled) 0.85f else 0.4f,
-                ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (label.isNotEmpty()) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                        alpha = if (enabled) 0.85f else 0.4f,
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            } else {
+                Spacer(Modifier.height(16.dp))
+            }
         }
     }
 }
