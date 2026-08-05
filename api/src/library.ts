@@ -174,6 +174,21 @@ export function toggleLibraryTrack(userId: string, track: Track) {
   return { saved: true };
 }
 
+/** Ajoute un titre en biblio sans toggle (idempotent). */
+export function ensureLibraryTrack(userId: string, track: Track): boolean {
+  if (!track?.id) return false;
+  // Uniquement les vrais IDs vidéo/song YouTube
+  if (!/^[a-zA-Z0-9_-]{11}$/.test(track.id)) return false;
+  upsertTrack(sanitizeTrack(track));
+  if (isTrackInLibrary(userId, track.id)) return false;
+  db.prepare('INSERT INTO library_tracks (user_id, track_id, created_at) VALUES (?, ?, ?)').run(
+    userId,
+    track.id,
+    Date.now(),
+  );
+  return true;
+}
+
 export function isTrackInLibrary(userId: string, trackId: string) {
   return Boolean(
     db
@@ -205,11 +220,81 @@ export function toggleLikePlaylist(userId: string, playlist: Record<string, unkn
 export function saveAlbum(userId: string, album: Record<string, unknown>) {
   const id = String(album.id || '');
   if (!id) throw new Error('album id manquant');
+  const cleaned = sanitizeLibraryItem(album);
   db.prepare(
     `INSERT INTO library_albums (user_id, album_id, payload, created_at) VALUES (?, ?, ?, ?)
      ON CONFLICT(user_id, album_id) DO UPDATE SET payload = excluded.payload`,
-  ).run(userId, id, JSON.stringify(album), Date.now());
-  return album;
+  ).run(userId, id, JSON.stringify(cleaned), Date.now());
+  return cleaned;
+}
+
+/**
+ * Enregistre l’album ET tous ses titres dans « Titres » (library_tracks),
+ * sans toucher aux J’aime.
+ */
+export async function saveAlbumWithTracks(
+  userId: string,
+  album: Record<string, unknown>,
+): Promise<{ album: Record<string, unknown>; tracksAdded: number; tracksTotal: number }> {
+  const id = String(album.id || '').trim();
+  if (!id) throw new Error('album id manquant');
+
+  let tracks: Track[] = Array.isArray(album.tracks)
+    ? (album.tracks as Track[]).filter((t) => t && typeof t === 'object')
+    : [];
+  let meta = { ...album };
+
+  if (tracks.length < 2) {
+    try {
+      const { getAlbum } = await import('./yt.js');
+      const full = await getAlbum(id);
+      if (full?.tracks?.length) tracks = full.tracks;
+      if (full?.album) {
+        meta = {
+          ...meta,
+          id: full.album.id || id,
+          title: full.album.title || meta.title || meta.name,
+          name: full.album.title || meta.name || meta.title,
+          artists: full.album.artists?.length ? full.album.artists : meta.artists,
+          thumbnails: full.album.thumbnails?.length ? full.album.thumbnails : meta.thumbnails,
+          year: full.album.year || meta.year,
+          type: 'album',
+        };
+      }
+    } catch (err) {
+      console.warn('[saveAlbum] getAlbum', id, (err as Error).message);
+    }
+  }
+
+  const saved = saveAlbum(userId, { ...meta, type: 'album', tracks: undefined });
+  let tracksAdded = 0;
+  for (const raw of tracks) {
+    const t = sanitizeTrack({
+      ...raw,
+      type: raw.type === 'video' ? 'video' : 'song',
+      album: raw.album || {
+        name: String(meta.title || meta.name || 'Album'),
+        id,
+      },
+    });
+    if (ensureLibraryTrack(userId, t)) tracksAdded += 1;
+  }
+  return { album: saved, tracksAdded, tracksTotal: tracks.length };
+}
+
+/** Ré-injecte les titres de tous les albums déjà en biblio (backfill). */
+export async function expandLibraryAlbumTracks(userId: string) {
+  const lib = getFullLibrary(userId);
+  let albums = 0;
+  let tracksAdded = 0;
+  for (const a of lib.albums || []) {
+    const id = String(a?.id || '').trim();
+    if (!id) continue;
+    const r = await saveAlbumWithTracks(userId, a as unknown as Record<string, unknown>);
+    albums += 1;
+    tracksAdded += r.tracksAdded;
+  }
+  return { albums, tracksAdded, library: getFullLibrary(userId) };
 }
 
 export function removeAlbum(userId: string, albumId: string) {
@@ -740,7 +825,15 @@ export async function repairLibraryTrackMeta(userId: string) {
       repaired += 1;
     }
   }
-  return { scanned: byId.size, repaired, library: getFullLibrary(userId) };
+  // Albums en biblio → injecter tous leurs titres dans « Titres »
+  const expanded = await expandLibraryAlbumTracks(userId);
+  return {
+    scanned: byId.size,
+    repaired,
+    albumsExpanded: expanded.albums,
+    albumTracksAdded: expanded.tracksAdded,
+    library: getFullLibrary(userId),
+  };
 }
 
 export function removeFromPlaylist(userId: string, playlistId: string, trackId: string) {
