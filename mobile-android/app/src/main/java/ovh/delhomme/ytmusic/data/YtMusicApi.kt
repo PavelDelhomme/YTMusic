@@ -87,6 +87,7 @@ data class AlbumMetaDto(
     val id: String,
     val title: String,
     val year: String? = null,
+    val releaseType: String? = null,
     val artists: List<ArtistRef>? = emptyList(),
     val thumbnails: List<Thumb>? = emptyList(),
 ) {
@@ -449,6 +450,9 @@ interface YtMusicApi {
 
     @POST("api/download/{id}")
     suspend fun download(@Path("id") id: String): Map<String, Any>
+
+    @POST("api/offline/start")
+    suspend fun offlineStart(@Body body: Map<String, String>): Map<String, Any>
 
     @POST("api/reco/feedback")
     suspend fun recoFeedback(@Body body: RecoFeedbackBody): Map<String, Any>

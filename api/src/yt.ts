@@ -20,6 +20,7 @@ import {
   parseAuthorField,
   artistsFromHeader,
   extractYear,
+  inferAlbumReleaseType,
 } from './mappers.js';
 import { getFullLibrary, getHistory } from './library.js';
 import { listFollows, listSearchHistory } from './prefs.js';
@@ -1274,6 +1275,7 @@ export async function getAlbum(albumId: string): Promise<{
     id,
     title: String(header.title?.text || header.title || 'Album'),
     year,
+    releaseType: inferAlbumReleaseType(header, tracks.length),
     artists,
     thumbnails: cover,
   };
