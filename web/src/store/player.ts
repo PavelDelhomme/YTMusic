@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { api, artistNames, type Track } from '../api';
 import { resolvePlayUrl } from '../lib/offlineCache';
-import { prefetchAround, resolvePrefetchedPlayUrl, warmFormat, warmHead, bumpPrefetchGeneration, isPrefetchBlobUrl } from '../lib/streamPrefetch';
+import { prefetchAround, resolvePrefetchedPlayUrl, warmFormat, bumpPrefetchGeneration, isPrefetchBlobUrl } from '../lib/streamPrefetch';
 import { useSession } from './session';
 import { useLibrary } from './library';
 
