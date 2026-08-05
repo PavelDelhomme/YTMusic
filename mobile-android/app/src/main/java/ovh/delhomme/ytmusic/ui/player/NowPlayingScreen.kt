@@ -165,15 +165,29 @@ fun NowPlayingScreen(
     val queueOpen = queueProgress.value > 0.55f
     val queueInteractive = queueProgress.value > 0.02f
 
-    // Remplit la zone « À suivre » — 1 fetch par seed, pas de boucle sur queue.size
+    // Remplit la zone « À suivre » — fast d’abord, puis enrichissement
     LaunchedEffect(ui.track?.id, ui.autoplaySuggestions) {
         if (!ui.autoplaySuggestions) return@LaunchedEffect
         val seed = ui.track?.id ?: return@LaunchedEffect
         val boundary = ui.userQueueEnd.coerceIn(0, ui.queue.size)
         val autoLen = (ui.queue.size - boundary).coerceAtLeast(0)
-        // Assez de marge → ne pas refetch (appendAutoTracks ne doit pas relancer l’effet)
         if (autoLen >= 12) return@LaunchedEffect
-        // Un seul appel ranked (related = similarForUser côté API)
+        // 1) upNext YT (le plus rapide) puis related?fast=1
+        val up = runCatching { container.api.upNext(seed) }.getOrNull()
+        val upPool = up?.tracks.orEmpty()
+            .filter { it.isPlayable() && it.id != seed }
+            .distinctBy { it.id }
+        if (upPool.isNotEmpty() && ui.track?.id == seed) player.appendAutoTracks(upPool)
+        val fast = runCatching { container.api.related(seed, fast = 1) }.getOrNull()
+        val fastPool = (
+            fast?.tracks.orEmpty() +
+                fast?.related.orEmpty() +
+                fast?.radio.orEmpty()
+            )
+            .filter { it.isPlayable() && it.id != seed }
+            .distinctBy { it.id }
+        if (fastPool.isNotEmpty() && ui.track?.id == seed) player.appendAutoTracks(fastPool)
+        // 2) Complet en arrière-plan
         val related = runCatching { container.api.related(seed) }.getOrNull()
         val pool = (
             related?.tracks.orEmpty() +

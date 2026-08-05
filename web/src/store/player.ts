@@ -106,7 +106,7 @@ type PlayerState = {
     seed?: Track;
     /** Si true, favorise les titres du même artiste (quand kind=track). */
     stayClose?: boolean;
-  }) => Promise<void>;
+  }) => Promise<{ added: number; soft: boolean } | void>;
   hydrate: () => Promise<void>;
   applyRemoteState: (state: Partial<PlayerState> & { current?: Track | null }, playAudio?: boolean) => Promise<void>;
   loadRelated: (trackId: string) => Promise<void>;
@@ -772,11 +772,46 @@ async function ensureAutoRadio(seedId: string) {
       mergeAutoTracks(seedId, snap.related);
     }
 
-    const relatedP = api
+    // 1) upNext YT (le plus rapide) + related?fast=1 en parallèle
+    const upP = api
+      .upNext(seedId)
+      .then((r) => {
+        if (seq !== autoRadioSeq) return r;
+        mergeAutoTracks(seedId, r.tracks || []);
+        return r;
+      })
+      .catch((err) => {
+        console.warn('auto-radio upnext', err);
+        return null;
+      });
+
+    const fastP = api
+      .related(seedId, { fast: true })
+      .then((r) => {
+        if (seq !== autoRadioSeq) return r;
+        const pool = [
+          ...(r.related || []),
+          ...(r.radio || []),
+          ...((r as { tracks?: Track[] }).tracks || []),
+        ];
+        mergeAutoTracks(seedId, pool, pool.length ? pool : undefined);
+        return r;
+      })
+      .catch((err) => {
+        console.warn('auto-radio related fast', err);
+        return null;
+      });
+
+    // 2) Enrichissement complet en arrière-plan (search + biblio)
+    const fullP = api
       .related(seedId)
       .then((r) => {
         if (seq !== autoRadioSeq) return r;
-        const pool = [...(r.related || []), ...(r.radio || [])];
+        const pool = [
+          ...(r.related || []),
+          ...(r.radio || []),
+          ...((r as { tracks?: Track[] }).tracks || []),
+        ];
         mergeAutoTracks(seedId, pool, pool.length ? pool : undefined);
         return r;
       })
@@ -785,7 +820,8 @@ async function ensureAutoRadio(seedId: string) {
         return null;
       });
 
-    await relatedP;
+    await Promise.race([upP, fastP]);
+    void Promise.all([upP, fastP, fullP]);
   })();
 
   autoRadioInflight = { seedId, promise };
@@ -1364,17 +1400,17 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       if (n) void warmFormat(n.id);
     }
 
-    // Suggestions après le démarrage audio (évite contention API/CPU sur le 1er play)
+    // Suggestions dès le démarrage (fast) — pas de délai qui bloque le « suivant »
     const seedId = playTrack.id;
     const radioGen = gen;
-    window.setTimeout(() => {
+    queueMicrotask(() => {
       if (radioGen !== playGeneration) return;
       if (!opts?.noAutoRadio && get().autoplay !== false) {
         void ensureAutoRadio(seedId);
       } else {
         void get().loadRelated(seedId);
       }
-    }, 1_400);
+    });
 
     const attemptPlay = async (attempt: number): Promise<void> => {
       try {
@@ -1995,7 +2031,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         seedTrack = pool[0] || null;
         if (seedTrack) pool = pool.slice(1);
       }
-      if (!seedTrack) return;
+      if (!seedTrack) return { added: 0, soft: false as const };
 
       const RADIO_CAP = 36;
       const upcoming = pool.filter((t) => t.id !== seedTrack!.id).slice(0, RADIO_CAP);
@@ -2019,7 +2055,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
           sourceKind: kind === 'track' ? 'radio' : kind === 'album' ? 'album' : 'artist',
         });
         set({ showQueue: true, showLyrics: false, autoplay: true, isLoading: false });
-        return;
+        return { added: upcoming.length, soft: true as const };
       }
 
       await get().play(seedTrack, mix, { preserveQueue: true, noAutoRadio: true });
@@ -2027,11 +2063,14 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       // Remplit « À suivre » après, sans mélanger avec le mix
       window.setTimeout(() => {
         if (get().current?.id === seedTrack?.id) void ensureAutoRadio(seedTrack!.id);
-      }, 2_000);    } catch (err) {
+      }, 400);
+      return { added: upcoming.length, soft: false as const };
+    } catch (err) {
       console.error('startRadio', err);
       if (seed && isPlayable(seed)) {
         await get().play(seed, [seed], { preserveQueue: true });
       }
+      return { added: 0, soft: false as const };
     } finally {
       set({ isLoading: false });
     }

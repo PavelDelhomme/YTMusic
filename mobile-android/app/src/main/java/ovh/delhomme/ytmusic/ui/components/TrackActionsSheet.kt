@@ -496,7 +496,19 @@ fun TrackActionsSheet(
                             val artistId = resolveArtistId(container.api, artist.id, artist.name)
                                 ?: return@runCatching
                             val mix = buildRadioQueue(container.api, "artist", artistId, enriched)
-                            if (mix.isNotEmpty()) player.playRadioOrEnqueue(mix, "Radio artiste")
+                            if (mix.isNotEmpty()) {
+                                player.playRadioOrEnqueue(mix, "Radio · ${artist.name}")
+                                val added = (mix.size - 1).coerceAtLeast(0)
+                                Toast.makeText(
+                                    context,
+                                    if (added > 0) {
+                                        "$added titre${if (added > 1) "s" else ""} en lien avec ${artist.name}"
+                                    } else {
+                                        "Radio artiste démarrée"
+                                    },
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
                         }
                         onDismiss()
                     }
