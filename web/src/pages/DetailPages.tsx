@@ -24,6 +24,8 @@ import {
 import { BackButton } from '../components/BackButton';
 import { HomeShelfSkeleton } from '../components/HomeShelfSkeleton';
 import { warmFormats } from '../lib/streamPrefetch';
+import { PlayingCoverOverlay } from '../components/PlayingBars';
+import { useNowPlayingMatch } from '../lib/nowPlaying';
 import { formatTotalDuration, sumTracksDurationSeconds } from '../lib/time';
 import { useItemActions } from '../store/itemActions';
 
@@ -449,6 +451,46 @@ export function AlbumPage() {
   const openItemActions = useItemActions((s) => s.open);
   const [radioBusy, setRadioBusy] = useState(false);
   const [libBusy, setLibBusy] = useState(false);
+  const [offlinePct, setOfflinePct] = useState<number | null>(null);
+  const [offlineDone, setOfflineDone] = useState(false);
+  const albumNow = useNowPlayingMatch({
+    id,
+    type: 'album',
+    tracks: data?.tracks,
+  });
+
+  const startAlbumOffline = () => {
+    if (offlineDone || offlinePct != null) return;
+    void (async () => {
+      setOfflinePct(0.05);
+      const tick = window.setInterval(() => {
+        setOfflinePct((p) => (p == null ? 0.05 : Math.min(0.92, p + 0.04)));
+      }, 600);
+      try {
+        const r = await api.offlineStart('album', id);
+        if (r.jobId) {
+          for (let i = 0; i < 120; i++) {
+            await new Promise((res) => setTimeout(res, 700));
+            const st = await api.offlineJobs();
+            const job = (st.jobs || []).find((j: any) => j.id === r.jobId);
+            if (!job) break;
+            const total = Number(job.total || 0);
+            const progress = Number(job.progress || 0);
+            const pct = total > 0 ? progress / total : 0.5;
+            setOfflinePct(Math.min(0.99, Math.max(0.05, pct)));
+            if (job.status === 'done' || (total > 0 && progress >= total)) break;
+          }
+        }
+        setOfflinePct(1);
+        setOfflineDone(true);
+      } catch {
+        /* ignore */
+      } finally {
+        window.clearInterval(tick);
+        setTimeout(() => setOfflinePct(null), 400);
+      }
+    })();
+  };
 
   useEffect(() => {
     if (!id) return;
@@ -498,8 +540,20 @@ export function AlbumPage() {
     );
   }
 
-  const artists = data.album.artists || [];
-  const artistLabel = artists.map((a) => a.name).filter(Boolean).join(', ') || 'Artiste';
+  const junkArtist = (n: string) =>
+    !n || /^(artiste|artist|inconnu|unknown|n\/a)$/i.test(n.trim());
+  const artists = (data.album.artists || [])
+    .filter((a) => a.name && !junkArtist(a.name))
+    .concat(
+      (data.tracks || [])
+        .flatMap((t) => t.artists || [])
+        .filter((a) => a.name && !junkArtist(a.name)),
+    )
+    .filter((a, i, arr) => arr.findIndex((x) => x.name === a.name && x.id === a.id) === i);
+  const albumArtists = (data.album.artists || []).filter((a) => a.name && !junkArtist(a.name));
+  const resolvedArtists = albumArtists.length ? albumArtists : artists;
+  const artistLabel =
+    resolvedArtists.map((a) => a.name).filter(Boolean).join(', ') || 'Artiste';
   const releaseType =
     data.album.releaseType ||
     (data.tracks.length <= 1 ? 'Single' : data.tracks.length <= 6 ? 'EP' : 'Album');
@@ -513,7 +567,7 @@ export function AlbumPage() {
     .filter(Boolean)
     .join(' · ');
   const inLib = hasAlbum(data.album.id);
-  const primaryArtist = artists.find((a) => a.id) || artists[0];
+  const primaryArtist = resolvedArtists.find((a) => a.id) || resolvedArtists[0];
 
   const recordPlay = () => {
     void useLibrary.getState().recordEntityPlay({
@@ -521,13 +575,13 @@ export function AlbumPage() {
       kind: 'album',
       title: data.album.title,
       thumbnails: data.album.thumbnails,
-      artists: data.album.artists,
+      artists: resolvedArtists.length ? resolvedArtists : data.album.artists,
     });
   };
 
   const playAlbum = () => {
     recordPlay();
-    void playQueue(data.tracks, 0);
+    void playQueue(data.tracks, 0, { sourceId: data.album.id, sourceKind: 'album' });
   };
 
   return (
@@ -561,8 +615,13 @@ export function AlbumPage() {
       </div>
 
       {/* Vignette centrée */}
-      <div className="mx-auto mb-6 w-[min(72vw,20rem)] max-w-sm shadow-2xl sm:w-[min(50vw,22rem)]">
+      <div className="relative mx-auto mb-6 w-[min(72vw,20rem)] max-w-sm shadow-2xl sm:w-[min(50vw,22rem)]">
         <CoverImage item={data.album} size={800} rounded="lg" />
+        <PlayingCoverOverlay
+          active={albumNow.active}
+          playing={albumNow.playing}
+          size="lg"
+        />
       </div>
 
       {/* Titre */}
@@ -573,11 +632,32 @@ export function AlbumPage() {
       {/* 5 boutons ronds — libellés + title (survol / appui long) */}
       <div className="mb-8 flex items-start justify-evenly gap-1 px-1 sm:justify-center sm:gap-5">
         <AlbumHeroAction
-          title="Télécharger l'album hors ligne"
-          label="Télécharger"
-          onClick={() => void api.offlineStart('album', data.album.id)}
+          title={
+            offlineDone
+              ? 'Album téléchargé'
+              : offlinePct != null
+                ? `Téléchargement ${Math.round(offlinePct * 100)} %`
+                : "Télécharger l'album hors ligne"
+          }
+          label={
+            offlineDone
+              ? 'OK'
+              : offlinePct != null
+                ? `${Math.round(offlinePct * 100)}%`
+                : 'Télécharger'
+          }
+          disabled={offlineDone || offlinePct != null}
+          onClick={startAlbumOffline}
         >
-          <Download className="h-6 w-6" />
+          {offlineDone ? (
+            <Check className="h-6 w-6 text-yt-red" />
+          ) : offlinePct != null ? (
+            <span className="text-xs font-semibold tabular-nums text-yt-red">
+              {Math.round(offlinePct * 100)}
+            </span>
+          ) : (
+            <Download className="h-6 w-6" />
+          )}
         </AlbumHeroAction>
         <AlbumHeroAction
           title={
@@ -599,7 +679,7 @@ export function AlbumPage() {
                     id: data.album.id,
                     title: data.album.title,
                     year: data.album.year,
-                    artists: data.album.artists,
+                    artists: resolvedArtists.length ? resolvedArtists : data.album.artists,
                     thumbnails: data.album.thumbnails,
                     type: 'album',
                   });
@@ -691,7 +771,7 @@ export function AlbumPage() {
                       id: data.album.id,
                       title: data.album.title,
                       type: 'album',
-                      artists: data.album.artists,
+                      artists: resolvedArtists.length ? resolvedArtists : data.album.artists,
                       thumbnails: data.album.thumbnails,
                     });
                     setMenuOpen(false);
@@ -787,7 +867,10 @@ export function PlaylistPage() {
     setData(null);
     api
       .playlist(id)
-      .then(setData)
+      .then((pl) => {
+        setData(pl);
+        void warmFormats((pl.tracks || []).slice(0, 4).map((t) => t.id));
+      })
       .catch((e) => setError(String(e?.message || e || 'Playlist introuvable')))
       .finally(() => setLoading(false));
   }, [id]);
@@ -841,7 +924,7 @@ export function PlaylistPage() {
           title: data.playlist.title,
           thumbnails: data.playlist.thumbnails,
         });
-        void playQueue(data.tracks, 0);
+        void playQueue(data.tracks, 0, { sourceId: data.playlist.id, sourceKind: 'playlist' });
       }}
       onShuffle={() => {
         void useLibrary.getState().recordEntityPlay({
@@ -851,7 +934,7 @@ export function PlaylistPage() {
           thumbnails: data.playlist.thumbnails,
         });
         const shuffled = [...data.tracks].sort(() => Math.random() - 0.5);
-        void playQueue(shuffled, 0);
+        void playQueue(shuffled, 0, { sourceId: data.playlist.id, sourceKind: 'playlist' });
       }}
       onLike={async () => {
         const r = await api.likePlaylist({
@@ -874,7 +957,7 @@ export function PlaylistPage() {
         });
         applyLibrary(r.library);
       }}
-      onOffline={() => void api.offlineStart('playlist', data.playlist.id)}
+      onOffline={() => api.offlineStart('playlist', data.playlist.id)}
     />
   );
 }
@@ -905,12 +988,51 @@ function CollectionHeader({
   onRadio?: () => void;
   radioBusy?: boolean;
   onAddLibrary?: () => Promise<void>;
-  onOffline?: () => void;
+  onOffline?: () => void | Promise<void>;
   onLike?: () => Promise<void>;
   inLibrary?: boolean;
   liked?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
+  const [offlinePct, setOfflinePct] = useState<number | null>(null);
+  const [offlineDone, setOfflineDone] = useState(false);
+
+  const startOffline = () => {
+    if (!onOffline || offlineDone || offlinePct != null) return;
+    void (async () => {
+      setOfflinePct(0.05);
+      const tick = window.setInterval(() => {
+        setOfflinePct((p) => (p == null ? 0.05 : Math.min(0.92, p + 0.04)));
+      }, 600);
+      try {
+        const r = await Promise.resolve(onOffline());
+        const jobId =
+          r && typeof r === 'object' && 'jobId' in r
+            ? String((r as { jobId?: string }).jobId || '')
+            : '';
+        if (jobId) {
+          for (let i = 0; i < 120; i++) {
+            await new Promise((res) => setTimeout(res, 700));
+            const st = await api.offlineJobs();
+            const job = (st.jobs || []).find((j: any) => j.id === jobId);
+            if (!job) break;
+            const total = Number(job.total || 0);
+            const progress = Number(job.progress || 0);
+            const pct = total > 0 ? progress / total : 0.5;
+            setOfflinePct(Math.min(0.99, Math.max(0.05, pct)));
+            if (job.status === 'done' || (total > 0 && progress >= total)) break;
+          }
+        }
+        setOfflinePct(1);
+        setOfflineDone(true);
+      } catch {
+        /* ignore */
+      } finally {
+        window.clearInterval(tick);
+        setTimeout(() => setOfflinePct(null), 400);
+      }
+    })();
+  };
 
   return (
     <div className="animate-fade-up">
@@ -987,11 +1109,23 @@ function CollectionHeader({
             {onOffline && (
               <button
                 type="button"
-                onClick={onOffline}
-                className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-4 py-2.5 text-sm text-yt-muted hover:text-white"
+                onClick={startOffline}
+                disabled={offlineDone || offlinePct != null}
+                className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-4 py-2.5 text-sm text-yt-muted hover:text-white disabled:opacity-70"
                 title="Télécharger hors-ligne"
               >
-                <Download className="h-4 w-4" /> Offline
+                {offlineDone ? (
+                  <Check className="h-4 w-4 text-yt-red" />
+                ) : offlinePct != null ? (
+                  <span className="tabular-nums text-yt-red">{Math.round(offlinePct * 100)}%</span>
+                ) : (
+                  <Download className="h-4 w-4" />
+                )}
+                {offlineDone
+                  ? 'Téléchargé'
+                  : offlinePct != null
+                    ? 'Téléchargement…'
+                    : 'Offline'}
               </button>
             )}
           </div>

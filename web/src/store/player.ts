@@ -14,6 +14,7 @@ import {
 } from '../lib/streamPrefetch';
 import { eqNeedsSameOrigin } from '../lib/equalizer';
 import { trackDurationSeconds, formatClock } from '../lib/time';
+import { perfStart } from '../lib/perf';
 import { useSession } from './session';
 import { useLibrary } from './library';
 
@@ -29,6 +30,9 @@ type PlayerState = {
   queueIndex: number;
   /** Fin exclusive de la file « utilisateur » (album / playlist lancée). Au-delà = autoplay. */
   userQueueEnd: number;
+  /** Collection d’où vient la file (album / playlist / mix…) — overlay « en lecture ». */
+  sourceId: string | null;
+  sourceKind: 'album' | 'playlist' | 'mix' | 'artist' | 'radio' | null;
   /** Suggestions automatiques après la file (style YTM). */
   autoplay: boolean;
   isPlaying: boolean;
@@ -49,9 +53,22 @@ type PlayerState = {
   play: (
     track: Track,
     queue?: Track[],
-    opts?: { preserveQueue?: boolean; noAutoRadio?: boolean; keepUserBoundary?: boolean },
+    opts?: {
+      preserveQueue?: boolean;
+      noAutoRadio?: boolean;
+      keepUserBoundary?: boolean;
+      sourceId?: string | null;
+      sourceKind?: 'album' | 'playlist' | 'mix' | 'artist' | 'radio' | null;
+    },
   ) => Promise<void>;
-  playQueue: (tracks: Track[], startIndex?: number) => Promise<void>;
+  playQueue: (
+    tracks: Track[],
+    startIndex?: number,
+    opts?: {
+      sourceId?: string | null;
+      sourceKind?: 'album' | 'playlist' | 'mix' | 'artist' | 'radio' | null;
+    },
+  ) => Promise<void>;
   playAt: (index: number) => Promise<void>;
   toggle: () => void;
   next: (opts?: { fromEnded?: boolean }) => Promise<void>;
@@ -1121,6 +1138,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   queue: [],
   queueIndex: 0,
   userQueueEnd: 0,
+  sourceId: null,
+  sourceKind: null,
   autoplay: true,
   isPlaying: false,
   isLoading: false,
@@ -1214,14 +1233,24 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     await restoreAudioFromPersisted();
   },
 
-  playQueue: async (tracks, startIndex = 0) => {
+  playQueue: async (tracks, startIndex = 0, opts) => {
+    const end = perfStart('playQueue');
     const playable = tracks.filter(isPlayable);
-    if (!playable.length) return;
+    if (!playable.length) {
+      end('empty');
+      return;
+    }
     const idx = Math.min(Math.max(0, startIndex), playable.length - 1);
-    await get().play(playable[idx], playable, { preserveQueue: true });
+    await get().play(playable[idx], playable, {
+      preserveQueue: true,
+      sourceId: opts?.sourceId,
+      sourceKind: opts?.sourceKind,
+    });
+    end(`${playable.length} tracks`);
   },
 
   play: async (track, queue, opts) => {
+    const end = perfStart('play');
     // Clic Lecture sur cet appareil → son ici (pas seulement remote cmd)
     claimLocalPlayer();
 
@@ -1229,16 +1258,38 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     // Ne jamais lancer un ID non-vidéo (album/playlist/mood) comme stream
     if (!isPlayable(track) && !filtered.length) {
       set({ isLoading: false, isPlaying: false });
+      end('unplayable');
       return;
     }
     const nextQueue = filtered.length ? filtered : isPlayable(track) ? [track] : [];
     if (!nextQueue.length) {
       set({ isLoading: false, isPlaying: false });
+      end('empty');
       return;
     }
     const playTrack = isPlayable(track) ? track : nextQueue[0];
     const idx = Math.max(0, nextQueue.findIndex((t) => t.id === playTrack.id));
     const keepBoundary = Boolean(opts?.keepUserBoundary);
+    const inferredAlbum =
+      opts?.sourceId === undefined && playTrack.album?.id
+        ? { sourceId: playTrack.album.id, sourceKind: 'album' as const }
+        : null;
+    const nextSourceId =
+      opts?.sourceId !== undefined
+        ? opts.sourceId
+        : inferredAlbum
+          ? inferredAlbum.sourceId
+          : keepBoundary
+            ? get().sourceId
+            : null;
+    const nextSourceKind =
+      opts?.sourceKind !== undefined
+        ? opts.sourceKind
+        : inferredAlbum
+          ? inferredAlbum.sourceKind
+          : keepBoundary
+            ? get().sourceKind
+            : null;
     set({
       current: playTrack,
       queue: nextQueue,
@@ -1246,6 +1297,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       userQueueEnd: keepBoundary
         ? Math.min(Math.max(get().userQueueEnd || 0, (idx >= 0 ? idx : 0) + 1), nextQueue.length)
         : nextQueue.length,
+      sourceId: nextSourceId,
+      sourceKind: nextSourceKind,
       isLoading: true,
       progress: 0,
       lyrics: null,
@@ -1286,6 +1339,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         set({ isPlaying: true, isLoading: false, playError: null });
         publish();
         schedulePrefetch(get().queue, get().queueIndex);
+        end(playTrack.id);
       } catch (err) {
         if (gen !== playGeneration) return;
         console.error(err);
@@ -1312,12 +1366,15 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         }
         set({ isLoading: false, isPlaying: false, playError: msg });
         publish();
+        end(`fail:${playTrack.id}`);
       }
     };
 
     // Skips rapides : UI à jour tout de suite, un seul load audio (dernier gagne)
     await coalescePlay(gen, () => attemptPlay(0));
-  },  playAt: async (index) => {
+  },
+
+  playAt: async (index) => {
     const { queue } = get();
     const track = queue[index];
     if (!track) return;

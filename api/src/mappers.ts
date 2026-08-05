@@ -171,7 +171,8 @@ export function isJunkArtistName(name: string) {
   return (
     !name ||
     name === '•' ||
-    /^(song|album|playlist|video|ep|single|artist|inconnu|unknown|n\/a|various artists|va)$/i.test(
+    name === '·' ||
+    /^(song|album|playlist|video|ep|single|artist|artiste|inconnu|unknown|n\/a|various artists|va|divers)$/i.test(
       name,
     ) ||
     /^\d+:\d+$/.test(name) ||
@@ -235,8 +236,8 @@ function artistsFromRuns(runs: any[] | undefined): { name: string; id?: string }
   const out: { name: string; id?: string }[] = [];
   for (const r of runs) {
     const name = String(r?.text || '')
-      .replace(/^[&,•]\s*/, '')
-      .replace(/\s*[&,•]\s*$/, '')
+      .replace(/^[&,•·]\s*/, '')
+      .replace(/\s*[&,•·]\s*$/, '')
       .trim();
     if (isJunkArtistName(name)) continue;
     const browseId = r?.endpoint?.payload?.browseId as string | undefined;
@@ -244,14 +245,27 @@ function artistsFromRuns(runs: any[] | undefined): { name: string; id?: string }
     const isArtist =
       Boolean(browseId?.startsWith('UC')) ||
       pageType.includes('ARTIST') ||
-      (!pageType && browseId && !browseId.startsWith('MPREb_') && !browseId.startsWith('VL') && !browseId.startsWith('OLAK5'));
+      (!pageType &&
+        browseId &&
+        !browseId.startsWith('MPREb_') &&
+        !browseId.startsWith('VL') &&
+        !browseId.startsWith('OLAK5'));
     if (browseId && isArtist) {
       out.push({ name, id: browseId });
-    } else if (!browseId && name && !/^[•&|,]+$/.test(name)) {
+    } else if (!browseId && name && !/^[•·&|,]+$/.test(name)) {
       if (!out.some((a) => a.name === name)) out.push({ name });
     }
   }
   return out;
+}
+
+/** Découpe un sous-titre « Album · Artiste · 2024 » (bullet YTM • ou ·). */
+function splitSubtitleParts(text: string): string[] {
+  if (!text) return [];
+  return text
+    .split(/\s*[•·|]\s*/)
+    .map((p) => p.trim())
+    .filter(Boolean);
 }
 
 function splitAuthorString(author: string, channelId?: string): { name: string; id?: string }[] {
@@ -296,15 +310,52 @@ export function artistsFromHeader(header: any): { name: string; id?: string }[] 
 
   push(artistsFromRuns(header.subtitle?.runs));
   push(artistsFromRuns(header.second_subtitle?.runs));
+  // MusicResponsiveHeader (albums récents) : artiste dans strapline_text_one
+  push(artistsFromRuns(header.strapline_text_one?.runs));
   push(artistsFromRuns(header.strapline_text?.runs));
   push(artistsFromRuns(header.byline?.runs));
   push(artistsFromRuns(header.description?.runs));
+  push(artistsFromRuns(header.strapline?.runs));
+  push(artistsFromRuns(header.description?.description?.runs));
 
-  // Sous-titre texte « Album • Artist • 2026 »
-  const subText = asText(header.subtitle) || asText(header.strapline_text);
-  if (subText.includes('•')) {
-    const parts = subText.split('•').map((p) => p.trim());
-    for (const part of parts) {
+  // Menu / boutons « Accéder à l'artiste »
+  const menuish = [
+    ...(Array.isArray(header.menu?.items) ? header.menu.items : []),
+    ...(Array.isArray(header.buttons) ? header.buttons : []),
+    ...(Array.isArray(header.menu?.top_level_buttons) ? header.menu.top_level_buttons : []),
+  ];
+  for (const it of menuish) {
+    const browseId =
+      it?.endpoint?.payload?.browseId ||
+      it?.navigationEndpoint?.browseEndpoint?.browseId ||
+      it?.default_navigation_endpoint?.browseEndpoint?.browseId;
+    const pageType =
+      pageTypeOf(it) ||
+      String(
+        it?.endpoint?.payload?.browseEndpointContextSupportedConfigs
+          ?.browseEndpointContextMusicConfig?.pageType || '',
+      );
+    const label = asText(it?.text) || asText(it?.title) || asText(it?.label);
+    if (
+      (String(browseId || '').startsWith('UC') || String(pageType).includes('ARTIST')) &&
+      label &&
+      !isJunkArtistName(label) &&
+      !/^(accéder|go to|view|voir)/i.test(label)
+    ) {
+      push([{ name: label, id: String(browseId) }]);
+    }
+  }
+
+  // Sous-titre / strapline texte « Album • Artist • 2026 »
+  const subCandidates = [
+    asText(header.strapline_text_one),
+    asText(header.strapline_text),
+    asText(header.subtitle),
+    asText(header.second_subtitle),
+    asText(header.strapline),
+  ].filter(Boolean);
+  for (const subText of subCandidates) {
+    for (const part of splitSubtitleParts(subText)) {
       if (isJunkArtistName(part)) continue;
       if (/^(album|ep|single|playlist)$/i.test(part)) continue;
       if (extractYear(part) === part) continue;
@@ -312,9 +363,14 @@ export function artistsFromHeader(header: any): { name: string; id?: string }[] 
     }
   }
 
-  // Préférer ceux avec id
+  // Préférer ceux avec id, mais garder les noms utiles sans id
   const withIds = collected.filter((a) => a.id);
-  return withIds.length ? withIds : collected;
+  if (!withIds.length) return collected;
+  const names = new Set(withIds.map((a) => a.name.toLowerCase()));
+  for (const a of collected) {
+    if (!a.id && a.name && !names.has(a.name.toLowerCase())) withIds.push(a);
+  }
+  return withIds;
 }
 
 export function artistsFrom(item: any): { name: string; id?: string }[] {
@@ -361,8 +417,8 @@ export function artistsFrom(item: any): { name: string; id?: string }[] {
 
   for (let i = 1; i < flex.length; i++) {
     const text = asText(flex[i]?.title);
-    if (!text.includes('•')) continue;
-    const parts = text.split('•').map((p: string) => p.trim());
+    const parts = splitSubtitleParts(text);
+    if (parts.length < 2) continue;
     const start = /^(song|album|playlist|video|ep|single)$/i.test(parts[0] || '') ? 1 : 0;
     for (let j = start; j < parts.length; j++) {
       const chunk = parts[j];

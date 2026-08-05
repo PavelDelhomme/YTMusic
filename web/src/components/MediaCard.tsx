@@ -9,6 +9,8 @@ import { useLibrary } from '../store/library';
 import { usePins } from '../store/pins';
 import { useState, type MouseEvent } from 'react';
 import { useItemActions } from '../store/itemActions';
+import { PlayingCoverOverlay } from './PlayingBars';
+import { useNowPlayingMatch } from '../lib/nowPlaying';
 
 function isLocalPlaylist(item: Track) {
   return item.id.startsWith('local:') || item.album?.id?.startsWith('local:');
@@ -33,6 +35,7 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
   const [playBusy, setPlayBusy] = useState(false);
   const [pinBusy, setPinBusy] = useState(false);
   const [pinToast, setPinToast] = useState<string | null>(null);
+  const { active: nowActive, playing: nowPlaying } = useNowPlayingMatch(item);
 
   const local = isLocalPlaylist(item);
   const isMood = item.id.startsWith('mood:') || item.id.includes('moods_and_genres');
@@ -79,7 +82,7 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
       void api
         .album(item.id)
         .then((r) => {
-          if (r.tracks?.length) void playQueue(r.tracks, 0);
+          if (r.tracks?.length) void playQueue(r.tracks, 0, { sourceId: item.id, sourceKind: 'album' });
           else if (href) navigate(href);
         })
         .catch(() => {
@@ -94,16 +97,18 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
       if (local) {
         const pl = useLibrary.getState().playlists.find((p) => p.id === localPlaylistId(item));
         const tracks = pl?.tracks || [];
-        if (tracks.length) void playQueue(tracks, 0);
-        else if (href) navigate(href);
+        if (tracks.length) {
+          void playQueue(tracks, 0, { sourceId: item.id, sourceKind: 'playlist' });
+        } else if (href) navigate(href);
         setPlayBusy(false);
         return;
       }
       void api
         .playlist(item.id)
         .then((r) => {
-          if (r.tracks?.length) void playQueue(r.tracks, 0);
-          else if (href) navigate(href);
+          if (r.tracks?.length) {
+            void playQueue(r.tracks, 0, { sourceId: item.id, sourceKind: 'playlist' });
+          } else if (href) navigate(href);
         })
         .catch(() => {
           if (href) navigate(href);
@@ -198,6 +203,7 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
           rounded={item.type === 'artist' ? 'full' : 'lg'}
           className="transition duration-300 group-hover:scale-[1.03]"
         />
+        <PlayingCoverOverlay active={nowActive} playing={nowPlaying} size="md" />
       </div>
       <div className="pointer-events-none absolute bottom-2 right-2 flex gap-1 opacity-0 transition group-hover:opacity-100">
         <button

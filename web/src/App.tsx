@@ -7,6 +7,7 @@ import { LibraryPage } from './pages/LibraryPage';
 import { ArtistPage, ArtistSongsPage, AlbumPage, PlaylistPage } from './pages/DetailPages';
 import { MoodPage } from './pages/MoodPage';
 import { LocalPlaylistPage } from './pages/LocalPlaylistPage';
+import { MixPage } from './pages/MixPage';
 import { ImportPage } from './pages/ImportPage';
 import { OfflinePage } from './pages/OfflinePage';
 import { TvPage } from './pages/TvPage';
@@ -33,6 +34,7 @@ export default function App() {
           <Route path="artist/:id" element={<ArtistPage />} />
           <Route path="album/:id" element={<AlbumPage />} />
           <Route path="playlist/:id" element={<PlaylistPage />} />
+          <Route path="mix/:id" element={<MixPage />} />
           <Route path="mood/:id" element={<MoodPage />} />
           <Route path="local-playlist/:id" element={<LocalPlaylistPage />} />
         </Route>
