@@ -1,5 +1,5 @@
 import type { Track } from './types.js';
-import { getRelated, getTrack, search, getAlbum, getArtist } from './yt.js';
+import { getRelated, getTrack, search, getAlbum, getArtist, hydrateTracks } from './yt.js';
 import {
   getPrefs,
   getWeights,
@@ -16,6 +16,8 @@ import {
   getLibraryTasteTracks,
   getLikedTrackIds,
 } from './library.js';
+import { upsertTrack } from './db.js';
+import { isWeakTitle } from './mappers.js';
 
 export const RADIO_CATEGORIES = [
   { id: 'focus', title: 'Concentration', query: 'focus concentration playlist', mode: 'focus' },
@@ -686,10 +688,27 @@ export async function radioForUser(
 export async function homeReco(userId: string) {
   const prefs = getPrefs(userId);
   const pins = listPins(userId);
-  const history = getHistory(userId, 30);
+  let history = getHistory(userId, 30);
   const top = getTopListened(userId, 20);
   const follows = listFollows(userId);
   const searches = listSearchHistory(userId, 10);
+
+  // Cache history parfois figé « Sans titre » alors que getTrack hydrate OK.
+  const weakHist = history.filter(
+    (t) => isWeakTitle(t.title, t.id) || !(t.artists || []).length,
+  );
+  if (weakHist.length) {
+    try {
+      const fixed = await hydrateTracks(weakHist, { limit: 24, concurrency: 4 });
+      const byId = new Map(fixed.map((t) => [t.id, t]));
+      history = history.map((t) => byId.get(t.id) || t);
+      for (const t of fixed) {
+        if (!isWeakTitle(t.title, t.id)) upsertTrack(t);
+      }
+    } catch (err) {
+      console.warn('[home] hydrate history', (err as Error).message);
+    }
+  }
 
   const shelves: { title: string; items: Track[] }[] = [];
 

@@ -731,6 +731,7 @@ export async function repairLibraryTrackMeta(userId: string) {
   for (const t of lib.liked || []) push(t);
   for (const t of lib.songs || []) push(t);
   for (const p of lib.playlists || []) for (const t of p.tracks || []) push(t);
+  for (const t of getHistory(userId, 80)) push(t);
   const fixed = await hydrateTracks([...byId.values()], { limit: 80, concurrency: 5 });
   let repaired = 0;
   for (const t of fixed) {
