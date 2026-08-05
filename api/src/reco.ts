@@ -42,7 +42,7 @@ function hourBucket(h: number) {
 const STYLE_TAGS: { re: RegExp; tag: string }[] = [
   { re: /lo-?fi|chillhop/, tag: 'lofi' },
   { re: /\bjazz\b|bossa|swing/, tag: 'jazz' },
-  { re: /\brap\b|hip.?hop|drill|trap\b/, tag: 'hiphop' },
+  { re: /\brap\b|hip.?hop|drill|trap\b|rap fran[cç]ais|slam/, tag: 'hiphop' },
   { re: /\brock\b|metal|punk|grunge/, tag: 'rock' },
   { re: /\bedm\b|house|techno|trance|dnb|drum.?and.?bass/, tag: 'electronic' },
   { re: /r&b|rnb|\bsoul\b|neo.?soul/, tag: 'rnb' },
@@ -60,16 +60,28 @@ const STYLE_TAGS: { re: RegExp; tag: string }[] = [
   { re: /ambient|chill|sleep|calm|relax/, tag: 'chill' },
   { re: /dance|party|club/, tag: 'dance' },
   { re: /reggae|dancehall/, tag: 'reggae' },
+  { re: /comedy|comedian|stand.?up|sketch|parody|musical comedy|cabaret/, tag: 'comedy' },
+  { re: /spoken.?word|poetry slam|slam poetry/, tag: 'spoken' },
+  { re: /chanson|variété fran[cç]aise/, tag: 'chanson' },
+  { re: /soundtrack|ost\b|score|film music/, tag: 'soundtrack' },
+];
+
+/** Artistes connus → tags (quand le titre seul ne suffit pas). */
+const ARTIST_STYLE_HINTS: { re: RegExp; tags: string[] }[] = [
+  { re: /bo burnham|tim minchin|flight of the conchords|weird al|axis of awesome|garfunkel and oates/, tags: ['comedy'] },
+  { re: /keny arkana|m[ée]dine|iam\b|oxmo|nekfeu|orelsan|damso|pnl\b|sch\b|jul\b|niska|booba/, tags: ['hiphop'] },
+  { re: /mozart|beethoven|bach\b|chopin|debussy/, tags: ['classical'] },
+  { re: /miles davis|john coltrane|herbie hancock|ella fitzgerald/, tags: ['jazz'] },
 ];
 
 function trackBlob(t: Track) {
-  return `${t.title} ${(t.artists || []).map((a) => a.name).join(' ')}`.toLowerCase();
+  return `${t.title} ${(t.artists || []).map((a) => a.name).join(' ')} ${t.album?.name || ''}`.toLowerCase();
 }
 
 function energyProxy(t: Track): number {
   const blob = trackBlob(t);
   let e = 0.5;
-  if (/chill|lofi|lo-fi|acoustic|piano|sleep|calm|jazz|ambient|bossa/.test(blob)) e -= 0.25;
+  if (/chill|lofi|lo-fi|acoustic|piano|sleep|calm|jazz|ambient|bossa|comedy|spoken/.test(blob)) e -= 0.25;
   if (/workout|party|dance|edm|metal|rock|rap|drill|hard|trap|techno/.test(blob)) e += 0.25;
   return Math.max(0, Math.min(1, e));
 }
@@ -77,6 +89,10 @@ function energyProxy(t: Track): number {
 function styleTags(t: Track): string[] {
   const blob = trackBlob(t);
   const tags = STYLE_TAGS.filter((x) => x.re.test(blob)).map((x) => x.tag);
+  const artistBlob = (t.artists || []).map((a) => a.name).join(' ').toLowerCase();
+  for (const hint of ARTIST_STYLE_HINTS) {
+    if (hint.re.test(artistBlob) || hint.re.test(blob)) tags.push(...hint.tags);
+  }
   return [...new Set(tags)];
 }
 
@@ -96,7 +112,7 @@ export function styleSearchQuery(seed: Track): string {
   if (tags.length) {
     return `${tags.slice(0, 2).join(' ')} songs like ${cleanTitle || artist || 'hits'}`.trim();
   }
-  if (artist && cleanTitle) return `${cleanTitle} similar songs playlist`;
+  if (artist && cleanTitle) return `${artist} ${cleanTitle} similar songs`;
   return `${artist || cleanTitle || 'similar'} mix playlist`.trim();
 }
 
@@ -115,10 +131,13 @@ function scoreContent(candidate: Track, seed: Track | null, prefsGenres: string[
       const candTags = styleTags(candidate);
       const overlap = seedTags.filter((t) => candTags.includes(t)).length;
       if (overlap) s += Math.min(0.42, overlap * 0.18);
-      else {
-        // Pas de tag explicite : proximité d’énergie = proxy de style
+      else if (seedTags.length && candTags.length) {
+        // Tags incompatibles (comedy vs hiphop) → malus fort
+        s -= 0.18;
+      } else {
+        // Pas de tag explicite : faible proxy énergie (évite dump biblio plat)
         const d = Math.abs(energyProxy(candidate) - energyProxy(seed));
-        s += Math.max(0, 0.22 - d * 0.4);
+        s += Math.max(0, 0.08 - d * 0.3);
       }
     }
   // Réduit le poids du title-overlap brut (poussait les covers « même titre »)
@@ -136,7 +155,7 @@ function scoreContent(candidate: Track, seed: Track | null, prefsGenres: string[
   for (const g of prefsGenres) {
     if (g && blob.includes(g.toLowerCase())) s += 0.1;
   }
-  return Math.min(1, s);
+  return Math.max(0, Math.min(1, s));
 }
 
 function scoreSeq(candidate: Track, seed: Track | null) {
@@ -213,14 +232,34 @@ function cleanCoreTitle(title: string): string {
     .trim();
 }
 
-/** Titres de la biblio proches du seed (même vibe / artiste / énergie). */
+/** Titres de la biblio proches du seed (même vibe / artiste — pas un dump likes). */
 function pickLibraryNearSeed(seed: Track, library: Track[], max: number): Track[] {
-  return library
-    .filter((t) => t?.id && t.id !== seed.id)
-    .map((t) => ({ t, s: proximityToSeed(t, seed) }))
-    .filter((x) => x.s >= 0.34)
+  const seedTags = styleTags(seed);
+  const seedA = artistKey(seed);
+  const scored: { t: Track; s: number }[] = [];
+  for (const t of library) {
+    if (!t?.id || t.id === seed.id) continue;
+    const sameArtist = Boolean(seedA) && artistKey(t) === seedA;
+    const candTags = styleTags(t);
+    const overlap = seedTags.filter((tag) => candTags.includes(tag)).length;
+    const s = proximityToSeed(t, seed);
+
+    if (seedTags.length) {
+      // Seed typé : même artiste OU overlap de tags obligatoire
+      if (!sameArtist && overlap === 0) continue;
+      if (s < 0.38) continue;
+    } else if (sameArtist) {
+      if (s < 0.3) continue;
+    } else {
+      // Seed sans tags + autre artiste : refuser (énergie seule ≠ similarité)
+      continue;
+    }
+    scored.push({ t, s });
+  }
+  const cap = seedTags.length ? max : Math.min(max, 3);
+  return scored
     .sort((a, b) => b.s - a.s)
-    .slice(0, max)
+    .slice(0, cap)
     .map((x) => x.t);
 }
 
@@ -233,13 +272,14 @@ function pickTasteArtists(seed: Track, library: Track[], max: number): string[] 
     const name = t.artists?.[0]?.name?.trim();
     const key = artistKey(t);
     if (!name || !key || key === seedA) continue;
-    let s = 0.2;
+    let s = 0.1;
     if (seedTags.length) {
       const overlap = seedTags.filter((tag) => styleTags(t).includes(tag)).length;
-      s += overlap * 0.28;
+      if (!overlap) continue;
+      s += overlap * 0.3;
     } else {
-      const d = Math.abs(energyProxy(t) - energyProxy(seed));
-      s += Math.max(0, 0.25 - d * 0.45);
+      // Sans tags seed : ne pas élargir via biblio (trop bruité)
+      continue;
     }
     const prev = scored.get(key);
     if (!prev || s > prev.s) scored.set(key, { name, s });
@@ -301,7 +341,6 @@ export async function hybridRank(opts: {
   const mode =
     opts.mode ||
     (prefs.discoveryBias > 0.25 ? 'discover' : 'radio');
-  const w = getWeights(mode);
   const now = new Date();
   const hour = now.getHours();
   const weekend = now.getDay() === 0 || now.getDay() === 6;
@@ -334,6 +373,19 @@ export async function hybridRank(opts: {
   );
 
   const seed = opts.seed || null;
+  const seedTags = seed ? styleTags(seed) : [];
+  // Mode style / radio / album : prioriser la proximité seed (pas les likes hors registre)
+  const baseW = getWeights(mode);
+  const w =
+    mode === 'style' || mode === 'album-style' || mode === 'radio'
+      ? {
+          ...baseW,
+          w_content: Math.max(baseW.w_content, 0.42),
+          w_bandit: Math.min(baseW.w_bandit, 0.12),
+          w_satisf: Math.min(baseW.w_satisf, 0.08),
+        }
+      : baseW;
+
   const scored = opts.candidates
     .filter((t) => t?.id && /^[a-zA-Z0-9_-]{11}$/.test(t.id))
     .filter((t) => !seed || t.id !== seed.id)
@@ -350,10 +402,21 @@ export async function hybridRank(opts: {
         w.w_ctx * s3 +
         w.w_bandit * s4 +
         w.w_satisf * s5;
-      // Affinité biblio : artiste déjà dans likes / playlists / sauvés
       const a = artistKey(track);
-      if (a && tasteArtists.has(a)) s += 0.07;
-      if (likes.has(track.id)) s += 0.05;
+      const candTags = styleTags(track);
+      const tagOverlap = seedTags.filter((tag) => candTags.includes(tag)).length;
+      // Affinité biblio seulement si alignée au seed (sinon Keny Arkana sur comedy)
+      if (a && tasteArtists.has(a)) {
+        if (!seedTags.length || tagOverlap || (seed && a === artistKey(seed))) s += 0.07;
+        else s -= 0.05;
+      }
+      if (likes.has(track.id)) {
+        if (!seedTags.length || tagOverlap || (seed && a === artistKey(seed))) s += 0.05;
+        else s -= 0.04;
+      }
+      if (seedTags.length && candTags.length && tagOverlap === 0 && a !== artistKey(seed!)) {
+        s *= 0.55;
+      }
       // Album-style : boost artiste(s) de l’album seed
       if (
         mode === 'album-style' &&
@@ -468,15 +531,8 @@ export async function similarForUserFast(userId: string, trackId: string, seedTr
   }
   // Hydrate léger (10) pour répondre vite — le full related enrichit ensuite
   const up = await getUpNext(trackId, { hydrateLimit: 10 });
-  let pool = up.filter((t) => t.id !== trackId);
-  try {
-    const taste = getLibraryTasteTracks(userId, 40);
-    const fromLibrary = pickLibraryNearSeed(seed, taste, 8);
-    if (fromLibrary.length) pool = [...pool, ...fromLibrary];
-  } catch {
-    /* ignore */
-  }
-  const tracks = dedupeTracks(pool).slice(0, 40);
+  // Fast path : upNext seedé seulement — PAS de dump biblio (hors registre)
+  const tracks = dedupeTracks(up.filter((t) => t.id !== trackId)).slice(0, 40);
   return { tracks, related: [] as Track[], radio: tracks };
 }
 

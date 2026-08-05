@@ -47,6 +47,8 @@ type PlayerState = {
   lyrics: string | null;
   lyricsTimed: { startMs: number; text: string }[] | null;
   related: Track[];
+  /** Seed pour lequel `related` a été fetché (évite de réinjecter une vieille liste). */
+  relatedSeedId: string | null;
   relatedLoading: boolean;
   /** Remplissage « À suivre » en cours (fast/full). */
   autoRadioLoading: boolean;
@@ -702,6 +704,7 @@ function mergeAutoTracks(seedId: string, pool: Track[], relatedUpdate?: Track[])
   }
   if (relatedUpdate?.length) {
     patch.related = relatedUpdate;
+    patch.relatedSeedId = seedId;
   }
   if (!Object.keys(patch).length) return;
   usePlayer.setState(patch);
@@ -781,9 +784,13 @@ async function ensureAutoRadio(seedId: string) {
   const seq = ++autoRadioSeq;
   usePlayer.setState({ autoRadioLoading: true });
   const promise = (async () => {
-    // Déjà des related en mémoire pour ce titre → injecte immédiatement
+    // Déjà des related en mémoire pour CE titre → injecte immédiatement
     const snap = usePlayer.getState();
-    if (snap.related?.length && snap.current?.id === seedId) {
+    if (
+      snap.related?.length &&
+      snap.relatedSeedId === seedId &&
+      snap.current?.id === seedId
+    ) {
       mergeAutoTracks(seedId, snap.related);
     }
 
@@ -1200,6 +1207,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   lyrics: null,
   lyricsTimed: null,
   related: [],
+  relatedSeedId: null,
   relatedLoading: false,
   autoRadioLoading: false,
   queueHint: null,
@@ -1394,7 +1402,13 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       lyrics: null,
       lyricsTimed: null,
       playError: null,
+      // Nouveau seed → oublier les suggestions de l’ancien titre (sinon même « À suivre »)
+      related: prev?.id === playTrack.id ? get().related : [],
+      relatedSeedId: prev?.id === playTrack.id ? get().relatedSeedId : null,
     });
+
+    // Annule un ensureAutoRadio en vol pour un autre seed
+    if (prev?.id !== playTrack.id) autoRadioSeq += 1;
 
     const gen = bumpPlayGeneration();
     // Ne PAS bumpPrefetchGeneration ici : ça tuait le warm/full du titre suivant.
@@ -2047,7 +2061,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       const RADIO_CAP = 36;
       const upcoming = pool.filter((t) => t.id !== seedTrack!.id).slice(0, RADIO_CAP);
       const mix = [seedTrack, ...upcoming];
-      set({ related: pool });
+      set({ related: pool, relatedSeedId: seedTrack.id });
 
       const cur = get().current;
       const audio = get().audioEl;
@@ -2104,11 +2118,12 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       );
       set({
         related: diversified,
+        relatedSeedId: trackId,
         relatedLoading: false,
         relatedError: diversified.length ? null : 'Aucune suggestion pour ce titre.',
       });
       if (get().autoplay !== false && diversified.length) {
-        mergeAutoTracks(trackId, diversified);
+        mergeAutoTracks(trackId, diversified, diversified);
       }
     } catch (e) {
       if (usePlayer.getState().current?.id === trackId) {
