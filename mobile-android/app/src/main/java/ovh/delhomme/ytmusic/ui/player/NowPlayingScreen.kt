@@ -39,7 +39,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Favorite
@@ -51,7 +50,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.QueueMusic
-import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Save
@@ -121,6 +119,7 @@ import ovh.delhomme.ytmusic.player.PlayerUiState
 import ovh.delhomme.ytmusic.player.RepeatMode
 import ovh.delhomme.ytmusic.ui.components.ArtistLinksText
 import ovh.delhomme.ytmusic.ui.components.MediaCover
+import ovh.delhomme.ytmusic.ui.icons.MixIcon
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -154,6 +153,7 @@ fun NowPlayingScreen(
     val queueProgress = remember { Animatable(0f) }
     var showLyrics by remember { mutableStateOf(false) }
     var showSaveQueue by remember { mutableStateOf(false) }
+    var queuePanelTab by remember { mutableIntStateOf(0) } // 0 = file, 1 = similaires
     var lastPrevTap by remember { mutableLongStateOf(0L) }
     val density = LocalDensity.current
     val dismissPx = with(density) { 110.dp.toPx() }
@@ -488,8 +488,8 @@ fun NowPlayingScreen(
                         onOpenArtist = onOpenArtist,
                         onQueueDrag = ::onQueueDrag,
                         onQueueDragEnd = { settleQueue(it) },
-                        onSkipNext = ::skipNextFromSwipe,
-                        onSkipPrev = ::skipPrevFromSwipe,
+                        onSwipeToSimilar = { queuePanelTab = 1 },
+                        onSwipeToQueue = { queuePanelTab = 0 },
                         modifier = Modifier
                             .fillMaxWidth()
                             .graphicsLayer {
@@ -560,9 +560,10 @@ fun NowPlayingScreen(
                                         onClose = { showLyrics = false },
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(320.dp)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(Color.Black.copy(alpha = 0.35f)),
+                                            // Cover + titre + artiste : carte paroles immersive
+                                            .height(380.dp)
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .background(Color.Black.copy(alpha = 0.42f)),
                                     )
                                 } else {
                                     AsyncImage(
@@ -575,50 +576,50 @@ fun NowPlayingScreen(
                                             .clip(RoundedCornerShape(12.dp))
                                             .clickable { showLyrics = true },
                                     )
-                                }
-                                Spacer(Modifier.height(18.dp))
-                                Text(
-                                    track.title,
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = PlayerFg,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Clip,
-                                    textAlign = TextAlign.Start,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .basicMarquee(
-                                            iterations = Int.MAX_VALUE,
-                                            initialDelayMillis = 1200,
-                                        ),
-                                )
-                                if (onOpenArtist != null) {
-                                    ArtistLinksText(
-                                        track = track,
-                                        onOpenArtist = onOpenArtist,
-                                        color = PlayerMuted,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        maxLines = 1,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .basicMarquee(
-                                                iterations = Int.MAX_VALUE,
-                                                initialDelayMillis = 1600,
-                                            ),
-                                    )
-                                } else {
+                                    Spacer(Modifier.height(18.dp))
                                     Text(
-                                        track.artistLine(),
-                                        color = PlayerMuted,
+                                        track.title,
+                                        style = MaterialTheme.typography.headlineSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = PlayerFg,
                                         maxLines = 1,
                                         overflow = TextOverflow.Clip,
+                                        textAlign = TextAlign.Start,
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .basicMarquee(
                                                 iterations = Int.MAX_VALUE,
-                                                initialDelayMillis = 1600,
+                                                initialDelayMillis = 1200,
                                             ),
                                     )
+                                    if (onOpenArtist != null) {
+                                        ArtistLinksText(
+                                            track = track,
+                                            onOpenArtist = onOpenArtist,
+                                            color = PlayerMuted,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            maxLines = 1,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .basicMarquee(
+                                                    iterations = Int.MAX_VALUE,
+                                                    initialDelayMillis = 1600,
+                                                ),
+                                        )
+                                    } else {
+                                        Text(
+                                            track.artistLine(),
+                                            color = PlayerMuted,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Clip,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .basicMarquee(
+                                                    iterations = Int.MAX_VALUE,
+                                                    initialDelayMillis = 1600,
+                                                ),
+                                        )
+                                    }
                                 }
                             }
                             Spacer(Modifier.height(10.dp))
@@ -702,7 +703,7 @@ fun NowPlayingScreen(
                                             }
                                         }
                                         PlayerChromeAction.Mix -> SecondaryChip(
-                                            Icons.Default.Radio, "Mix", PlayerFg, showLabel = true,
+                                            MixIcon, "Mix", SeekRed, showLabel = false,
                                         ) {
                                             scope.launch {
                                                 val mix = buildRadioQueue(container.api, "track", track.id, track)
@@ -858,13 +859,18 @@ fun NowPlayingScreen(
                     item {
                         QueueSectionHeader(
                             title = "File d'attente",
-                            count = "${ui.userQueueEnd.coerceIn(0, ui.queue.size)}",
-                            shuffle = ui.shuffle,
-                            repeat = ui.repeat,
                             onExpand = { expandQueue() },
                             onSave = { showSaveQueue = true },
-                            onToggleShuffle = player::toggleShuffle,
-                            onCycleRepeat = player::cycleRepeat,
+                            onStartMix = {
+                                val t = ui.track ?: return@QueueSectionHeader
+                                scope.launch {
+                                    val mix = buildRadioQueue(container.api, "track", t.id, t)
+                                    if (mix.isNotEmpty()) {
+                                        player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
+                                        Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
                             onQueueDrag = ::onQueueDrag,
                             onQueueDragEnd = { settleQueue(it) },
                         )
@@ -883,6 +889,15 @@ fun NowPlayingScreen(
                             onLongClick = { onMore?.invoke(item) },
                             onMove = { from, to -> player.moveInQueue(from, to) },
                             onMore = onMore?.let { { it(item) } },
+                            onMix = {
+                                scope.launch {
+                                    val mix = buildRadioQueue(container.api, "track", item.id, item)
+                                    if (mix.isNotEmpty()) {
+                                        player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
+                                        Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
                         )
                     }
                     item {
@@ -924,6 +939,15 @@ fun NowPlayingScreen(
                                 onLongClick = { onMore?.invoke(item) },
                                 onMove = { from, to -> player.moveInQueue(from, to) },
                                 onMore = onMore?.let { { it(item) } },
+                                onMix = {
+                                    scope.launch {
+                                        val mix = buildRadioQueue(container.api, "track", item.id, item)
+                                        if (mix.isNotEmpty()) {
+                                            player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
+                                            Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
                             )
                         }
                     }
@@ -937,10 +961,22 @@ fun NowPlayingScreen(
                         container = container,
                         player = player,
                         listState = queueListState,
+                        panelTab = queuePanelTab,
+                        onPanelTabChange = { queuePanelTab = it },
                         onPlayAt = player::playAt,
                         onMore = onMore,
                         onMove = player::moveInQueue,
                         onSave = { showSaveQueue = true },
+                        onStartMix = {
+                            val t = ui.track ?: return@QueueExpandedBody
+                            scope.launch {
+                                val mix = buildRadioQueue(container.api, "track", t.id, t)
+                                if (mix.isNotEmpty()) {
+                                    player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
+                                    Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
                         onToggleAutoplay = player::toggleAutoplaySuggestions,
                         onCollapsePull = { dy -> onQueueDrag(dy) },
                         onCollapsePullEnd = { settleQueue(it) },
@@ -992,7 +1028,7 @@ private fun SecondaryChip(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(22.dp))
         if (showLabel) {
             Text(
                 label,
@@ -1008,13 +1044,9 @@ private fun SecondaryChip(
 @Composable
 private fun QueueSectionHeader(
     title: String,
-    count: String,
-    shuffle: Boolean,
-    repeat: RepeatMode,
     onExpand: () -> Unit,
     onSave: () -> Unit,
-    onToggleShuffle: () -> Unit,
-    onCycleRepeat: () -> Unit,
+    onStartMix: () -> Unit,
     onQueueDrag: (Float) -> Unit,
     onQueueDragEnd: (velocityY: Float) -> Unit,
 ) {
@@ -1056,23 +1088,12 @@ private fun QueueSectionHeader(
                 )
                 Text(title, fontWeight = FontWeight.SemiBold, color = PlayerFg, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Text(count, style = MaterialTheme.typography.labelMedium, color = PlayerMuted)
-            IconButton(onClick = onCycleRepeat) {
+            IconButton(onClick = onStartMix) {
                 Icon(
-                    if (repeat == RepeatMode.One) Icons.Default.RepeatOne else Icons.Default.Repeat,
-                    contentDescription = when (repeat) {
-                        RepeatMode.Off -> "Boucle désactivée"
-                        RepeatMode.All -> "Boucler toute la file"
-                        RepeatMode.One -> "Boucler le titre"
-                    },
-                    tint = if (repeat != RepeatMode.Off) MaterialTheme.colorScheme.primary else PlayerFg,
-                )
-            }
-            IconButton(onClick = onToggleShuffle) {
-                Icon(
-                    Icons.Default.Shuffle,
-                    contentDescription = if (shuffle) "Aléatoire activé" else "Aléatoire",
-                    tint = if (shuffle) MaterialTheme.colorScheme.primary else PlayerFg,
+                    MixIcon,
+                    contentDescription = "Lancer un mix",
+                    tint = SeekRed,
+                    modifier = Modifier.size(22.dp),
                 )
             }
             IconButton(onClick = onSave) {
@@ -1094,8 +1115,8 @@ private fun QueueExpandedHeader(
     onOpenArtist: ((id: String?, name: String) -> Unit)? = null,
     onQueueDrag: (Float) -> Unit,
     onQueueDragEnd: (velocityY: Float) -> Unit,
-    onSkipNext: () -> Unit,
-    onSkipPrev: () -> Unit,
+    onSwipeToSimilar: () -> Unit,
+    onSwipeToQueue: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var dragVelocity by remember { mutableFloatStateOf(0f) }
@@ -1118,8 +1139,8 @@ private fun QueueExpandedHeader(
                         when (axis) {
                             NowPlayingDragAxis.Vertical -> onQueueDragEnd(dragVelocity * 60f)
                             NowPlayingDragAxis.Horizontal -> when {
-                                totalX < -72f -> onSkipNext()
-                                totalX > 72f -> onSkipPrev()
+                                totalX < -72f -> onSwipeToSimilar()
+                                totalX > 72f -> onSwipeToQueue()
                             }
                             NowPlayingDragAxis.None -> Unit
                         }
@@ -1224,16 +1245,18 @@ private fun QueueExpandedBody(
     container: AppContainer,
     player: PlayerController,
     listState: LazyListState,
+    panelTab: Int,
+    onPanelTabChange: (Int) -> Unit,
     onPlayAt: (Int) -> Unit,
     onMore: ((TrackDto) -> Unit)?,
     onMove: (Int, Int) -> Unit,
     onSave: () -> Unit,
+    onStartMix: () -> Unit,
     onToggleAutoplay: () -> Unit,
     onCollapsePull: (Float) -> Unit = {},
     onCollapsePullEnd: (Float) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var panelTab by remember { mutableIntStateOf(0) } // 0 = file, 1 = similaires
     var tabDragX by remember { mutableFloatStateOf(0f) }
     val boundary = ui.userQueueEnd.coerceIn(0, ui.queue.size)
     val userTracks = ui.queue.take(boundary)
@@ -1242,6 +1265,15 @@ private fun QueueExpandedBody(
     var similarTracks by remember { mutableStateOf<List<TrackDto>>(emptyList()) }
     var similarLoading by remember { mutableStateOf(false) }
     val seedId = ui.track?.id
+    val scope = rememberCoroutineScope()
+    val startMixFor: (TrackDto) -> Unit = { track ->
+        scope.launch {
+            val mix = buildRadioQueue(container.api, "track", track.id, track)
+            if (mix.isNotEmpty()) {
+                player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
+            }
+        }
+    }
 
     val collapseWhenTop = remember(listState) {
         object : NestedScrollConnection {
@@ -1299,8 +1331,8 @@ private fun QueueExpandedBody(
                 detectHorizontalDragGestures(
                     onDragEnd = {
                         when {
-                            tabDragX < -72f && panelTab == 0 -> panelTab = 1
-                            tabDragX > 72f && panelTab == 1 -> panelTab = 0
+                            tabDragX < -72f && panelTab == 0 -> onPanelTabChange(1)
+                            tabDragX > 72f && panelTab == 1 -> onPanelTabChange(0)
                         }
                         tabDragX = 0f
                     },
@@ -1318,13 +1350,13 @@ private fun QueueExpandedBody(
             QueuePanelTab(
                 label = "File d'attente",
                 selected = panelTab == 0,
-                onClick = { panelTab = 0 },
+                onClick = { onPanelTabChange(0) },
                 modifier = Modifier.weight(1f),
             )
             QueuePanelTab(
                 label = "Similaires",
                 selected = panelTab == 1,
-                onClick = { panelTab = 1 },
+                onClick = { onPanelTabChange(1) },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -1337,31 +1369,12 @@ private fun QueueExpandedBody(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.End,
             ) {
-                if (ui.queueIndex > 0) {
-                    IconButton(onClick = { player.clearPlayedFromQueue() }) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "Effacer déjà joués",
-                            tint = PlayerMuted,
-                        )
-                    }
-                }
-                IconButton(onClick = player::cycleRepeat) {
+                IconButton(onClick = onStartMix) {
                     Icon(
-                        if (ui.repeat == RepeatMode.One) Icons.Default.RepeatOne else Icons.Default.Repeat,
-                        contentDescription = when (ui.repeat) {
-                            RepeatMode.Off -> "Boucle désactivée"
-                            RepeatMode.All -> "Boucler toute la file"
-                            RepeatMode.One -> "Boucler le titre"
-                        },
-                        tint = if (ui.repeat != RepeatMode.Off) MaterialTheme.colorScheme.primary else PlayerFg,
-                    )
-                }
-                IconButton(onClick = player::toggleShuffle) {
-                    Icon(
-                        Icons.Default.Shuffle,
-                        contentDescription = if (ui.shuffle) "Aléatoire activé" else "Aléatoire",
-                        tint = if (ui.shuffle) MaterialTheme.colorScheme.primary else PlayerFg,
+                        MixIcon,
+                        contentDescription = "Lancer un mix",
+                        tint = SeekRed,
+                        modifier = Modifier.size(22.dp),
                     )
                 }
                 IconButton(onClick = onSave) {
@@ -1382,6 +1395,7 @@ private fun QueueExpandedBody(
                         onLongClick = { onMore?.invoke(item) },
                         onMove = onMove,
                         onMore = onMore?.let { { it(item) } },
+                        onMix = { startMixFor(item) },
                     )
                 }
                 item {
@@ -1433,6 +1447,7 @@ private fun QueueExpandedBody(
                         onLongClick = { onMore?.invoke(item) },
                         onMove = onMove,
                         onMore = onMore?.let { { it(item) } },
+                        onMix = { startMixFor(item) },
                     )
                 }
                 item { Spacer(Modifier.height(48.dp)) }
@@ -1507,6 +1522,7 @@ private fun QueueExpandedBody(
                                 onLongClick = { onMore?.invoke(item) },
                                 onMove = { _, _ -> },
                                 onMore = onMore?.let { { it(item) } },
+                                onMix = { startMixFor(item) },
                             )
                         }
                     }
@@ -1622,6 +1638,7 @@ private fun QueueTrackRow(
     onLongClick: () -> Unit,
     onMove: (from: Int, to: Int) -> Unit,
     onMore: (() -> Unit)? = null,
+    onMix: (() -> Unit)? = null,
 ) {
     var dragAccum by remember { mutableFloatStateOf(0f) }
     Row(
@@ -1694,6 +1711,16 @@ private fun QueueTrackRow(
                     }
                 }
         }
+        if (onMix != null) {
+            IconButton(onClick = onMix) {
+                Icon(
+                    MixIcon,
+                    contentDescription = "Lancer un mix",
+                    tint = SeekRed,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
         if (onMore != null) {
             IconButton(onClick = onMore) {
                 Icon(
@@ -1749,17 +1776,29 @@ private fun InlineSyncedLyrics(
         }
     }
 
-    Column(modifier = modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+    Column(modifier = modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                "Paroles",
-                style = MaterialTheme.typography.labelLarge,
-                color = PlayerMuted,
-            )
+            Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                Text(
+                    track.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = PlayerFg,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    track.artistLine(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = PlayerMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
                 "Fermer",
                 color = PlayerFg,
@@ -1770,6 +1809,7 @@ private fun InlineSyncedLyrics(
                     .padding(horizontal = 10.dp, vertical = 4.dp),
             )
         }
+        Spacer(Modifier.height(6.dp))
         when {
             loading -> Text(
                 "Chargement…",
@@ -1779,7 +1819,7 @@ private fun InlineSyncedLyrics(
             timed.isNotEmpty() -> {
                 LazyColumn(
                     state = listState,
-                    contentPadding = PaddingValues(vertical = 24.dp),
+                    contentPadding = PaddingValues(vertical = 20.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     itemsIndexed(timed) { i, line ->
@@ -1823,7 +1863,7 @@ private fun InlineSyncedLyrics(
                 }
             }
             else -> Text(
-                "Paroles indisponibles pour ce titre.",
+                "Paroles indisponibles",
                 color = PlayerMuted,
                 modifier = Modifier.padding(top = 24.dp),
             )

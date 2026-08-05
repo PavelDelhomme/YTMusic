@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type TouchEvent } from 'react';
-import { ListMusic, Mic2, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles, Trash2 } from 'lucide-react';
+import { ListMusic, Mic2, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles } from 'lucide-react';
 import { api, thumb, type Track } from '../api';
 import { usePlayer } from '../store/player';
 import { CoverImage } from './CoverImage';
@@ -154,7 +154,6 @@ export function NowPlaying({
   const autoplay = usePlayer((s) => s.autoplay);
   const related = usePlayer((s) => s.related);
   const playAt = usePlayer((s) => s.playAt);
-  const clearPlayedFromQueue = usePlayer((s) => s.clearPlayedFromQueue);
   const appendRelated = usePlayer((s) => s.appendRelated);
   const loadRelated = usePlayer((s) => s.loadRelated);
   const toggleAutoplay = usePlayer((s) => s.toggleAutoplay);
@@ -471,16 +470,6 @@ export function NowPlaying({
               <div>
                 <section>
                     <div className="mb-2 flex items-center justify-end gap-0.5 px-1 pt-0.5">
-                      {playedBefore.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => clearPlayedFromQueue()}
-                          title="Effacer déjà joués"
-                          className="flex h-8 w-8 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
                       <button
                         type="button"
                         onClick={cycleRepeat}
