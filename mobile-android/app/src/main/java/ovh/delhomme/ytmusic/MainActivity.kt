@@ -62,6 +62,7 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import ovh.delhomme.ytmusic.BuildConfig
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.ListenBody
 import ovh.delhomme.ytmusic.data.TrackDto
@@ -125,6 +126,10 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_OPEN_PLAYER = "ovh.delhomme.ytmusic.OPEN_PLAYER"
+        /** Injection session (tests ADB) — build debug uniquement. */
+        const val EXTRA_ACCESS_TOKEN = "ytm_access_token"
+        const val EXTRA_REFRESH_TOKEN = "ytm_refresh_token"
+        const val EXTRA_USER_EMAIL = "ytm_user_email"
     }
 }
 
@@ -182,7 +187,22 @@ fun YtMusicAppContent(
     }
 
     LaunchedEffect(Unit) {
-        loggedIn = container.validateSession()
+        val intent = activity?.intent
+        val injected = intent?.getStringExtra(MainActivity.EXTRA_ACCESS_TOKEN)?.trim().orEmpty()
+        if (BuildConfig.DEBUG && injected.isNotEmpty()) {
+            container.tokenStore.saveSession(
+                injected,
+                intent?.getStringExtra(MainActivity.EXTRA_REFRESH_TOKEN),
+                intent?.getStringExtra(MainActivity.EXTRA_USER_EMAIL),
+                null,
+            )
+            intent?.removeExtra(MainActivity.EXTRA_ACCESS_TOKEN)
+            intent?.removeExtra(MainActivity.EXTRA_REFRESH_TOKEN)
+            intent?.removeExtra(MainActivity.EXTRA_USER_EMAIL)
+            loggedIn = true
+        } else {
+            loggedIn = container.validateSession()
+        }
     }
 
     // Si une piste tourne déjà (service survivant) → mini-player / éventuellement notif
@@ -866,12 +886,17 @@ private fun MainTabs(
                         kind = kind,
                         id = id,
                         reloadToken = detailReloadToken,
+                        player = player,
                         onBack = { nav.popBackStack() },
                         onPlay = onPlayTracks,
                         onPlayNamed = onPlayNamed,
                         onMore = { track, playlistId ->
                             menuTrack = track
                             menuPlaylistId = playlistId
+                        },
+                        onOpenArtist = { artistId, name -> openArtist(artistId, name) },
+                        onOpenAddToPlaylist = { track ->
+                            addToPlaylistTrack = track
                         },
                     )
                 }

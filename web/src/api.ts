@@ -561,7 +561,14 @@ export const api = {
     }>(`/api/artist/${id}`),
   album: (id: string) =>
     req<{
-      album: { id: string; title: string; year?: string; artists: Track['artists']; thumbnails: Track['thumbnails'] };
+      album: {
+        id: string;
+        title: string;
+        year?: string;
+        releaseType?: 'Album' | 'EP' | 'Single';
+        artists: Track['artists'];
+        thumbnails: Track['thumbnails'];
+      };
       tracks: Track[];
     }>(`/api/album/${id}`),
   playlist: (id: string) =>

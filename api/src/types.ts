@@ -30,6 +30,8 @@ export type AlbumMeta = {
   id: string;
   title: string;
   year?: string;
+  /** Album | EP | Single — dérivé du sous-titre YTM ou du nb de pistes. */
+  releaseType?: 'Album' | 'EP' | 'Single';
   artists: { name: string; id?: string }[];
   thumbnails: { url: string; width?: number; height?: number }[];
 };

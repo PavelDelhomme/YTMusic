@@ -56,22 +56,27 @@ class AuthViewModel(private val container: AppContainer) : ViewModel() {
 
     fun submit() {
         val s = _state.value
-        if (s.email.isBlank() || s.password.isBlank()) {
+        val email = s.email.trim().trim { it <= ' ' || it.code in 0x2000..0x200F || it.code == 0xFEFF }
+        // ADB / clavier : espaces, NBSP, zero-width en fin de mdp
+        val password = s.password
+            .trim()
+            .trim { it <= ' ' || it.code in 0x2000..0x200F || it.code == 0xFEFF }
+        if (email.isBlank() || password.isBlank()) {
             _state.value = s.copy(error = "Email et mot de passe requis")
             return
         }
         viewModelScope.launch {
-            _state.value = s.copy(loading = true, error = null)
+            _state.value = s.copy(loading = true, error = null, email = email, password = password)
             try {
                 val res = if (s.registerMode) {
                     container.api.register(
-                        RegisterBody(s.email.trim(), s.password, s.name.ifBlank { null }),
+                        RegisterBody(email, password, s.name.ifBlank { null }),
                     )
                 } else {
                     container.api.login(
                         LoginBody(
-                            s.email.trim(),
-                            s.password,
+                            email,
+                            password,
                             s.totp.ifBlank { null },
                         ),
                     )

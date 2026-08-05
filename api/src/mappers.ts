@@ -203,6 +203,24 @@ export function extractYear(raw: unknown): string | undefined {
   return m?.[1];
 }
 
+/** Album / EP / Single depuis le header YTM, sinon heuristique sur le nombre de titres. */
+export function inferAlbumReleaseType(
+  header: unknown,
+  trackCount: number,
+): 'Album' | 'EP' | 'Single' {
+  const h = (header || {}) as Record<string, unknown>;
+  const blob = [h.subtitle, h.second_subtitle, h.strapline, h.year]
+    .map((x) => asText(x) || (typeof x === 'string' ? x : ''))
+    .filter(Boolean)
+    .join(' • ');
+  if (/\bsingle\b/i.test(blob)) return 'Single';
+  if (/\bEP\b/i.test(blob)) return 'EP';
+  if (/\balbum\b/i.test(blob)) return 'Album';
+  if (trackCount <= 1) return 'Single';
+  if (trackCount <= 6) return 'EP';
+  return 'Album';
+}
+
 function pageTypeOf(run: any): string {
   return (
     run?.endpoint?.payload?.browseEndpointContextSupportedConfigs
