@@ -333,7 +333,11 @@ export function PlayerBar({
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-yt-muted"
             title="J'aime"
           >
-            <Heart className={`h-5 w-5 ${isLiked(current.id) ? 'fill-yt-red text-yt-red' : ''}`} />
+            <Heart
+              className={`h-5 w-5 ${
+                isLiked(current.id) ? 'fill-yt-red text-yt-red' : 'fill-none text-yt-muted'
+              }`}
+            />
           </button>
           <button
             type="button"
@@ -457,7 +461,11 @@ export function PlayerBar({
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white"
             title="J'aime"
           >
-            <Heart className={`h-5 w-5 ${isLiked(current.id) ? 'fill-yt-red text-yt-red' : ''}`} />
+            <Heart
+              className={`h-5 w-5 ${
+                isLiked(current.id) ? 'fill-yt-red text-yt-red' : 'fill-none text-yt-muted'
+              }`}
+            />
           </button>
           <button
             type="button"

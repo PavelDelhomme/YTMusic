@@ -93,6 +93,19 @@ function applyGains() {
   }
 }
 
+/** Ferme le graphe EQ (nécessaire après swap A/B d’éléments audio). */
+export async function rewireEqualizer(audio: HTMLAudioElement | null) {
+  if (runtime) {
+    try {
+      await runtime.ctx.close();
+    } catch {
+      /* ignore */
+    }
+    runtime = null;
+  }
+  await wireEqualizer(audio);
+}
+
 /** Branche l’égaliseur sur l’élément audio (idempotent). */
 export async function wireEqualizer(audio: HTMLAudioElement | null) {
   if (!audio) return;

@@ -171,10 +171,26 @@ try {
 
 export function upsertTrack(track: Track) {
   const clean = sanitizeTrack(track);
+  const prev = getTrackPayload(clean.id);
+  const merged = prev
+    ? sanitizeTrack({
+        ...prev,
+        ...clean,
+        title: clean.title || prev.title,
+        artists: clean.artists?.length ? clean.artists : prev.artists,
+        thumbnails: clean.thumbnails?.length ? clean.thumbnails : prev.thumbnails,
+        album: clean.album || prev.album,
+        duration: clean.duration || prev.duration,
+        durationSeconds:
+          typeof clean.durationSeconds === 'number' && clean.durationSeconds > 0
+            ? clean.durationSeconds
+            : prev.durationSeconds,
+      })
+    : clean;
   db.prepare(
     `INSERT INTO tracks_cache (id, payload, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`,
-  ).run(clean.id, JSON.stringify(clean), Date.now());
+  ).run(merged.id, JSON.stringify(merged), Date.now());
 }
 
 export function getTrackPayload(id: string): Track | null {
