@@ -12,6 +12,7 @@ import {
   pinFullTrack,
   clearPinnedFull,
 } from '../lib/streamPrefetch';
+import { eqNeedsSameOrigin } from '../lib/equalizer';
 import { trackDurationSeconds, formatClock } from '../lib/time';
 import { useSession } from './session';
 import { useLibrary } from './library';
@@ -542,16 +543,27 @@ function coalescePlay(gen: number, run: () => Promise<void>): Promise<void> {
           for (const w of waiters) w();
         }
       })();
-    }, 60);
+    }, 30);
   });
 }
 
 async function resolveCachedUrl(trackId: string) {
-  // 1) Cache offline IndexedDB
-  // 2) Prefetch full (Cache Storage) → play instantané
-  // 3) Stream API — warmFormat seul (pas warmHead : double-download avec <audio>)
+  // 1) Cache offline / prefetch full blob → instant
   const prefetched = await resolvePrefetchedPlayUrl(trackId);
   if (prefetched) return prefetched;
+
+  // 2) URL directe googlevideo (comme Android) — beaucoup plus rapide que le proxy Node.
+  //    Skip si EQ Web Audio branché (CORS same-origin requis).
+  if (!eqNeedsSameOrigin()) {
+    try {
+      const r = await api.streamUrl(trackId);
+      if (r?.url && /^https?:\/\//i.test(r.url)) return r.url;
+    } catch {
+      /* fallback proxy */
+    }
+  }
+
+  // 3) Proxy /api/stream/:id
   void warmFormat(trackId);
   return resolvePlayUrl(trackId);
 }
@@ -575,14 +587,14 @@ function schedulePrefetch(queue: Track[], queueIndex: number) {
   const loopOne = usePlayer.getState().repeat === 'one';
   const durationsSec = playable.map((t) => trackDurationSeconds(t));
   prefetchAround(ids, idx, {
-    ahead: saveData ? 1 : 3,
-    behind: 1,
-    fullAhead: saveData ? 0 : 2,
-    delayFullMs: saveData ? 2500 : 150,
+    ahead: saveData ? 1 : 2,
+    behind: 0,
+    fullAhead: saveData ? 0 : 1,
+    delayFullMs: saveData ? 4000 : 2500,
     durationsSec,
     loopOne,
   });
-  // Double-buffer : charge le suivant (ou le même en boucle one) dans le standby
+  // Standby : blob seulement (pas de 2ᵉ stream concurrent qui provoque 502)
   if (loopOne) {
     const cur = playable[idx];
     if (cur) {
@@ -606,15 +618,14 @@ async function armStandby(trackId: string) {
   if (standby.dataset.trackId === trackId && standby.readyState >= 2) return;
   const my = ++standbyArmGen;
   try {
+    // Chauffe juste le format API (léger). Blob full si déjà en cache.
     void warmFormat(trackId);
-    const src = await resolveCachedUrl(trackId);
+    const blobUrl = await resolvePrefetchedPlayUrl(trackId);
     if (my !== standbyArmGen) return;
-    if (!src) return;
-    // Ne pas écraser si l’utilisateur a déjà sauté ailleurs
-    const cur = usePlayer.getState().current?.id;
-    if (cur === trackId) return;
+    if (!blobUrl) return; // pas de 2ᵉ download stream pendant la lecture
+    if (usePlayer.getState().current?.id === trackId) return;
     standby.pause();
-    standby.src = src;
+    standby.src = blobUrl;
     standby.dataset.trackId = trackId;
     standby.preload = 'auto';
     try {
@@ -803,42 +814,69 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   }
   if (gen !== playGeneration) return;
 
-  el.src = src;
-  el.dataset.trackId = track.id;
-  el.muted = false;
-  el.volume = targetVol;
-
-  try {
-    el.load();
-  } catch {
-    /* ignore */
-  }
-
-  let playPromise: Promise<void>;
-  try {
-    playPromise = el.play();
-  } catch {
-    el.volume = targetVol;
+  const tryPlaySrc = async (playSrc: string) => {
+    el.src = playSrc;
+    el.dataset.trackId = track.id;
     el.muted = false;
-    return;
-  }
+    el.volume = targetVol;
+    try {
+      el.load();
+    } catch {
+      /* ignore */
+    }
+    return el.play();
+  };
+
+  let usedSrc = src;
   if (gen === playGeneration) {
     usePlayer.setState({ isLoading: false, isPlaying: true, playError: null });
   }
-  void playPromise
-    .then(() => {
-      const s = usePlayer.getState();
-      if (s.audioEl === el) {
-        el.muted = false;
-        el.volume = s.volume > 0 ? s.volume : targetVol;
+
+  const isDirectCdn =
+    /^https?:\/\//i.test(src) &&
+    !src.includes('/api/stream/') &&
+    !src.startsWith('blob:');
+
+  try {
+    await tryPlaySrc(src);
+  } catch (err) {
+    if (gen !== playGeneration) return;
+    const name = err instanceof DOMException ? err.name : '';
+    if (name === 'AbortError') return;
+    // CDN 403 (IP VPS ≠ navigateur) ou NotSupported → proxy
+    if (isDirectCdn) {
+      const proxySrc = await resolvePlayUrl(track.id);
+      if (gen !== playGeneration) return;
+      usedSrc = proxySrc;
+      try {
+        await tryPlaySrc(proxySrc);
+      } catch (err2) {
+        if (gen !== playGeneration) return;
+        const n2 = err2 instanceof DOMException ? err2.name : '';
+        if (n2 === 'AbortError') return;
+        throw new Error('Lecture bloquée ou interrompue');
       }
-    })
-    .catch(() => {
-      if (usePlayer.getState().audioEl === el) {
-        el.muted = false;
-        el.volume = targetVol;
+    } else {
+      try {
+        el.load();
+        await el.play();
+      } catch (err2) {
+        if (gen !== playGeneration) return;
+        const n2 = err2 instanceof DOMException ? err2.name : '';
+        if (n2 === 'AbortError') return;
+        throw new Error('Lecture bloquée ou interrompue');
       }
-    });
+    }
+  }
+  if (gen !== playGeneration) return;
+
+  {
+    const s = usePlayer.getState();
+    if (s.audioEl === el) {
+      el.muted = false;
+      el.volume = s.volume > 0 ? s.volume : targetVol;
+    }
+  }
 
   void metaPromise.then((meta) => {
     if (gen !== playGeneration) return;
@@ -868,26 +906,14 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
     refreshMediaSession();
   });
 
-  try {
-    await playPromise;
-  } catch (err) {
-    if (gen !== playGeneration) return;
-    const name = err instanceof DOMException ? err.name : '';
-    if (name === 'AbortError') return;
-    try {
-      el.load();
-      await el.play();
-    } catch (err2) {
-      if (gen !== playGeneration) return;
-      const n2 = err2 instanceof DOMException ? err2.name : '';
-      if (n2 === 'AbortError') return;
-      throw new Error('Lecture bloquée ou interrompue');
-    }
-  }
-  if (gen !== playGeneration) return;
-
   if (typeof console !== 'undefined') {
-    const via = srcFromStandby ? 'standby-url' : 'cold';
+    const via = srcFromStandby
+      ? 'standby-url'
+      : usedSrc.includes('googlevideo.com') || usedSrc.includes('googleusercontent')
+        ? 'direct'
+        : usedSrc.startsWith('blob:')
+          ? 'blob'
+          : 'proxy';
     console.info(`[play] ${track.id} ${via} ${(performance.now() - t0).toFixed(0)}ms`);
   }
 
