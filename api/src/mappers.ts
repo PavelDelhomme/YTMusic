@@ -627,7 +627,8 @@ export function mapListItem(item: any, fallbackThumbs?: Thumb[]): Track | null {
   if (!title && item.item_type === 'artist') {
     title = 'Artiste';
   }
-  if (!title) title = 'Sans titre';
+  // Ne pas figer « Sans titre » : titre vide → hydrateTracks/getTrack corrigera
+  if (!title) title = '';
 
   const durationTextRaw = item.duration?.text || asText(item.duration);
   const durationSeconds =
@@ -697,7 +698,7 @@ export function mapTwoRowItem(item: any, fallbackThumbs?: Thumb[]): Track | null
           : '') ||
         asText(item.name) ||
         '',
-    ) || 'Sans titre';
+    ) || '';
   // Normalise endpoint pour inferType
   if (!item.endpoint?.payload && (item.navigationEndpoint || item.endpoint?.browseEndpoint)) {
     const ne = item.navigationEndpoint || item.endpoint;

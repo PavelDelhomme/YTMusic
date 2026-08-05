@@ -63,6 +63,13 @@ free_port() {
 start_server() {
   echo "  Démarrage API (tsx, détaché) → $LOG"
   cd "$ROOT"
+  # Charge .env dans l’environnement process (JWT_SECRET stable → évite 401 après restart)
+  if [[ -f "$ROOT/.env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$ROOT/.env"
+    set +a
+  fi
   # Nouvelle session : survit à la fermeture du shell parent (Cursor / make)
   # Évite que $! pointe seulement sur un wrapper npx tué avec le groupe.
   setsid nohup "$ROOT/node_modules/.bin/tsx" api/src/index.ts >>"$LOG" 2>&1 </dev/null &

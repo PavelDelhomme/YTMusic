@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { db, getTrackPayload, upsertTrack } from './db.js';
-import { sanitizeTrack, sanitizeLibraryItem } from './mappers.js';
+import { sanitizeTrack, sanitizeLibraryItem, isWeakTitle } from './mappers.js';
 import type { Track } from './types.js';
 
 export type LibraryPlaylist = {
@@ -696,21 +696,50 @@ export function deletePlaylist(userId: string, playlistId: string) {
   db.prepare('DELETE FROM playlists WHERE id = ?').run(playlistId);
 }
 
-export function addToPlaylist(userId: string, playlistId: string, track: Track) {
+export async function addToPlaylist(userId: string, playlistId: string, track: Track) {
   const pl = db
     .prepare('SELECT id FROM playlists WHERE id = ? AND user_id = ?')
     .get(playlistId, userId);
   if (!pl) throw new Error('Playlist introuvable');
-  upsertTrack(track);
+  let hydrated = track;
+  if (isWeakTitle(track?.title, track?.id) || !(track?.artists || []).length) {
+    const { hydrateTrack } = await import('./yt.js');
+    hydrated = await hydrateTrack(track);
+  }
+  upsertTrack(hydrated);
   const max = db
     .prepare('SELECT COALESCE(MAX(position), -1) as m FROM playlist_tracks WHERE playlist_id = ?')
     .get(playlistId) as { m: number };
   db.prepare(
     `INSERT INTO playlist_tracks (playlist_id, track_id, position, added_at) VALUES (?, ?, ?, ?)
      ON CONFLICT(playlist_id, track_id) DO NOTHING`,
-  ).run(playlistId, track.id, max.m + 1, Date.now());
+  ).run(playlistId, hydrated.id, max.m + 1, Date.now());
   db.prepare('UPDATE playlists SET updated_at = ? WHERE id = ?').run(Date.now(), playlistId);
   return listPlaylists(userId).find((p) => p.id === playlistId)!;
+}
+
+/** Répare les titres « Sans titre » dans la biblio (playlists / likes / songs). */
+export async function repairLibraryTrackMeta(userId: string) {
+  const { hydrateTracks } = await import('./yt.js');
+  const lib = getFullLibrary(userId);
+  const byId = new Map<string, Track>();
+  const push = (t: Track | null | undefined) => {
+    if (!t?.id || !/^[a-zA-Z0-9_-]{11}$/.test(t.id)) return;
+    if (!isWeakTitle(t.title, t.id) && (t.artists || []).length) return;
+    byId.set(t.id, t);
+  };
+  for (const t of lib.liked || []) push(t);
+  for (const t of lib.songs || []) push(t);
+  for (const p of lib.playlists || []) for (const t of p.tracks || []) push(t);
+  const fixed = await hydrateTracks([...byId.values()], { limit: 80, concurrency: 5 });
+  let repaired = 0;
+  for (const t of fixed) {
+    if (!isWeakTitle(t.title, t.id)) {
+      upsertTrack(t);
+      repaired += 1;
+    }
+  }
+  return { scanned: byId.size, repaired, library: getFullLibrary(userId) };
 }
 
 export function removeFromPlaylist(userId: string, playlistId: string, trackId: string) {
