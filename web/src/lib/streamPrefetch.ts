@@ -16,8 +16,8 @@ export const FULL_PRELOAD_MAX_SEC = 10 * 60;
 const WARM_CONCURRENCY = 4;
 /** Prefetch tête en parallèle */
 const HEAD_CONCURRENCY = 3;
-/** Prefetch full — 2 en parallèle (suivant + suivant+1) */
-const FULL_CONCURRENCY = 2;
+/** Prefetch full — 1 à la fois (évite 502 / saturation avec le titre en lecture) */
+const FULL_CONCURRENCY = 1;
 
 type HeadEntry = { buf: ArrayBuffer; at: number };
 
@@ -91,6 +91,12 @@ function noteFetchResult(res: Response | null, err?: unknown): void {
   if (res.status === 0 || res.status === 502 || res.status === 503 || res.status === 504) {
     markStreamFailure(`HTTP ${res.status}`);
   }
+}
+
+/** Prefetch arrière-plan : ne déclenche PAS le circuit-breaker (évite spam 502). */
+function notePrefetchResult(res: Response | null, _err?: unknown): void {
+  if (!res) return;
+  if (res.ok || res.status === 206) markStreamOk();
 }
 
 function isVideoId(id: string) {
@@ -203,7 +209,7 @@ export async function warmHead(id: string, gen?: number, bytes = HEAD_BYTES): Pr
         Range: `bytes=0-${bytes - 1}`,
       },
     });
-    noteFetchResult(res);
+    notePrefetchResult(res);
     if (gen !== undefined && gen !== prefetchGeneration) return;
     if (!res.ok && res.status !== 206) return;
     const buf = await res.arrayBuffer();
@@ -216,7 +222,7 @@ export async function warmHead(id: string, gen?: number, bytes = HEAD_BYTES): Pr
       headCache.delete(first);
     }
   } catch (e) {
-    noteFetchResult(null, e);
+    notePrefetchResult(null, e);
   } finally {
     inflightHead.delete(id);
   }
@@ -243,14 +249,14 @@ export async function warmFull(id: string, gen?: number): Promise<void> {
       credentials: 'include',
       headers: await authHeaders(),
     });
-    noteFetchResult(res);
+    notePrefetchResult(res);
     if (gen !== undefined && gen !== prefetchGeneration) return;
-    if (!res.ok) return;
+    if (!res.ok) return; // 502 etc. : silence, pas de circuit-breaker
     await cache.put(url, res.clone());
     bumpFull(id);
     await evictFull(cache);
   } catch (e) {
-    noteFetchResult(null, e);
+    notePrefetchResult(null, e);
   } finally {
     inflightFull.delete(id);
   }
@@ -358,42 +364,36 @@ export function prefetchAround(
     clearPinnedFull();
   }
 
-  const priorityFull: string[] = [];
-  if (currentId && shouldFullCache(durAt(idx))) priorityFull.push(currentId);
+  // Uniquement le SUIVANT en full (pas le courant = double download + 502)
   const nextId = ids[idx + 1];
-  if (nextId && shouldFullCache(durAt(idx + 1))) priorityFull.push(nextId);
-
   if (opts?.loopOne && currentId) {
     void warmFormat(currentId).then(() => {
       if (gen !== prefetchGeneration) return;
       void warmFull(currentId, gen);
     });
-  } else if (priorityFull.length) {
-    void warmFormats(priorityFull).then(() => {
-      if (gen !== prefetchGeneration) return;
-      for (const id of priorityFull) void warmFull(id, gen);
-    });
+  } else if (nextId && shouldFullCache(durAt(idx + 1))) {
+    void warmFormat(nextId);
   }
 
   void warmFormats(unique).then(() => {
     if (gen !== prefetchGeneration) return;
     const ordered = [
       ids[idx + 1],
-      ids[idx],
       ids[idx + 2],
+      ids[idx],
       ids[idx + 3],
-      ids[idx + 4],
       ids[idx - 1],
     ].filter((id): id is string => Boolean(id) && unique.includes(id));
     return runPool([...new Set(ordered)], HEAD_CONCURRENCY, (id) => {
       const n = ids[idx + 1];
-      const bytes = id === n || id === currentId ? HEAD_NEXT_BYTES : HEAD_BYTES;
+      const bytes = id === n ? HEAD_NEXT_BYTES : HEAD_BYTES;
       return warmHead(id, gen, bytes);
     }, gen);
   });
 
   const fullIds: string[] = [];
-  for (let i = 0; i <= fullAhead; i++) {
+  // fullAhead à partir de +1 seulement (pas le courant)
+  for (let i = 1; i <= fullAhead; i++) {
     const t = ids[idx + i];
     if (t && shouldFullCache(durAt(idx + i))) fullIds.push(t);
   }
