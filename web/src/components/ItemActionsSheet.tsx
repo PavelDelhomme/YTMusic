@@ -211,7 +211,9 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
               className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white"
               onClick={() => void toggleLike(item)}
             >
-              <Heart className={`h-6 w-6 ${liked ? 'fill-yt-red text-yt-red' : ''}`} />
+              <Heart
+                className={`h-6 w-6 ${liked ? 'fill-yt-red text-yt-red' : 'fill-none text-yt-muted'}`}
+              />
             </button>
           )}
           <button

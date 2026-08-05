@@ -86,6 +86,7 @@ export function Layout() {
   const likedPlaylists = useLibrary((s) => s.likedPlaylists);
   const createPlaylist = useLibrary((s) => s.createPlaylist);
   const bindAudio = usePlayer((s) => s.bindAudio);
+  const bindStandbyAudio = usePlayer((s) => s.bindStandbyAudio);
   const hydrate = usePlayer((s) => s.hydrate);
   const setProgress = usePlayer((s) => s.setProgress);
   const setDuration = usePlayer((s) => s.setDuration);
@@ -94,6 +95,7 @@ export function Layout() {
   const currentTrack = usePlayer((s) => s.current);
   const hasPlayback = Boolean(currentTrack);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const standbyRef = useRef<HTMLAudioElement>(null);
   const lastRemoteAt = useRef(0);
   const sugReq = useRef(0);
 
@@ -215,10 +217,11 @@ export function Layout() {
 
   useEffect(() => {
     bindAudio(audioRef.current);
+    bindStandbyAudio(standbyRef.current);
     if (audioRef.current) {
       void wireEqualizer(audioRef.current);
     }
-  }, [bindAudio]);
+  }, [bindAudio, bindStandbyAudio]);
 
   // Play/pause, suivant, précédent : clavier + touches média OS, toutes pages
   useEffect(() => installMediaKeys(), []);
@@ -707,20 +710,22 @@ export function Layout() {
         ref={audioRef}
         preload="auto"
         playsInline
-        // crossOrigin nécessaire pour Web Audio EQ sur streams proxifiés
         crossOrigin="anonymous"
-        // Requis pour Media Session / touches média OS
-        onPlay={() => {
+        onPlay={(e) => {
+          if (e.currentTarget !== usePlayer.getState().audioEl) return;
           usePlayer.setState({ isPlaying: true });
           void resumeEqContext();
         }}
-        onPlaying={() => {
+        onPlaying={(e) => {
+          if (e.currentTarget !== usePlayer.getState().audioEl) return;
           usePlayer.setState({ isPlaying: true });
         }}
-        onPause={() => {
+        onPause={(e) => {
+          if (e.currentTarget !== usePlayer.getState().audioEl) return;
           usePlayer.setState({ isPlaying: false });
         }}
-        onEnded={() => {
+        onEnded={(e) => {
+          if (e.currentTarget !== usePlayer.getState().audioEl) return;
           const s = usePlayer.getState();
           if (s.sleepUntilEnd) {
             s.setSleepTimer(null, null);
@@ -735,12 +740,62 @@ export function Layout() {
           void next({ fromEnded: true });
         }}
         onTimeUpdate={(e) => {
+          if (e.currentTarget !== usePlayer.getState().audioEl) return;
           const t = e.currentTarget.currentTime;
           const d = e.currentTarget.duration || 0;
           setProgress(t);
           reportListenProgress(t, d);
         }}
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
+        onLoadedMetadata={(e) => {
+          if (e.currentTarget !== usePlayer.getState().audioEl) return;
+          setDuration(e.currentTarget.duration || 0);
+        }}
+      />
+      {/* Standby : précharge le titre suivant pour un skip quasi instantané */}
+      <audio
+        ref={standbyRef}
+        preload="auto"
+        playsInline
+        crossOrigin="anonymous"
+        onPlay={(e) => {
+          if (e.currentTarget !== usePlayer.getState().audioEl) return;
+          usePlayer.setState({ isPlaying: true });
+          void resumeEqContext();
+        }}
+        onPlaying={(e) => {
+          if (e.currentTarget !== usePlayer.getState().audioEl) return;
+          usePlayer.setState({ isPlaying: true });
+        }}
+        onPause={(e) => {
+          if (e.currentTarget !== usePlayer.getState().audioEl) return;
+          usePlayer.setState({ isPlaying: false });
+        }}
+        onEnded={(e) => {
+          if (e.currentTarget !== usePlayer.getState().audioEl) return;
+          const s = usePlayer.getState();
+          if (s.sleepUntilEnd) {
+            s.setSleepTimer(null, null);
+            usePlayer.setState({ isPlaying: false });
+            return;
+          }
+          if (s.playError) {
+            usePlayer.setState({ isPlaying: false });
+            return;
+          }
+          usePlayer.setState({ isPlaying: false });
+          void next({ fromEnded: true });
+        }}
+        onTimeUpdate={(e) => {
+          if (e.currentTarget !== usePlayer.getState().audioEl) return;
+          const t = e.currentTarget.currentTime;
+          const d = e.currentTarget.duration || 0;
+          setProgress(t);
+          reportListenProgress(t, d);
+        }}
+        onLoadedMetadata={(e) => {
+          if (e.currentTarget !== usePlayer.getState().audioEl) return;
+          setDuration(e.currentTarget.duration || 0);
+        }}
       />
     </div>
   );
