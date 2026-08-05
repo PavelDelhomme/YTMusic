@@ -552,9 +552,15 @@ async function resolveCachedUrl(trackId: string) {
   const prefetched = await resolvePrefetchedPlayUrl(trackId);
   if (prefetched) return prefetched;
 
-  // 2) URL directe googlevideo (comme Android) — beaucoup plus rapide que le proxy Node.
-  //    Skip si EQ Web Audio branché (CORS same-origin requis).
-  if (!eqNeedsSameOrigin()) {
+  // 2) URL directe googlevideo — rapide, mais CORS/403 depuis localhost (ou EQ branché).
+  //    Sur navigateur local / http → toujours proxy same-origin.
+  const host =
+    typeof location !== 'undefined' ? location.hostname : '';
+  const isLocalBrowser =
+    !host ||
+    /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(host) ||
+    (typeof location !== 'undefined' && location.protocol === 'http:' && host !== 'ytmusic.delhomme.ovh');
+  if (!eqNeedsSameOrigin() && !isLocalBrowser) {
     try {
       const r = await api.streamUrl(trackId);
       if (r?.url && /^https?:\/\//i.test(r.url)) return r.url;
@@ -673,8 +679,50 @@ function mergeAutoTracks(seedId: string, pool: Track[], relatedUpdate?: Track[])
   }
   if (!Object.keys(patch).length) return;
   usePlayer.setState(patch);
-  if (patch.queue) schedulePrefetch(patch.queue, state.queueIndex);
+  if (patch.queue) {
+    schedulePrefetch(patch.queue, state.queueIndex);
+    void enrichMissingDurations(patch.queue);
+  }
   publish();
+}
+
+/** Remplit les durées manquantes (souvent absentes sur related/radio) via /api/track. */
+let enrichDurSeq = 0;
+async function enrichMissingDurations(tracks: Track[]) {
+  const missing = tracks
+    .filter((t) => isPlayable(t) && trackDurationSeconds(t) == null)
+    .slice(0, 16);
+  if (!missing.length) return;
+  const my = ++enrichDurSeq;
+  for (const t of missing) {
+    if (my !== enrichDurSeq) return;
+    try {
+      const meta = await api.track(t.id);
+      const sec =
+        typeof meta?.track?.durationSeconds === 'number' && meta.track.durationSeconds > 0
+          ? Math.floor(meta.track.durationSeconds)
+          : trackDurationSeconds(meta?.track || {});
+      const clock = meta?.track?.duration || (sec != null ? formatClock(sec) : '');
+      if (!clock && sec == null) continue;
+      usePlayer.setState((s) => {
+        const patchTrack = (q: Track): Track =>
+          q.id !== t.id
+            ? q
+            : {
+                ...q,
+                duration: clock || q.duration,
+                durationSeconds: sec ?? q.durationSeconds,
+              };
+        return {
+          queue: s.queue.map(patchTrack),
+          current: s.current ? patchTrack(s.current) : s.current,
+        };
+      });
+    } catch {
+      /* ignore */
+    }
+    await sleep(60);
+  }
 }
 
 /** Remplit la zone autoplay (après userQueueEnd) — progressive, dédupliquée. */
@@ -887,19 +935,33 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
         : enriched.thumbnails?.length
           ? enriched.thumbnails
           : track.thumbnails;
+    // meta.track en dernier pour durée / titre officiels (ne pas les écraser avec enriched vide)
     const next = {
-      ...meta.track,
       ...enriched,
+      ...meta.track,
       title: meta.track.title || enriched.title,
       artists: mergeArtists(enriched.artists, meta.track.artists),
       thumbnails: thumbs,
       album: meta.track.album || enriched.album,
+      duration: meta.track.duration || enriched.duration,
+      durationSeconds:
+        meta.track.durationSeconds ??
+        enriched.durationSeconds ??
+        trackDurationSeconds(meta.track) ??
+        trackDurationSeconds(enriched) ??
+        undefined,
     };
     usePlayer.setState((s) => ({
       current: next,
       queue: s.queue.map((t, i) =>
         i === s.queueIndex || t.id === next.id
-          ? { ...t, ...next, thumbnails: next.thumbnails?.length ? next.thumbnails : t.thumbnails }
+          ? {
+              ...t,
+              ...next,
+              thumbnails: next.thumbnails?.length ? next.thumbnails : t.thumbnails,
+              duration: next.duration || t.duration,
+              durationSeconds: next.durationSeconds ?? t.durationSeconds,
+            }
           : t,
       ),
     }));

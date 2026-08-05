@@ -3,7 +3,7 @@ import { usePlayer } from '../store/player';
 import { TrackRow } from './TrackRow';
 import { SaveQueueSheet } from './SaveQueueSheet';
 import { SyncedLyrics } from './NowPlaying';
-import { ListMusic, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles, Trash2, X } from 'lucide-react';
+import { ListMusic, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles, X } from 'lucide-react';
 
 type PanelTab = 'queue' | 'similar';
 
@@ -27,7 +27,6 @@ export function QueuePanel() {
   const cycleRepeat = usePlayer((s) => s.cycleRepeat);
   const topUpAutoplay = usePlayer((s) => s.topUpAutoplay);
   const playAt = usePlayer((s) => s.playAt);
-  const clearPlayedFromQueue = usePlayer((s) => s.clearPlayedFromQueue);
   const appendRelated = usePlayer((s) => s.appendRelated);
   const loadRelated = usePlayer((s) => s.loadRelated);
   const relatedLoading = usePlayer((s) => s.relatedLoading);
@@ -119,16 +118,6 @@ export function QueuePanel() {
               >
                 <Save className="h-4 w-4" />
               </button>
-              {queueIndex > 0 && (
-                <button
-                  type="button"
-                  onClick={() => clearPlayedFromQueue()}
-                  className="flex h-8 w-8 items-center justify-center rounded-full text-yt-muted hover:bg-yt-hover hover:text-white"
-                  title="Effacer déjà joués"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              )}
             </>
           )}
           {!showLyrics && panelTab === 'similar' && related.length > 0 && (

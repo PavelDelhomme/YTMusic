@@ -622,7 +622,7 @@ export function AlbumPage() {
         </AlbumHeroAction>
         <AlbumHeroAction
           title="Lancer un mix radio à partir de cet album"
-          label="Mix"
+          label=""
           disabled={radioBusy}
           onClick={() => {
             setRadioBusy(true);
@@ -633,7 +633,7 @@ export function AlbumPage() {
             }).finally(() => setRadioBusy(false));
           }}
         >
-          <Radio className="h-6 w-6" />
+          <Radio className="h-7 w-7 text-yt-red" />
         </AlbumHeroAction>
         <div className="relative flex flex-col items-center">
           <button
@@ -751,7 +751,11 @@ function AlbumHeroAction({
       >
         {children}
       </button>
-      <span className="mt-1 max-w-[4.75rem] truncate text-center text-[10px] text-yt-muted">{label}</span>
+      {label ? (
+        <span className="mt-1 max-w-[4.75rem] truncate text-center text-[10px] text-yt-muted">{label}</span>
+      ) : (
+        <span className="mt-1 h-[1.125rem]" aria-hidden />
+      )}
     </div>
   );
 }
