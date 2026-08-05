@@ -43,7 +43,7 @@ export function ExplorePage() {
 
   const playRadioFast = async (id: string, title: string) => {
     setStartingId(id);
-    const end = perfStart('mix.play', id);
+    const end = perfStart('mix.play');
     try {
       // Joue d’abord le preview déjà en mémoire → feedback immédiat
       const preview = (radioPreviews[id] || []).filter((t) =>
