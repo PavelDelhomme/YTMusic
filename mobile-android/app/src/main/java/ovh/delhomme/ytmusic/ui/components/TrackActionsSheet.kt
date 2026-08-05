@@ -297,7 +297,7 @@ fun TrackActionsSheet(
                         val mix = container.api.recoRadio(enriched.id)
                         val tracks = mix.tracks.filter { it.isPlayable() }
                         if (tracks.isNotEmpty()) {
-                            player.play(tracks, 0, enriched.title, userQueueEnd = 1)
+                            player.play(tracks, 0, enriched.title, userQueueEnd = tracks.size)
                         }
                     }
                     onDismiss()
@@ -431,7 +431,7 @@ fun TrackActionsSheet(
                     runCatching {
                         val mix = buildRadioQueue(container.api, "track", enriched.id, enriched)
                         if (mix.isNotEmpty()) {
-                            player.play(mix, 0, title = "En rapport", userQueueEnd = 1)
+                            player.play(mix, 0, title = "En rapport", userQueueEnd = mix.size)
                             Toast.makeText(context, "Mix démarré", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -445,7 +445,7 @@ fun TrackActionsSheet(
                             val mix = buildRadioQueue(
                                 container.api, "track", enriched.id, enriched, stayClose = true,
                             )
-                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio", userQueueEnd = 1)
+                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio", userQueueEnd = mix.size)
                         }
                         onDismiss()
                     }
@@ -456,7 +456,7 @@ fun TrackActionsSheet(
                     scope.launch {
                         runCatching {
                             val mix = buildRadioQueue(container.api, "album", albumId, enriched)
-                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio album", userQueueEnd = 1)
+                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio album", userQueueEnd = mix.size)
                         }
                         onDismiss()
                     }
@@ -469,7 +469,7 @@ fun TrackActionsSheet(
                             val artistId = resolveArtistId(container.api, artist.id, artist.name)
                                 ?: return@runCatching
                             val mix = buildRadioQueue(container.api, "artist", artistId, enriched)
-                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio artiste", userQueueEnd = 1)
+                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio artiste", userQueueEnd = mix.size)
                         }
                         onDismiss()
                     }

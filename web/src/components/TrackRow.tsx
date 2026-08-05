@@ -189,19 +189,19 @@ export function TrackRow({
         {isPlayable(track) && (
           <button
             type="button"
-            title="Radio à partir de ce titre"
+            title="Lancer un mix à partir de ce titre"
             onClick={(e) => {
               e.stopPropagation();
               void startRadio({ kind: 'track', id: track.id, seed: track });
             }}
-            className={`flex h-9 w-9 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white sm:h-10 sm:w-10 ${
-              showActions ? 'hidden opacity-100 sm:flex' : 'opacity-0 group-hover:opacity-100'
+            className={`flex h-8 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium text-yt-muted transition hover:bg-white/10 hover:text-white sm:h-9 ${
+              showActions ? 'hidden opacity-100 sm:inline-flex' : 'opacity-0 group-hover:inline-flex'
             }`}
           >
-            <Radio className="h-4 w-4 sm:h-5 sm:w-5" />
+            <Radio className="h-3.5 w-3.5 text-yt-red" />
+            Mix
           </button>
-        )}
-        <button
+        )}        <button
           type="button"
           aria-label="Plus d'options"
           onClick={openMenu}
