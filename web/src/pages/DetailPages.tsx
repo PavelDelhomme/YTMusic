@@ -988,7 +988,10 @@ function CollectionHeader({
   onRadio?: () => void;
   radioBusy?: boolean;
   onAddLibrary?: () => Promise<void>;
-  onOffline?: () => void | Promise<void>;
+  onOffline?: () =>
+    | void
+    | Promise<void>
+    | Promise<{ jobId?: string; total?: number } | void>;
   onLike?: () => Promise<void>;
   inLibrary?: boolean;
   liked?: boolean;
@@ -1005,7 +1008,10 @@ function CollectionHeader({
         setOfflinePct((p) => (p == null ? 0.05 : Math.min(0.92, p + 0.04)));
       }, 600);
       try {
-        const r = await Promise.resolve(onOffline());
+        const r = (await Promise.resolve(onOffline())) as
+          | { jobId?: string; total?: number }
+          | void
+          | null;
         const jobId =
           r && typeof r === 'object' && 'jobId' in r
             ? String((r as { jobId?: string }).jobId || '')
