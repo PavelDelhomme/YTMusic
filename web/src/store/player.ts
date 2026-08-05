@@ -675,21 +675,20 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   audio.muted = false;
   audio.volume = targetVol;
 
-  // Attendre un buffer minimal — loadeddata suffit pour démarrer (canplay = plus long)
+  // Toujours attendre un event de CE chargement. Après un skip, readyState peut
+  // encore être ≥2 pour l’ancien buffer → on jouerait le mauvais titre (UI OK, son KO).
   await new Promise<void>((resolve, reject) => {
-    if (audio.readyState >= 2) {
-      resolve();
-      return;
-    }
     const timeout = window.setTimeout(() => {
       cleanup();
       reject(new Error('Timeout chargement audio'));
     }, 28_000);
     const onReady = () => {
+      if (gen !== playGeneration || audio.dataset.trackId !== track.id) return;
       cleanup();
       resolve();
     };
     const onErr = () => {
+      if (gen !== playGeneration || audio.dataset.trackId !== track.id) return;
       cleanup();
       reject(
         new Error(
@@ -713,6 +712,7 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
     }
   });
   if (gen !== playGeneration) return;
+  if (audio.dataset.trackId !== track.id) return;
 
   // démarrer dès que possible
   let playPromise: Promise<void>;
@@ -1007,10 +1007,22 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       progress: 0,
       lyrics: null,
       lyricsTimed: null,
+      playError: null,
     });
 
     const gen = ++playGeneration;
     bumpPrefetchGeneration();
+    // Stoppe tout de suite l’ancien titre (sinon next change l’UI mais le son reste)
+    {
+      const audio = get().audioEl;
+      if (audio) {
+        try {
+          audio.pause();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
 
     // Suggestions après le démarrage audio (évite contention API/CPU sur le 1er play)
     const seedId = playTrack.id;
@@ -1124,9 +1136,10 @@ export const usePlayer = create<PlayerState>((set, get) => ({
 
   next: async (opts) => {
     claimLocalPlayer();
-    if (isStreamDown() || get().playError) {
-      // Serveur down / erreur stream : ne pas enchaîner les titres
-      return;
+    // playError ne doit pas bloquer un next manuel (sinon UI/clavier « morts »)
+    if (get().playError) set({ playError: null });
+    if (isStreamDown()) {
+      markStreamOk(); // laisse une chance au skip manuel
     }
     const { queue, queueIndex, repeat, shuffle, current, progress } = get();
     if (!queue.length) {
