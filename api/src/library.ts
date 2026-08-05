@@ -427,6 +427,70 @@ export function getTopListened(userId: string, limit = 30): Track[] {
   ).map(trackFromRow);
 }
 
+/** IDs des titres aimés (pour boost reco / satisfaction). */
+export function getLikedTrackIds(userId: string, limit = 400): Set<string> {
+  const rows = db
+    .prepare(
+      `SELECT track_id FROM liked_tracks WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(userId, limit) as { track_id: string }[];
+  return new Set(rows.map((r) => r.track_id));
+}
+
+/**
+ * Pool de goûts biblio pour personnaliser les similaires :
+ * likes + titres sauvés + échantillon playlists locales + tops écoutés.
+ */
+export function getLibraryTasteTracks(userId: string, limit = 120): Track[] {
+  const byId = new Map<string, Track>();
+  const push = (t: Track | null | undefined) => {
+    if (!t?.id || byId.has(t.id)) return;
+    if (!/^[a-zA-Z0-9_-]{11}$/.test(t.id)) return;
+    byId.set(t.id, t);
+  };
+
+  const likedRows = db
+    .prepare(
+      `SELECT l.track_id AS track_id, t.payload AS payload
+       FROM liked_tracks l
+       LEFT JOIN tracks_cache t ON t.id = l.track_id
+       WHERE l.user_id = ?
+       ORDER BY l.created_at DESC
+       LIMIT 80`,
+    )
+    .all(userId) as { track_id: string; payload: string | null }[];
+  likedRows.forEach((r) => push(trackFromRow(r)));
+
+  const songRows = db
+    .prepare(
+      `SELECT l.track_id AS track_id, t.payload AS payload
+       FROM library_tracks l
+       LEFT JOIN tracks_cache t ON t.id = l.track_id
+       WHERE l.user_id = ?
+       ORDER BY l.created_at DESC
+       LIMIT 60`,
+    )
+    .all(userId) as { track_id: string; payload: string | null }[];
+  songRows.forEach((r) => push(trackFromRow(r)));
+
+  const plTracks = db
+    .prepare(
+      `SELECT pt.track_id AS track_id, t.payload AS payload
+       FROM playlist_tracks pt
+       JOIN playlists p ON p.id = pt.playlist_id
+       LEFT JOIN tracks_cache t ON t.id = pt.track_id
+       WHERE p.user_id = ?
+       ORDER BY pt.added_at DESC
+       LIMIT 80`,
+    )
+    .all(userId) as { track_id: string; payload: string | null }[];
+  plTracks.forEach((r) => push(trackFromRow(r)));
+
+  getTopListened(userId, 40).forEach((t) => push(t));
+
+  return [...byId.values()].slice(0, limit);
+}
+
 export function getHistory(userId: string, limit = 500): Track[] {
   const rows = db
     .prepare(

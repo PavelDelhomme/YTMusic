@@ -8,7 +8,14 @@ import {
   listPins,
   listSearchHistory,
 } from './prefs.js';
-import { getForgottenFavorites, getHistory, getTopListened, getEntityHistory } from './library.js';
+import {
+  getForgottenFavorites,
+  getHistory,
+  getTopListened,
+  getEntityHistory,
+  getLibraryTasteTracks,
+  getLikedTrackIds,
+} from './library.js';
 
 export const RADIO_CATEGORIES = [
   { id: 'focus', title: 'Concentration', query: 'focus concentration playlist', mode: 'focus' },
@@ -147,11 +154,59 @@ function scoreBandit(trackId: string, listenCounts: Map<string, number>, bias: n
   return Math.min(1, bias + 1 / (1 + n));
 }
 
-function scoreSatisf(trackId: string, skips: Set<string>, completes: Set<string>, likes: Set<string>) {
+function scoreSatisf(
+  trackId: string,
+  skips: Set<string>,
+  completes: Set<string>,
+  likes: Set<string>,
+) {
   if (skips.has(trackId)) return 0.15;
   if (likes.has(trackId)) return 0.95;
   if (completes.has(trackId)) return 0.8;
   return 0.5;
+}
+
+/** Proximité seed ↔ titre biblio (réutilise scoreContent sans prefs). */
+function proximityToSeed(candidate: Track, seed: Track) {
+  return scoreContent(candidate, seed, []);
+}
+
+/** Titres de la biblio proches du seed (même vibe / artiste / énergie). */
+function pickLibraryNearSeed(seed: Track, library: Track[], max: number): Track[] {
+  return library
+    .filter((t) => t?.id && t.id !== seed.id)
+    .map((t) => ({ t, s: proximityToSeed(t, seed) }))
+    .filter((x) => x.s >= 0.34)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, max)
+    .map((x) => x.t);
+}
+
+/** Artistes de la biblio alignés sur le style du seed (pour élargir le pool). */
+function pickTasteArtists(seed: Track, library: Track[], max: number): string[] {
+  const seedTags = styleTags(seed);
+  const seedA = artistKey(seed);
+  const scored = new Map<string, { name: string; s: number }>();
+  for (const t of library) {
+    const name = t.artists?.[0]?.name?.trim();
+    const key = artistKey(t);
+    if (!name || !key || key === seedA) continue;
+    let s = 0.2;
+    if (seedTags.length) {
+      const overlap = seedTags.filter((tag) => styleTags(t).includes(tag)).length;
+      s += overlap * 0.28;
+    } else {
+      const d = Math.abs(energyProxy(t) - energyProxy(seed));
+      s += Math.max(0, 0.25 - d * 0.45);
+    }
+    const prev = scored.get(key);
+    if (!prev || s > prev.s) scored.set(key, { name, s });
+  }
+  return [...scored.values()]
+    .filter((x) => x.s >= 0.35)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, max)
+    .map((x) => x.name);
 }
 
 function rerank(
@@ -213,7 +268,16 @@ export async function hybridRank(opts: {
     if (e.event === 'skip') skips.add(e.track_id);
     if (e.event === 'complete') completes.add(e.track_id);
   }
-  const likes = new Set(getTopListened(opts.userId, 100).map((t) => t.id));
+  // Likes réels + tops écoutés (proxy)
+  const likes = new Set<string>([
+    ...getLikedTrackIds(opts.userId, 300),
+    ...getTopListened(opts.userId, 100).map((t) => t.id),
+  ]);
+  const tasteArtists = new Set(
+    getLibraryTasteTracks(opts.userId, 100)
+      .map((t) => artistKey(t))
+      .filter(Boolean),
+  );
 
   // pénalité récence < 6h
   const recent = new Set(
@@ -238,6 +302,10 @@ export async function hybridRank(opts: {
         w.w_ctx * s3 +
         w.w_bandit * s4 +
         w.w_satisf * s5;
+      // Affinité biblio : artiste déjà dans likes / playlists / sauvés
+      const a = artistKey(track);
+      if (a && tasteArtists.has(a)) s += 0.07;
+      if (likes.has(track.id)) s += 0.05;
       if (recent.has(track.id)) s *= 0.35;
       // Mode style / radio : léger malus même artiste pour pousser la découverte
       if (
@@ -274,6 +342,11 @@ export async function similarForUser(userId: string, trackId: string, seedTrack?
   const { related, radio } = await getRelated(trackId);
   let pool = [...radio, ...related];
 
+  // Goûts biblio : injecter des titres aimés / playlists proches du seed
+  const taste = getLibraryTasteTracks(userId, 120);
+  const fromLibrary = pickLibraryNearSeed(seed, taste, 20);
+  if (fromLibrary.length) pool = [...pool, ...fromLibrary];
+
   // Élargit hors upNext YouTube : search « même vibe » pour plus d’artistes
   try {
     if (seed.title || seed.artists?.length) {
@@ -283,6 +356,22 @@ export async function similarForUser(userId: string, trackId: string, seedTrack?
         (t) => t?.id && t.id !== trackId,
       );
       pool = [...pool, ...extra.slice(0, 24)];
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // Search ciblée sur 1–2 artistes de la biblio alignés sur le style du seed
+  try {
+    const artists = pickTasteArtists(seed, taste, 2);
+    const tags = styleTags(seed).slice(0, 1);
+    for (const name of artists) {
+      const q = `${name} ${tags[0] || 'songs'}`.trim();
+      const res = await search(q, 'song');
+      const extra = [...(res.songs || []), ...(res.videos || [])].filter(
+        (t) => t?.id && t.id !== trackId,
+      );
+      pool = [...pool, ...extra.slice(0, 10)];
     }
   } catch {
     /* ignore */
