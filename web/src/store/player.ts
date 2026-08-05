@@ -488,11 +488,10 @@ let playGeneration = 0;
 async function resolveCachedUrl(trackId: string) {
   // 1) Cache offline IndexedDB
   // 2) Prefetch full (Cache Storage) → play instantané
-  // 3) Stream API (tête déjà préchauffée en parallèle)
+  // 3) Stream API — warmFormat seul (pas warmHead : double-download avec <audio>)
   const prefetched = await resolvePrefetchedPlayUrl(trackId);
   if (prefetched) return prefetched;
   void warmFormat(trackId);
-  void warmHead(trackId);
   return resolvePlayUrl(trackId);
 }
 
@@ -662,8 +661,12 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   audio.dataset.trackId = track.id;
   audio.volume = 0;
 
-  // Attendre un buffer réel — sinon play() « réussit » puis error → skip infini
+  // Attendre un buffer minimal — loadeddata suffit pour démarrer (canplay = plus long)
   await new Promise<void>((resolve, reject) => {
+    if (audio.readyState >= 2) {
+      resolve();
+      return;
+    }
     const timeout = window.setTimeout(() => {
       cleanup();
       reject(new Error('Timeout chargement audio'));
@@ -705,6 +708,10 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
     audio.volume = targetVol;
     return;
   }
+  // UI : fin du spinner dès que play() est lancé (pas après meta / fade)
+  if (gen === playGeneration) {
+    usePlayer.setState({ isLoading: false, isPlaying: true, playError: null });
+  }
   void playPromise.then(() => {
     if (gen !== playGeneration) return;
     const t1 = performance.now();
@@ -720,23 +727,17 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
     audio.volume = targetVol;
   });
 
-  const meta = await metaPromise;
-  if (gen !== playGeneration) {
-    try {
-      audio.pause();
-    } catch {
-      /* ignore */
-    }
-    return;
-  }
-  if (meta?.track) {
+  // Meta en parallèle — ne pas bloquer isLoading ni pauser si gen change pendant le fetch
+  void metaPromise.then((meta) => {
+    if (gen !== playGeneration) return;
+    if (!meta?.track) return;
     const thumbs =
       meta.track.thumbnails?.length
         ? meta.track.thumbnails
         : enriched.thumbnails?.length
           ? enriched.thumbnails
           : track.thumbnails;
-    enriched = {
+    const next = {
       ...meta.track,
       ...enriched,
       title: meta.track.title || enriched.title,
@@ -745,15 +746,15 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
       album: meta.track.album || enriched.album,
     };
     usePlayer.setState((s) => ({
-      current: enriched,
+      current: next,
       queue: s.queue.map((t, i) =>
-        i === s.queueIndex || t.id === enriched.id
-          ? { ...t, ...enriched, thumbnails: enriched.thumbnails?.length ? enriched.thumbnails : t.thumbnails }
+        i === s.queueIndex || t.id === next.id
+          ? { ...t, ...next, thumbnails: next.thumbnails?.length ? next.thumbnails : t.thumbnails }
           : t,
       ),
     }));
     refreshMediaSession();
-  }
+  });
 
   try {
     await playPromise;
@@ -979,12 +980,17 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     const gen = ++playGeneration;
     bumpPrefetchGeneration();
 
-    // Un seul pipeline suggestions (évite related×2 + upNext en parallèle parasite)
-    if (!opts?.noAutoRadio && get().autoplay !== false) {
-      void ensureAutoRadio(playTrack.id);
-    } else {
-      void get().loadRelated(playTrack.id);
-    }
+    // Suggestions après le démarrage audio (évite contention API/CPU sur le 1er play)
+    const seedId = playTrack.id;
+    const radioGen = gen;
+    window.setTimeout(() => {
+      if (radioGen !== playGeneration) return;
+      if (!opts?.noAutoRadio && get().autoplay !== false) {
+        void ensureAutoRadio(seedId);
+      } else {
+        void get().loadRelated(seedId);
+      }
+    }, 1_400);
 
     try {
       await playLocal(playTrack, get(), gen);

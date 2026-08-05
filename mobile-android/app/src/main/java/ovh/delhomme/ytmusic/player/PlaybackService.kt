@@ -134,8 +134,8 @@ class PlaybackService : MediaSessionService() {
             .setBufferDurationsMs(
                 /* minBufferMs */ 12_000,
                 /* maxBufferMs */ 45_000,
-                /* bufferForPlaybackMs */ 1_200,
-                /* bufferForPlaybackAfterRebufferMs */ 2_500,
+                /* bufferForPlaybackMs */ 600,
+                /* bufferForPlaybackAfterRebufferMs */ 1_500,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -453,17 +453,7 @@ fun ExoPlayer.playTracks(baseStreamUrl: (String) -> String, tracks: List<TrackDt
     val idx = startIndex.coerceIn(0, playable.lastIndex)
     PlaybackService.Holder.queue = playable
     PlaybackService.Holder.index = idx
-    val sample = baseStreamUrl("_")
-    val base = sample.substringBefore("/api/stream/").ifBlank {
-        BuildConfig.API_BASE_URL.trimEnd('/')
-    }
-    StreamPrefetcher.warmAround(
-        base,
-        playable.map { it.id },
-        idx,
-        ahead = 3,
-        behind = 1,
-    )
+    // warmAround déjà fait par PlayerController.play / warmUpcoming — pas de 2ᵉ CacheWriter ici
     CoverPrefetcher.warmCovers(playable, idx, ahead = 3, behind = 1)
     val items = playable.map { t ->
         mediaItemFor(t, baseStreamUrl, PlaybackService.Holder.queueTitle)

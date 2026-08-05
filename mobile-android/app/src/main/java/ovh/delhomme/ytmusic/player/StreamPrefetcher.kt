@@ -165,8 +165,8 @@ object StreamPrefetcher {
         val ids = trackIds.distinct().filter { it.length == 11 }.take(MAX_WARM)
         if (ids.isEmpty()) return
         warmBatch(baseApi, ids)
-        // 1er = piste courante / prochain → priorité Exo cache
-        ids.forEachIndexed { i, id ->
+        // CacheWriter uniquement sur la suite — jamais la piste courante (conflit ExoPlayer)
+        ids.drop(1).forEachIndexed { i, id ->
             exoPrefetch(baseApi, id, priority = i == 0)
         }
     }
@@ -184,18 +184,23 @@ object StreamPrefetcher {
         val aheadN = if (unmetered) ahead else 2
         val behindN = if (unmetered) behind else 0
         val idx = index.coerceIn(0, queueIds.lastIndex)
-        val ids = buildList {
-            // Prochain d’abord (priorité CacheWriter)
+        val nextIds = buildList {
             for (i in 1..aheadN) {
                 val t = queueIds.getOrNull(idx + i) ?: break
                 add(t)
             }
-            add(queueIds[idx])
+        }
+        val behindIds = buildList {
             for (i in 1..behindN) {
                 val t = queueIds.getOrNull(idx - i) ?: break
                 add(t)
             }
         }
-        warmTracks(baseApi, ids)
+        val current = queueIds[idx]
+        // Formats : courant + suite (léger). Exo CacheWriter : suite seule (pas de contention start).
+        warmBatch(baseApi, listOf(current) + nextIds + behindIds)
+        nextIds.forEachIndexed { i, id ->
+            exoPrefetch(baseApi, id, priority = i == 0)
+        }
     }
 }
