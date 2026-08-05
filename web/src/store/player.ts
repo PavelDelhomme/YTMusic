@@ -730,13 +730,14 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   void playPromise
     .then(() => {
       // Toujours ré-appliquer le volume (certains navigateurs reset après play())
-      if (get().audioEl === audio) {
+      const s = usePlayer.getState();
+      if (s.audioEl === audio) {
         audio.muted = false;
-        audio.volume = get().volume > 0 ? get().volume : targetVol;
+        audio.volume = s.volume > 0 ? s.volume : targetVol;
       }
     })
     .catch(() => {
-      if (get().audioEl === audio) {
+      if (usePlayer.getState().audioEl === audio) {
         audio.muted = false;
         audio.volume = targetVol;
       }
