@@ -3,7 +3,6 @@ import {
   addToPlaylist,
   createPlaylist,
   listPlaylists,
-  saveAlbum,
   saveArtist,
   toggleLikePlaylist,
 } from './library.js';
@@ -100,14 +99,16 @@ export async function importByKind(
 
   if (kind === 'album') {
     const { album, tracks } = await getAlbum(id);
-    // Métadonnées seulement — pas d’ajout des titres aux aimés / playlists
-    saveAlbum(userId, {
+    // Album + tous les titres en biblio (pas en likes)
+    const { saveAlbumWithTracks } = await import('./library.js');
+    const saved = await saveAlbumWithTracks(userId, {
       id: album.id,
       title: album.title,
       year: album.year,
       artists: album.artists,
       thumbnails: album.thumbnails,
       type: 'album',
+      tracks,
     });
     // Copie locale optionnelle (explicit createLocalCopy) — désactivée par défaut
     let playlistCopy = false;
@@ -124,8 +125,12 @@ export async function importByKind(
       kind: 'album',
       id: album.id,
       title: album.title,
-      added: { album: true, tracks: playlistCopy ? tracks.length : 0, playlist: playlistCopy },
-      tracks: playlistCopy ? tracks : undefined,
+      added: {
+        album: true,
+        tracks: saved.tracksTotal,
+        playlist: playlistCopy,
+      },
+      tracks,
     };
   }
 
@@ -145,13 +150,15 @@ export async function importByKind(
       for (const a of albums.slice(0, 5)) {
         try {
           const full = await getAlbum(a.id);
-          saveAlbum(userId, {
+          const { saveAlbumWithTracks } = await import('./library.js');
+          await saveAlbumWithTracks(userId, {
             id: full.album.id,
             title: full.album.title,
             year: full.album.year,
             artists: full.album.artists,
             thumbnails: full.album.thumbnails,
             type: 'album',
+            tracks: full.tracks,
           });
         } catch {
           /* ignore */

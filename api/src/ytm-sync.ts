@@ -8,7 +8,7 @@ import {
   isTrackInLibrary,
   isTrackLiked,
   listPlaylists,
-  saveAlbum,
+  saveAlbumWithTracks,
   saveArtist,
   toggleLikePlaylist,
   toggleLikeTrack,
@@ -265,7 +265,7 @@ export async function syncYtmLibrary(userId: string): Promise<{
       if (!m?.id) continue;
       if (!(m.type === 'album' || String(m.id).startsWith('MPREb'))) continue;
       const wasNew = !albumAlreadySaved(userId, m.id);
-      saveAlbum(userId, {
+      const { tracksAdded } = await saveAlbumWithTracks(userId, {
         id: m.id,
         title: m.title,
         artists: m.artists,
@@ -273,6 +273,7 @@ export async function syncYtmLibrary(userId: string): Promise<{
         type: 'album',
       });
       if (wasNew) stats.albums += 1;
+      stats.librarySongs += tracksAdded;
     }
   } catch (e) {
     console.warn('sync albums', e);
