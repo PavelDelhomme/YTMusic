@@ -774,10 +774,92 @@ const TRACK_META_TTL_MS = 20 * 60 * 1000;
 const TRACK_META_MAX = 180;
 const trackMetaCache = new Map<string, { track: Track; at: number }>();
 
+/** Fallback titre/artiste quand music.getInfo renvoie vide (souvent IP datacenter). */
+async function fallbackTitleArtist(
+  videoId: string,
+): Promise<{ title?: string; artist?: string }> {
+  try {
+    const oembed = `https://www.youtube.com/oembed?url=${encodeURIComponent(
+      `https://www.youtube.com/watch?v=${videoId}`,
+    )}&format=json`;
+    const ctrl = AbortSignal.timeout(6000);
+    const r = await fetch(oembed, {
+      signal: ctrl,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; YTMusic/1.0)' },
+    });
+    if (r.ok) {
+      const j = (await r.json()) as { title?: string; author_name?: string };
+      const title = String(j.title || '').trim();
+      const artist = String(j.author_name || '').trim();
+      if (title) return { title, artist: artist || undefined };
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    const { spawn } = await import('node:child_process');
+    const ytdlp = join(ROOT, 'bin', 'yt-dlp');
+    const out = await new Promise<string>((resolve, reject) => {
+      const proc = spawn(
+        ytdlp,
+        [
+          '--no-playlist',
+          '--no-warnings',
+          '--print',
+          '%(title)s\n%(artist)s\n%(uploader)s',
+          ...ytDlpCookieArgs(),
+          `https://www.youtube.com/watch?v=${videoId}`,
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      let buf = '';
+      let err = '';
+      proc.stdout.on('data', (c) => {
+        buf += String(c);
+      });
+      proc.stderr.on('data', (c) => {
+        err += String(c);
+      });
+      proc.on('error', reject);
+      proc.on('close', (code) => {
+        if (code === 0 && buf.trim()) resolve(buf);
+        else reject(new Error(err.trim() || `yt-dlp meta exit ${code}`));
+      });
+    });
+    const [title, artist, uploader] = out
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l && l !== 'NA');
+    if (title) return { title, artist: artist || uploader };
+  } catch {
+    /* ignore */
+  }
+  return {};
+}
+
 async function fetchTrackMeta(videoId: string, light = false) {
   const innertube = await getYT();
-  const info = await innertube.music.getInfo(videoId);
-  const basic = (info as any).basic_info || {};
+  let info: any = null;
+  let basic: any = {};
+  try {
+    info = await innertube.music.getInfo(videoId);
+    basic = info?.basic_info || {};
+  } catch {
+    /* getInfo parfois bloqué en datacenter */
+  }
+
+  // Fallback client YouTube classique si music.getInfo vide
+  if (!basic?.title) {
+    try {
+      const ytInfo = await (innertube as any).getBasicInfo?.(videoId);
+      if (ytInfo?.basic_info?.title) {
+        basic = { ...basic, ...ytInfo.basic_info };
+        info = info || ytInfo;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 
   let artists: { name: string; id?: string }[] = [];
   if (Array.isArray(basic.artists) && basic.artists.length) {
@@ -816,8 +898,12 @@ async function fetchTrackMeta(videoId: string, light = false) {
           );
           return match ? { name: a.name, id: match.id } : a;
         });
+        if (!artists.length) artists = first.artists.filter((a) => isPlausibleArtistName(a.name));
       }
       if (!album?.id && first?.album) album = first.album;
+      if (isWeakTitle(String(basic.title || ''), videoId) && first?.title) {
+        basic = { ...basic, title: first.title };
+      }
     } catch {
       /* ignore */
     }
@@ -838,6 +924,18 @@ async function fetchTrackMeta(videoId: string, light = false) {
     }
   }
 
+  let title = cleanMusicTitle(String(basic.title || '')) || String(basic.title || '').trim();
+  if (isWeakTitle(title, videoId) || !artists.length) {
+    const fb = await fallbackTitleArtist(videoId);
+    if (fb.title && isWeakTitle(title, videoId)) {
+      title = cleanMusicTitle(fb.title) || fb.title;
+    }
+    if (!artists.length && fb.artist) {
+      artists = parseAuthorField(fb.artist).filter((a) => isPlausibleArtistName(a.name));
+    }
+  }
+  if (!title) title = 'Sans titre';
+
   let thumbnails = extractThumbs(basic, info, { thumbnail: basic.thumbnail });
   if (!thumbnails.length && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     thumbnails = [
@@ -848,7 +946,7 @@ async function fetchTrackMeta(videoId: string, light = false) {
 
   const track: Track = {
     id: videoId,
-    title: cleanMusicTitle(String(basic.title || '')) || String(basic.title || 'Sans titre'),
+    title,
     artists,
     album,
     durationSeconds: basic.duration,
