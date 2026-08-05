@@ -10,6 +10,7 @@ import { Play, Download, Library, Heart, Radio, Check, UserPlus, UserMinus, Shuf
 import { ArtistLinks } from '../components/ArtistLinks';
 import { BackButton } from '../components/BackButton';
 import { HomeShelfSkeleton } from '../components/HomeShelfSkeleton';
+import { warmFormats } from '../lib/streamPrefetch';
 
 function DetailLoading() {
   return (
@@ -431,12 +432,21 @@ export function AlbumPage() {
     setLoading(true);
     setError('');
     setData(null);
+    setRadio([]);
     api
       .album(id)
-      .then(setData)
+      .then((album) => {
+        setData(album);
+        // Préchauffe formats des 1ers titres → play album quasi immédiat
+        void warmFormats((album.tracks || []).slice(0, 4).map((t) => t.id));
+      })
       .catch((e) => setError(String(e.message || e)))
       .finally(() => setLoading(false));
-    api.albumRadio(id).then((r) => setRadio(r.tracks)).catch(() => setRadio([]));
+    // Radio album en différé — ne pas saturer l’API avant un éventuel play
+    const radioTimer = window.setTimeout(() => {
+      api.albumRadio(id).then((r) => setRadio(r.tracks)).catch(() => setRadio([]));
+    }, 1_200);
+    return () => window.clearTimeout(radioTimer);
   }, [id]);
 
   if (loading && !data) {
