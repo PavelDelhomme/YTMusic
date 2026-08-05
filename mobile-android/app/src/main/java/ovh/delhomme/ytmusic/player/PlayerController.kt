@@ -230,8 +230,9 @@ class PlayerController(
     }
 
     /** Ajoute des suggestions après la file utilisateur (zone auto). */
-    fun appendAutoTracks(tracks: List<TrackDto>) {
+    fun appendAutoTracks(tracks: List<TrackDto>, forSeedId: String? = null) {
         if (!autoplaySuggestions) return
+        if (forSeedId != null && _state.value.track?.id != forSeedId) return
         val extra = tracks.filter { it.isPlayable() }
         if (extra.isEmpty()) return
         val c = player() ?: return
@@ -245,6 +246,33 @@ class PlayerController(
         toAdd.forEach { c.addMediaItem(mediaItem(it)) }
         warmAround(queue, c.currentMediaItemIndex.coerceAtLeast(0))
         syncFrom(c)
+    }
+
+    /** Coupe la zone auto (après userQueueEnd) — nouveau seed / change de monde. */
+    fun clearAutoTracks() {
+        val queue = PlaybackService.Holder.queue
+        val end = userQueueEnd.coerceIn(0, queue.size).coerceAtLeast(
+            (_state.value.queueIndex + 1).coerceAtMost(queue.size),
+        )
+        if (queue.size <= end) return
+        val trimmed = queue.take(end)
+        userQueueEnd = trimmed.size
+        PlaybackService.Holder.queue = trimmed
+        val c = player() ?: PlaybackService.Holder.player
+        if (c != null && trimmed.isNotEmpty()) {
+            val idx = c.currentMediaItemIndex.coerceIn(0, trimmed.lastIndex)
+            val pos = c.currentPosition
+            c.setMediaItems(trimmed.map { mediaItem(it) }, idx, pos)
+            c.prepare()
+            if (c.playWhenReady) c.play()
+            syncFrom(c)
+        } else {
+            _state.value = _state.value.copy(
+                queue = trimmed,
+                queueSize = trimmed.size,
+                userQueueEnd = userQueueEnd,
+            )
+        }
     }
 
     fun setQueueTitle(title: String) {

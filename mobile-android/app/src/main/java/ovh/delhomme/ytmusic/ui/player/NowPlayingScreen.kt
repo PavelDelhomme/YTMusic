@@ -168,15 +168,22 @@ fun NowPlayingScreen(
     val queueInteractive = queueProgress.value > 0.02f
 
     // Remplit la zone « À suivre » — fast puis full ; seuil = titres restants
-    LaunchedEffect(ui.track?.id, ui.autoplaySuggestions, ui.queueIndex, ui.queue.size) {
+    LaunchedEffect(ui.track?.id, ui.autoplaySuggestions) {
         if (!ui.autoplaySuggestions) return@LaunchedEffect
         val seed = ui.track?.id ?: return@LaunchedEffect
-        val remaining = (ui.queue.size - ui.queueIndex - 1).coerceAtLeast(0)
+        // Nouveau seed → oublier l’ancienne suite (évite la même liste partout)
+        player.clearAutoTracks()
+        val remaining = (player.state.value.queue.size - player.state.value.queueIndex - 1)
+            .coerceAtLeast(0)
         if (remaining >= 8) return@LaunchedEffect
         val fast = fetchAutoplayTracksFast(container.api, seed)
-        if (fast.isNotEmpty() && ui.track?.id == seed) player.appendAutoTracks(fast)
+        if (fast.isNotEmpty() && player.state.value.track?.id == seed) {
+            player.appendAutoTracks(fast, forSeedId = seed)
+        }
         val full = fetchAutoplayTracksFull(container.api, seed)
-        if (full.isNotEmpty() && ui.track?.id == seed) player.appendAutoTracks(full)
+        if (full.isNotEmpty() && player.state.value.track?.id == seed) {
+            player.appendAutoTracks(full, forSeedId = seed)
+        }
     }
 
     fun settleOrClose() {
