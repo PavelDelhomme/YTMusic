@@ -472,7 +472,18 @@ fun TrackActionsSheet(
                             val mix = buildRadioQueue(
                                 container.api, "track", enriched.id, enriched, stayClose = true,
                             )
-                            if (mix.isNotEmpty()) player.playRadioOrEnqueue(mix, "Radio")
+                            if (mix.isNotEmpty()) {
+                                player.playRadioOrEnqueue(mix, "Radio")
+                                val added = (mix.size - 1).coerceAtLeast(0)
+                                Toast.makeText(
+                                    context,
+                                    if (added > 0) "$added titre${if (added > 1) "s" else ""} ajoutés à la file"
+                                    else "Radio démarrée",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            } else {
+                                Toast.makeText(context, "Radio indisponible", Toast.LENGTH_SHORT).show()
+                            }
                         }
                         onDismiss()
                     }
@@ -483,7 +494,18 @@ fun TrackActionsSheet(
                     scope.launch {
                         runCatching {
                             val mix = buildRadioQueue(container.api, "album", albumId, enriched)
-                            if (mix.isNotEmpty()) player.playRadioOrEnqueue(mix, "Radio album")
+                            if (mix.isNotEmpty()) {
+                                player.playRadioOrEnqueue(mix, "Radio album")
+                                val added = (mix.size - 1).coerceAtLeast(0)
+                                Toast.makeText(
+                                    context,
+                                    if (added > 0) "$added titre${if (added > 1) "s" else ""} similaires ajoutés"
+                                    else "Radio album démarrée",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            } else {
+                                Toast.makeText(context, "Radio album indisponible", Toast.LENGTH_SHORT).show()
+                            }
                         }
                         onDismiss()
                     }

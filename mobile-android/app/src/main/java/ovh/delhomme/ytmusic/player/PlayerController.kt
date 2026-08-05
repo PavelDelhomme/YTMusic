@@ -11,11 +11,17 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import ovh.delhomme.ytmusic.data.TrackDto
 import ovh.delhomme.ytmusic.YtMusicApp
+import android.widget.Toast
 
 enum class RepeatMode { Off, All, One }
 
@@ -37,6 +43,8 @@ data class PlayerUiState(
     val userQueueEnd: Int = 0,
     /** Lecture automatique (suggestions après la file). */
     val autoplaySuggestions: Boolean = true,
+    /** Remplissage « À suivre » en cours (skip à 1 titre). */
+    val autoFillBusy: Boolean = false,
     /** Id de la collection lancée (album / playlist / mix). */
     val sourceId: String? = null,
     val sourceKind: String? = null,
@@ -75,6 +83,15 @@ class PlayerController(
     private var autoplaySuggestions: Boolean =
         playerPrefs.getBoolean("autoplay_suggestions", true)
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var fillJob: Job? = null
+
+    /**
+     * Fournisseur de titres « À suivre » (related?fast=1).
+     * Branché depuis MainActivity via [AppContainer.api].
+     */
+    var autoFillFetcher: (suspend (seedId: String) -> List<TrackDto>)? = null
+
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             syncFrom(player)
@@ -83,6 +100,7 @@ class PlayerController(
 
     fun connect() {
         ensureService()
+        PlaybackService.Holder.onSkipAtEnd = { fillThenSkipFromEnd() }
         if (controller != null || controllerFuture != null) return
         val token = SessionToken(context, ComponentName(context, PlaybackService::class.java))
         val future = MediaController.Builder(context, token).buildAsync()
@@ -127,6 +145,11 @@ class PlayerController(
 
     fun release() {
         clearSleepTimer()
+        fillJob?.cancel()
+        if (PlaybackService.Holder.onSkipAtEnd != null) {
+            // ne détache que si c’est encore notre callback (évite course)
+            PlaybackService.Holder.onSkipAtEnd = null
+        }
         controller?.removeListener(listener)
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controller = null
@@ -301,8 +324,8 @@ class PlayerController(
                 p.play()
             }
             else -> {
-                p.seekTo(0L)
-                p.play()
+                // Un seul titre : fill « À suivre » puis skip (ne pas relancer le même)
+                fillThenSkipFromEnd()
             }
         }
         if (wasOne) {
@@ -310,6 +333,50 @@ class PlayerController(
             repeatMode = RepeatMode.One
         }
         syncFrom(p)
+    }
+
+    /** Appelé quand il n’y a plus de suivant (UI ou notif système). */
+    private fun fillThenSkipFromEnd() {
+        if (!autoplaySuggestions) {
+            Toast.makeText(context, "Fin de la file", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (fillJob?.isActive == true) {
+            Toast.makeText(context, "Suggestions en cours…", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val seed = _state.value.track?.id
+            ?: PlaybackService.Holder.queue.getOrNull(
+                (player() ?: PlaybackService.Holder.player)?.currentMediaItemIndex ?: 0,
+            )?.id
+        if (seed.isNullOrBlank()) return
+        val fetcher = autoFillFetcher
+        if (fetcher == null) {
+            Toast.makeText(context, "Suggestions indisponibles", Toast.LENGTH_SHORT).show()
+            return
+        }
+        _state.value = _state.value.copy(autoFillBusy = true)
+        Toast.makeText(context, "Chargement des suggestions…", Toast.LENGTH_SHORT).show()
+        fillJob = scope.launch {
+            try {
+                val tracks = runCatching { fetcher(seed) }.getOrDefault(emptyList())
+                if (tracks.isNotEmpty()) appendAutoTracks(tracks)
+                val p = player() ?: PlaybackService.Holder.player
+                if (p != null && p.hasNextMediaItem()) {
+                    p.seekToNextMediaItem()
+                    p.play()
+                    syncFrom(p)
+                } else {
+                    Toast.makeText(
+                        context,
+                        if (tracks.isEmpty()) "Aucune suggestion" else "File mise à jour",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            } finally {
+                _state.value = _state.value.copy(autoFillBusy = false)
+            }
+        }
     }
 
     /**
@@ -787,6 +854,7 @@ class PlayerController(
             Player.REPEAT_MODE_ALL -> RepeatMode.All
             else -> RepeatMode.Off
         }
+        val busy = _state.value.autoFillBusy
         _state.value = PlayerUiState(
             track = track,
             playing = player.isPlaying,
@@ -802,6 +870,7 @@ class PlayerController(
             queueTitle = queueTitle,
             userQueueEnd = userQueueEnd.coerceIn(0, queue.size),
             autoplaySuggestions = autoplaySuggestions,
+            autoFillBusy = busy,
             sourceId = sourceId,
             sourceKind = sourceKind,
         )
