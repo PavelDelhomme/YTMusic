@@ -1,6 +1,7 @@
 /**
  * Égaliseur Web Audio — désactivé par défaut.
  * createMediaElementSource ne peut être appelé qu’une fois par <audio>.
+ * Ne jamais créer l’AudioContext au chargement de la page (autoplay policy).
  */
 
 export type EqBand = {
@@ -32,10 +33,12 @@ type EqRuntime = {
   filters: BiquadFilterNode[];
   output: GainNode;
   wired: boolean;
+  audio: HTMLAudioElement;
 };
 
 let runtime: EqRuntime | null = null;
 let state: EqState = loadState();
+let pendingAudio: HTMLAudioElement | null = null;
 const listeners = new Set<() => void>();
 
 function loadState(): EqState {
@@ -82,6 +85,11 @@ export function getEqState(): EqState {
   };
 }
 
+/** True si l’EQ est branché → stream same-origin requis (CORS). */
+export function eqNeedsSameOrigin(): boolean {
+  return Boolean(state.enabled && runtime?.wired);
+}
+
 function applyGains() {
   if (!runtime) return;
   for (let i = 0; i < runtime.filters.length; i++) {
@@ -93,22 +101,24 @@ function applyGains() {
   }
 }
 
-/** Ferme le graphe EQ (nécessaire après swap A/B d’éléments audio). */
-export async function rewireEqualizer(audio: HTMLAudioElement | null) {
-  if (runtime) {
-    try {
-      await runtime.ctx.close();
-    } catch {
-      /* ignore */
-    }
-    runtime = null;
-  }
-  await wireEqualizer(audio);
+/**
+ * Mémorise l’élément audio. Ne crée PAS l’AudioContext tant que l’EQ
+ * n’est pas activé (évite le warning Chrome autoplay).
+ */
+export async function wireEqualizer(audio: HTMLAudioElement | null) {
+  pendingAudio = audio;
+  if (!audio || !state.enabled) return;
+  await ensureEqWired(audio);
 }
 
-/** Branche l’égaliseur sur l’élément audio (idempotent). */
-export async function wireEqualizer(audio: HTMLAudioElement | null) {
-  if (!audio) return;
+async function ensureEqWired(audio: HTMLAudioElement) {
+  if (runtime?.wired && runtime.audio === audio) {
+    applyGains();
+    if (runtime.ctx.state === 'suspended') {
+      await runtime.ctx.resume().catch(() => undefined);
+    }
+    return;
+  }
   if (runtime?.wired) {
     applyGains();
     return;
@@ -135,7 +145,7 @@ export async function wireEqualizer(audio: HTMLAudioElement | null) {
     node.connect(output);
     output.connect(ctx.destination);
 
-    runtime = { ctx, source, filters, output, wired: true };
+    runtime = { ctx, source, filters, output, wired: true, audio };
     if (ctx.state === 'suspended') {
       await ctx.resume().catch(() => undefined);
     }
@@ -145,7 +155,22 @@ export async function wireEqualizer(audio: HTMLAudioElement | null) {
   }
 }
 
+/** Ferme le graphe EQ (rare — ex. changement forcé d’élément). */
+export async function rewireEqualizer(audio: HTMLAudioElement | null) {
+  pendingAudio = audio;
+  if (runtime) {
+    try {
+      await runtime.ctx.close();
+    } catch {
+      /* ignore */
+    }
+    runtime = null;
+  }
+  if (audio && state.enabled) await ensureEqWired(audio);
+}
+
 export async function resumeEqContext() {
+  if (!state.enabled) return;
   if (runtime?.ctx.state === 'suspended') {
     await runtime.ctx.resume().catch(() => undefined);
   }
@@ -154,6 +179,10 @@ export async function resumeEqContext() {
 export function setEqEnabled(enabled: boolean) {
   state = { ...state, enabled };
   persist();
+  if (enabled) {
+    const audio = pendingAudio;
+    if (audio) void ensureEqWired(audio);
+  }
   applyGains();
   emit();
   void resumeEqContext();
