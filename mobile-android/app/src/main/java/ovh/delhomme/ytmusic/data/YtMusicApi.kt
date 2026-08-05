@@ -44,6 +44,32 @@ data class LibraryResponse(
 data class LikeResponse(val liked: Boolean, val library: LibraryResponse? = null)
 
 @JsonClass(generateAdapter = false)
+data class DeviceLoginStartResponse(
+    val id: String,
+    val code: String,
+    val pollSecret: String,
+    val expiresAt: Long,
+    val approveUrl: String,
+)
+
+@JsonClass(generateAdapter = false)
+data class DeviceLoginPollResponse(
+    val status: String,
+    val error: String? = null,
+    val user: UserDto? = null,
+    val token: String? = null,
+    val refreshToken: String? = null,
+)
+
+@JsonClass(generateAdapter = false)
+data class DeviceLoginInviteResponse(
+    val id: String,
+    val claimToken: String,
+    val expiresAt: Long,
+    val claimUrl: String,
+)
+
+@JsonClass(generateAdapter = false)
 data class LibrarySongResponse(val saved: Boolean, val library: LibraryResponse? = null)
 
 @JsonClass(generateAdapter = false)
@@ -362,6 +388,21 @@ interface YtMusicApi {
 
     @POST("api/auth/logout")
     suspend fun logout(@Body body: RefreshBody = RefreshBody(null)): Map<String, Any>
+
+    @POST("api/auth/device-login/approve")
+    suspend fun deviceLoginApprove(@Body body: Map<String, String>): Map<String, Any>
+
+    @POST("api/auth/device-login/invite")
+    suspend fun deviceLoginInvite(): DeviceLoginInviteResponse
+
+    @POST("api/auth/device-login/claim")
+    suspend fun deviceLoginClaim(@Body body: Map<String, String>): AuthResponse
+
+    @POST("api/auth/device-login/start")
+    suspend fun deviceLoginStart(): DeviceLoginStartResponse
+
+    @POST("api/auth/device-login/poll")
+    suspend fun deviceLoginPoll(@Body body: Map<String, String>): DeviceLoginPollResponse
 
     @GET("api/home")
     suspend fun home(): HomeResponse

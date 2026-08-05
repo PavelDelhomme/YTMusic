@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
+import { QRCodeSVG } from 'qrcode.react';
 import { api, setRefreshToken, setToken } from '../api';
 import { useAuth } from '../store/auth';
 import { useLibrary } from '../store/library';
-import { Fingerprint, KeyRound } from 'lucide-react';
+import { Fingerprint, KeyRound, QrCode } from 'lucide-react';
 import {
   dismissPasskeyOffer,
   hasLocalPasskeyReady,
@@ -41,6 +42,14 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
   const [info, setInfo] = useState('');
   const [step, setStep] = useState<'form' | 'passkey-offer'>('form');
   const [showPasskeyLogin, setShowPasskeyLogin] = useState(() => hasLocalPasskeyReady());
+  const [qr, setQr] = useState<{
+    id: string;
+    code: string;
+    pollSecret: string;
+    approveUrl: string;
+    expiresAt: number;
+  } | null>(null);
+  const [qrStatus, setQrStatus] = useState<'idle' | 'waiting' | 'expired'>('idle');
   const googleBtn = useRef<HTMLDivElement>(null);
 
   const isGuest = !user || user.isGuest || user.email.includes('@local.ytmusic');
@@ -51,8 +60,65 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
       setError('');
       setInfo('');
       setShowPasskeyLogin(hasLocalPasskeyReady());
+      setQr(null);
+      setQrStatus('idle');
     }
   }, [open]);
+
+  // QR login : appareil à connecter poll jusqu’à approbation (téléphone déjà connecté)
+  useEffect(() => {
+    if (!open || mode !== 'login' || step !== 'form' || !isGuest) return;
+    let cancelled = false;
+    let pollTimer: number | undefined;
+    let refreshTimer: number | undefined;
+
+    const boot = async () => {
+      try {
+        const s = await api.deviceLoginStart();
+        if (cancelled) return;
+        // Toujours l’URL publique du navigateur (évite IP Docker / localhost API)
+        const approveUrl = `${window.location.origin}/login-device?id=${encodeURIComponent(s.id)}&code=${encodeURIComponent(s.code)}`;
+        setQr({ ...s, approveUrl });
+        setQrStatus('waiting');
+        const poll = () => {
+          pollTimer = window.setTimeout(async () => {
+            if (cancelled) return;
+            try {
+              const r = await api.deviceLoginPoll(s.id, s.pollSecret);
+              if (cancelled) return;
+              if (r.status === 'approved' && r.token) {
+                setToken(r.token);
+                if (r.refreshToken) setRefreshToken(r.refreshToken);
+                await init();
+                await refresh();
+                onClose();
+                return;
+              }
+              if (r.status === 'expired') {
+                setQrStatus('expired');
+                return;
+              }
+              poll();
+            } catch {
+              poll();
+            }
+          }, 1500);
+        };
+        poll();
+        refreshTimer = window.setTimeout(() => {
+          if (!cancelled) void boot();
+        }, Math.max(5_000, s.expiresAt - Date.now() - 5_000));
+      } catch {
+        if (!cancelled) setQrStatus('idle');
+      }
+    };
+    void boot();
+    return () => {
+      cancelled = true;
+      if (pollTimer) window.clearTimeout(pollTimer);
+      if (refreshTimer) window.clearTimeout(refreshTimer);
+    };
+  }, [open, mode, step, isGuest, init, refresh, onClose]);
 
   useEffect(() => {
     if (!open || !googleEnabled || !googleClientId) return;
@@ -104,7 +170,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
         return;
       }
     } catch {
-      /* si liste KO, on propose quand même une fois */
+      /* ignore */
     }
     setStep('passkey-offer');
   }
@@ -169,7 +235,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <div className="w-full max-w-md rounded-2xl border border-yt-border bg-yt-surface p-6 shadow-2xl">
+      <div className="max-h-[92vh] w-full max-w-md overflow-y-auto rounded-2xl border border-yt-border bg-yt-surface p-6 shadow-2xl">
         <div className="mb-4 flex items-start justify-between">
           <div>
             <h2 className="font-display text-2xl font-semibold">
@@ -209,7 +275,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
           <button
             type="button"
             disabled={busy}
-            className="mb-4 flex w-full items-center justify-center gap-2 rounded-full border border-yt-border bg-yt-elevated py-2.5 text-sm font-medium hover:bg-yt-hover disabled:opacity-60"
+            className="mb-3 flex w-full items-center justify-center gap-2 rounded-full border border-yt-border bg-yt-elevated py-2.5 text-sm font-medium hover:bg-yt-hover disabled:opacity-60"
             onClick={() => {
               setBusy(true);
               setError('');
@@ -237,6 +303,29 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
           >
             <Fingerprint className="h-4 w-4" /> Continuer avec une passkey
           </button>
+        )}
+
+        {mode === 'login' && isGuest && (
+          <div className="mb-4 rounded-2xl border border-yt-border bg-yt-elevated/60 p-4 text-center">
+            <div className="mb-2 flex items-center justify-center gap-1.5 text-sm font-medium">
+              <QrCode className="h-4 w-4 text-yt-red" />
+              Connexion rapide (QR)
+            </div>
+            {qr?.approveUrl ? (
+              <div className="mx-auto inline-flex rounded-xl bg-white p-3">
+                <QRCodeSVG value={qr.approveUrl} size={168} level="M" />
+              </div>
+            ) : (
+              <div className="mx-auto flex h-[192px] w-[192px] items-center justify-center rounded-xl bg-yt-bg text-xs text-yt-muted">
+                Préparation du QR…
+              </div>
+            )}
+            <p className="mt-3 text-xs text-yt-muted">
+              {qrStatus === 'expired'
+                ? 'QR expiré — un nouveau se génère…'
+                : 'Scanne avec ton téléphone déjà connecté (app ou navigateur) pour autoriser cet écran.'}
+            </p>
+          </div>
         )}
 
         {mode === 'login' && !showPasskeyLogin && (

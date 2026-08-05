@@ -370,6 +370,44 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ credential }),
     }),
+  deviceLoginStart: () =>
+    req<{
+      id: string;
+      code: string;
+      pollSecret: string;
+      expiresAt: number;
+      approveUrl: string;
+    }>('/api/auth/device-login/start', { method: 'POST', body: '{}' }),
+  deviceLoginPoll: (id: string, pollSecret: string) =>
+    req<{
+      status: 'pending' | 'approved' | 'expired' | 'error';
+      error?: string;
+      user?: User;
+      token?: string;
+      refreshToken?: string;
+    }>('/api/auth/device-login/poll', {
+      method: 'POST',
+      body: JSON.stringify({ id, pollSecret }),
+    }),
+  deviceLoginApprove: (id: string, code: string) =>
+    req<{ ok: boolean }>('/api/auth/device-login/approve', {
+      method: 'POST',
+      body: JSON.stringify({ id, code }),
+    }),
+  deviceLoginPeek: (id: string) =>
+    req<{ status: string; expiresAt: number; expired: boolean }>(
+      `/api/auth/device-login/peek?id=${encodeURIComponent(id)}`,
+    ),
+  deviceLoginInvite: () =>
+    req<{ id: string; claimToken: string; expiresAt: number; claimUrl: string }>(
+      '/api/auth/device-login/invite',
+      { method: 'POST', body: '{}' },
+    ),
+  deviceLoginClaim: (claim: string) =>
+    req<{ user: User; token: string; refreshToken?: string }>(
+      '/api/auth/device-login/claim',
+      { method: 'POST', body: JSON.stringify({ claim }) },
+    ),
   deployInfo: () =>
     req<{ urls: string[]; lan: { address: string; iface: string }[]; port: number; built: boolean }>(
       '/api/deploy/info',
