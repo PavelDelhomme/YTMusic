@@ -100,7 +100,7 @@ fun DebugLogsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                "API active : ${container.resolvedApiBase()}",
+                "Mode ${container.apiEnvLabel()} · ${container.resolvedApiBase()}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -111,9 +111,9 @@ fun DebugLogsScreen(
             )
 
             Spacer(Modifier.height(10.dp))
-            Text("URL API (si la biblio ne charge pas)", fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+            Text("URL API", fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
             Text(
-                "Même Wi‑Fi que le PC : http://192.168.x.x:8787 — ou USB+adb reverse : http://127.0.0.1:8787",
+                "Samsung = DEV (LAN). Bascule PROD pour tester ytmusic.delhomme.ovh sans rebuilder.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -122,7 +122,7 @@ fun DebugLogsScreen(
                 onValueChange = { apiUrl = it },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                label = { Text("http://IP:8787") },
+                label = { Text("http://IP:8787 ou https://…") },
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
@@ -145,9 +145,20 @@ fun DebugLogsScreen(
                     onClick = {
                         var u = apiUrl.trim().trimEnd('/')
                         if (!u.startsWith("http")) u = "http://$u"
+                        val prevKind = container.apiEnvKind()
                         container.setApiBaseOverride(u)
                         apiUrl = u
-                        Toast.makeText(context, "API → $u", Toast.LENGTH_SHORT).show()
+                        val nextKind = container.apiEnvKind(u)
+                        if (prevKind != nextKind) {
+                            scope.launch { container.tokenStore.clear() }
+                            Toast.makeText(
+                                context,
+                                "API $nextKind — reconnecte-toi (JWT différent)",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        } else {
+                            Toast.makeText(context, "API → $u", Toast.LENGTH_SHORT).show()
+                        }
                         AppLog.breadcrumb("api-url", u)
                     },
                 ) { Text("Enregistrer") }
@@ -160,16 +171,41 @@ fun DebugLogsScreen(
                 ) { Text("Reset") }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        val u = BuildConfig.API_BASE_URL.trimEnd('/')
+                        val prevKind = container.apiEnvKind()
+                        container.setApiBaseOverride(null)
+                        apiUrl = u
+                        if (prevKind != "dev") {
+                            scope.launch { container.tokenStore.clear() }
+                            Toast.makeText(context, "Mode DEV (build) — reconnecte-toi", Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(context, "Mode DEV · $u", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                ) { Text("DEV LAN") }
                 OutlinedButton(
                     onClick = {
                         apiUrl = "http://127.0.0.1:8787"
+                        container.setApiBaseOverride(apiUrl)
+                        Toast.makeText(context, "DEV adb reverse", Toast.LENGTH_SHORT).show()
                     },
-                ) { Text("127.0.0.1 (adb)") }
-                OutlinedButton(
+                ) { Text("DEV 127.0.0.1") }
+                Button(
                     onClick = {
-                        apiUrl = BuildConfig.API_BASE_URL.trimEnd('/')
+                        val u = "https://ytmusic.delhomme.ovh"
+                        val prevKind = container.apiEnvKind()
+                        container.setApiBaseOverride(u)
+                        apiUrl = u
+                        if (prevKind != "prod") {
+                            scope.launch { container.tokenStore.clear() }
+                            Toast.makeText(context, "Mode PROD — reconnecte-toi", Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(context, "Mode PROD", Toast.LENGTH_SHORT).show()
+                        }
                     },
-                ) { Text("LAN build") }
+                ) { Text("PROD") }
             }
             probeMsg?.let {
                 Text(
