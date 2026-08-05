@@ -45,12 +45,16 @@ detect_lan_ip() {
   ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}'
 }
 
-# Priorité : API_BASE_URL (explicite) > ANDROID_API_BASE_URL > APP_URL si non-local > LAN
+# Priorité : API_BASE_URL (explicite) > ANDROID_API_BASE_URL > DEPLOY_URL / APP_URL publics > LAN
 if [[ -z "${API_BASE_URL:-}" ]]; then
   if [[ -n "${ANDROID_API_BASE_URL:-}" ]]; then
     API_BASE_URL="$ANDROID_API_BASE_URL"
-  elif [[ -n "${APP_URL:-}" && "$APP_URL" != *"127.0.0.1"* && "$APP_URL" != *"localhost"* ]]; then
+  elif [[ -n "${DEPLOY_URL:-}" && "$DEPLOY_URL" != *"127.0.0.1"* && "$DEPLOY_URL" != *"localhost"* && "$DEPLOY_URL" != *"172."* ]]; then
+    API_BASE_URL="$DEPLOY_URL"
+  elif [[ -n "${APP_URL:-}" && "$APP_URL" != *"127.0.0.1"* && "$APP_URL" != *"localhost"* && "$APP_URL" != *"172."* && "$APP_URL" != *"192.168."* ]]; then
     API_BASE_URL="$APP_URL"
+  elif [[ "${APP_ENV:-}" == "production" || "${APP_ENV:-}" == "prod" ]]; then
+    API_BASE_URL="https://ytmusic.delhomme.ovh"
   else
     LAN="$(detect_lan_ip || true)"
     PORT_NUM="${PORT:-8787}"
