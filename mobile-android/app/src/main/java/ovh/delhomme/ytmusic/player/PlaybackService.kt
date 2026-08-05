@@ -112,12 +112,16 @@ class PlaybackService : MediaSessionService() {
                 runCatching { exo.stop() }
                 streamFailStreak.set(0)
                 android.os.Handler(mainLooper).post {
+                    val localApi = BuildConfig.API_BASE_URL.contains("127.0.0.1") ||
+                        BuildConfig.API_BASE_URL.contains("192.168.") ||
+                        BuildConfig.API_BASE_URL.contains("10.") ||
+                        BuildConfig.API_BASE_URL.startsWith("http://")
                     android.widget.Toast.makeText(
                         this@PlaybackService,
-                        if (networkish) {
-                            "Serveur injoignable — lecture stoppée"
-                        } else {
-                            "Lecture impossible — vérifie l’API / cookies YouTube"
+                        when {
+                            networkish -> "Serveur injoignable — lecture stoppée"
+                            localApi -> "Lecture impossible — vérifie que l’API locale tourne (port 8787)"
+                            else -> "Lecture impossible — Admin web → Cookies YouTube (VPS bloqué)"
                         },
                         android.widget.Toast.LENGTH_LONG,
                     ).show()
@@ -516,8 +520,23 @@ fun ExoPlayer.playTracks(baseStreamUrl: (String) -> String, tracks: List<TrackDt
         mediaItemFor(t, baseStreamUrl, PlaybackService.Holder.queueTitle)
     }
     setMediaItems(items, idx, 0L)
+    volume = 1f
     prepare()
     playWhenReady = true
+}
+
+/** Si le volume média Android est à 0, le remonte un peu (sinon « pas de son » jusqu’aux touches volume). */
+fun ensureAudibleMediaVolume(context: android.content.Context) {
+    val am = context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager
+        ?: return
+    val stream = android.media.AudioManager.STREAM_MUSIC
+    val cur = am.getStreamVolume(stream)
+    if (cur > 0) return
+    val max = am.getStreamMaxVolume(stream).coerceAtLeast(1)
+    val target = (max * 0.35f).toInt().coerceIn(1, max)
+    runCatching {
+        am.setStreamVolume(stream, target, android.media.AudioManager.FLAG_SHOW_UI)
+    }
 }
 
 fun mediaItemFor(
