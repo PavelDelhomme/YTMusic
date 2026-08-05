@@ -1,5 +1,5 @@
 import { config as loadEnv } from 'dotenv';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -230,10 +230,21 @@ const authStrict = rateLimit({ windowMs: 15 * 60_000, max: 40 });
 
 app.get('/api/health', (_req, res) => {
   const ytCookies = youtubeCookiesStatus();
+  const ref = process.env.BUILD_REF || 'local';
+  let semver = (process.env.APP_VERSION || '').trim();
+  if (!semver) {
+    try {
+      semver = readFileSync(join(ROOT, 'VERSION'), 'utf8').trim();
+    } catch {
+      semver = process.env.npm_package_version || '0.0.0';
+    }
+  }
+  const channel = ref === 'prod' || process.env.APP_ENV === 'production' ? 'p' : 'd';
   res.json({
     ok: true,
-    version: process.env.BUILD_SHA || process.env.npm_package_version || 'dev',
-    ref: process.env.BUILD_REF || 'local',
+    version: process.env.BUILD_SHA || semver || 'dev',
+    appVersion: `${channel}+${semver}`,
+    ref,
     ytdlp: existsSync(join(ROOT, 'bin', 'yt-dlp')),
     auth: authConfig(),
     youtubeCookies: {
