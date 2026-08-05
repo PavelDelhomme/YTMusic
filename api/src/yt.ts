@@ -23,6 +23,7 @@ import {
   inferAlbumReleaseType,
   isPlausibleArtistName,
   cleanMusicTitle,
+  isWeakTitle,
 } from './mappers.js';
 import { getFullLibrary, getHistory } from './library.js';
 import { listFollows, listSearchHistory } from './prefs.js';
@@ -701,6 +702,74 @@ export async function getTrack(videoId: string, opts?: { light?: boolean }) {
   return value;
 }
 
+/**
+ * Complète titres / artistes manquants (« Sans titre ») via getInfo.
+ * Persiste dans tracks_cache pour ne plus les perdre.
+ */
+export async function hydrateTracks(
+  tracks: Track[],
+  opts?: { concurrency?: number; limit?: number },
+): Promise<Track[]> {
+  if (!tracks?.length) return tracks || [];
+  const { upsertTrack } = await import('./db.js');
+  const limit = opts?.limit ?? 36;
+  const concurrency = Math.max(1, opts?.concurrency ?? 4);
+  const out = tracks.map((t) => ({ ...t }));
+  const weakIdx = out
+    .map((t, i) =>
+      t?.id &&
+      /^[a-zA-Z0-9_-]{11}$/.test(t.id) &&
+      (isWeakTitle(t.title, t.id) || !(t.artists || []).length)
+        ? i
+        : -1,
+    )
+    .filter((i) => i >= 0)
+    .slice(0, limit);
+  if (!weakIdx.length) return out;
+
+  for (let i = 0; i < weakIdx.length; i += concurrency) {
+    const batch = weakIdx.slice(i, i + concurrency);
+    await Promise.all(
+      batch.map(async (idx) => {
+        const cur = out[idx];
+        try {
+          const { track } = await getTrack(cur.id, { light: true });
+          const merged: Track = {
+            ...cur,
+            ...track,
+            title: isWeakTitle(track.title, track.id) ? cur.title : track.title,
+            artists:
+              track.artists?.length && track.artists.some((a) => a.name)
+                ? track.artists
+                : cur.artists || [],
+            album: track.album || cur.album,
+            thumbnails: track.thumbnails?.length ? track.thumbnails : cur.thumbnails,
+            duration: track.duration || cur.duration,
+            durationSeconds: track.durationSeconds ?? cur.durationSeconds,
+            type: track.type || cur.type,
+          };
+          out[idx] = merged;
+          if (!isWeakTitle(merged.title, merged.id)) {
+            try {
+              upsertTrack(merged);
+            } catch {
+              /* ignore */
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }),
+    );
+  }
+  return out;
+}
+
+export async function hydrateTrack(track: Track): Promise<Track> {
+  const [one] = await hydrateTracks([track], { limit: 1, concurrency: 1 });
+  return one || track;
+}
+
 const TRACK_META_TTL_MS = 20 * 60 * 1000;
 const TRACK_META_MAX = 180;
 const trackMetaCache = new Map<string, { track: Track; at: number }>();
@@ -795,7 +864,8 @@ export async function getUpNext(videoId: string): Promise<Track[]> {
   const innertube = await getYT();
   const panel = await innertube.music.getUpNext(videoId, true);
   const contents = (panel as any).contents || [];
-  return contents.map((c: any) => mapListItem(c) || mapAny(c)).filter(Boolean) as Track[];
+  const mapped = contents.map((c: any) => mapListItem(c) || mapAny(c)).filter(Boolean) as Track[];
+  return hydrateTracks(mapped, { limit: 40, concurrency: 5 });
 }
 
 export async function getRelated(videoId: string): Promise<{
@@ -836,23 +906,47 @@ export async function getRelated(videoId: string): Promise<{
     });
   };
 
-  return { related: uniq(related), radio: uniq(radio) };
+  const [relH] = await Promise.all([
+    hydrateTracks(uniq(related), { limit: 30, concurrency: 5 }),
+  ]);
+  // radio déjà passé par getUpNext → hydrateTracks
+  return { related: relH, radio: uniq(radio) };
 }
 
 export async function getAlbumRadio(albumId: string): Promise<Track[]> {
   const { tracks } = await getAlbum(albumId);
   const seed = tracks.find((t) => /^[a-zA-Z0-9_-]{11}$/.test(t.id));
   if (!seed) return [];
-  const { radio } = await getRelated(seed.id);
-  return radio;
+  const { radio, related } = await getRelated(seed.id);
+  const mid = tracks.filter((t) => /^[a-zA-Z0-9_-]{11}$/.test(t.id))[Math.min(3, tracks.length - 1)];
+  let extra: Track[] = [];
+  if (mid && mid.id !== seed.id) {
+    try {
+      const r2 = await getRelated(mid.id);
+      extra = [...r2.radio.slice(0, 10), ...r2.related.slice(0, 8)];
+    } catch {
+      /* ignore */
+    }
+  }
+  const seen = new Set<string>();
+  return [...radio, ...related, ...tracks.slice(0, 6), ...extra].filter((t) => {
+    if (!t?.id || seen.has(t.id) || t.id === seed.id) return false;
+    seen.add(t.id);
+    return /^[a-zA-Z0-9_-]{11}$/.test(t.id);
+  });
 }
 
 export async function getArtistRadio(artistId: string): Promise<Track[]> {
   const { songs } = await getArtist(artistId);
   const seed = songs.find((t) => /^[a-zA-Z0-9_-]{11}$/.test(t.id));
   if (!seed) return [];
-  const { radio } = await getRelated(seed.id);
-  return radio;
+  const { radio, related } = await getRelated(seed.id);
+  const seen = new Set<string>();
+  return [...radio, ...related, ...songs.slice(0, 10)].filter((t) => {
+    if (!t?.id || seen.has(t.id) || t.id === seed.id) return false;
+    seen.add(t.id);
+    return /^[a-zA-Z0-9_-]{11}$/.test(t.id);
+  });
 }
 
 function isTopSongsShelfTitle(title: string): boolean {

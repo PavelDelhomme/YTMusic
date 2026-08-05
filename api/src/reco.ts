@@ -1,5 +1,5 @@
 import type { Track } from './types.js';
-import { getRelated, getTrack, search } from './yt.js';
+import { getRelated, getTrack, search, getAlbum, getArtist } from './yt.js';
 import {
   getPrefs,
   getWeights,
@@ -119,11 +119,16 @@ function scoreContent(candidate: Track, seed: Track | null, prefsGenres: string[
         s += Math.max(0, 0.22 - d * 0.4);
       }
     }
-    const titleOverlap = seed.title
+  // Réduit le poids du title-overlap brut (poussait les covers « même titre »)
+  const titleOverlap = seed.title
       .toLowerCase()
       .split(/\s+/)
       .filter((w) => w.length > 3 && candidate.title.toLowerCase().includes(w)).length;
-    s += Math.min(0.12, titleOverlap * 0.04);
+  if (titleOverlap && artistKey(candidate) === artistKey(seed)) {
+    s += Math.min(0.1, titleOverlap * 0.03);
+  } else if (titleOverlap) {
+    s += Math.min(0.04, titleOverlap * 0.015);
+  }
   }
   const blob = trackBlob(candidate);
   for (const g of prefsGenres) {
@@ -171,6 +176,41 @@ function proximityToSeed(candidate: Track, seed: Track) {
   return scoreContent(candidate, seed, []);
 }
 
+/** Couverture / remix spam du titre seed (surtout radio album). */
+function isRemixSpamOfSeed(candidate: Track, seed: Track): boolean {
+  const seedCore = cleanCoreTitle(seed.title);
+  const candCore = cleanCoreTitle(candidate.title);
+  if (seedCore.length < 5 || candCore.length < 5) return false;
+  const sameArtist =
+    Boolean(artistKey(candidate)) && artistKey(candidate) === artistKey(seed);
+  if (sameArtist) return false;
+  const shares =
+    candCore.includes(seedCore) ||
+    seedCore.includes(candCore) ||
+    (seedCore.length >= 8 && candidate.title.toLowerCase().includes(seedCore));
+  if (!shares) return false;
+  if (
+    /\b(remix|cover|8-?bit|chiptune|karaoke|instrumental|sega|game version|computer game|tribute|nightcore|slowed)\b/i.test(
+      candidate.title,
+    )
+  ) {
+    return true;
+  }
+  // Même titre (hors seed artist) = quasi toujours cover
+  if (candCore === seedCore) return true;
+  return false;
+}
+
+function cleanCoreTitle(title: string): string {
+  return String(title || '')
+    .toLowerCase()
+    .replace(/\(.*?\)|\[.*?\]/g, ' ')
+    .replace(/\b(official|video|audio|lyrics|hd|4k|remaster(?:ed)?|live|feat\.?|ft\.?|radio edit|remix)\b/gi, ' ')
+    .replace(/[^a-z0-9àâäéèêëïîôùûüç\s]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** Titres de la biblio proches du seed (même vibe / artiste / énergie). */
 function pickLibraryNearSeed(seed: Track, library: Track[], max: number): Track[] {
   return library
@@ -212,10 +252,11 @@ function pickTasteArtists(seed: Track, library: Track[], max: number): string[] 
 function rerank(
   scored: { track: Track; score: number }[],
   recentArtist: string[],
-  opts?: { window?: number; seedArtist?: string },
+  opts?: { window?: number; seedArtist?: string; seedArtistEvery?: number },
 ) {
   const window = opts?.window ?? 5;
   const seedArtist = opts?.seedArtist || '';
+  const every = Math.max(2, opts?.seedArtistEvery ?? 4);
   const out: { track: Track; score: number }[] = [];
   const usedArtists: string[] = [...recentArtist];
   const pool = [...scored].sort((a, b) => b.score - a.score);
@@ -226,8 +267,12 @@ function rerank(
       const a = artistKey(pool[i].track);
       const recent = usedArtists.slice(-window);
       if (a && recent.includes(a)) continue;
-      // Cap : pas plus d’1 titre sur 4 du seed artist (variété)
-      if (seedArtist && a === seedArtist && seedArtistHits >= Math.max(1, Math.floor(out.length / 4) + 1)) {
+      // Cap : pas plus d’1 titre sur N du seed artist (variété)
+      if (
+        seedArtist &&
+        a === seedArtist &&
+        seedArtistHits >= Math.max(1, Math.floor(out.length / every) + 1)
+      ) {
         continue;
       }
       idx = i;
@@ -290,6 +335,7 @@ export async function hybridRank(opts: {
   const scored = opts.candidates
     .filter((t) => t?.id && /^[a-zA-Z0-9_-]{11}$/.test(t.id))
     .filter((t) => !seed || t.id !== seed.id)
+    .filter((t) => !seed || !isRemixSpamOfSeed(t, seed))
     .map((track) => {
       const s1 = scoreContent(track, seed, prefs.genres);
       const s2 = scoreSeq(track, seed);
@@ -306,24 +352,40 @@ export async function hybridRank(opts: {
       const a = artistKey(track);
       if (a && tasteArtists.has(a)) s += 0.07;
       if (likes.has(track.id)) s += 0.05;
+      // Album-style : boost artiste(s) de l’album seed
+      if (
+        mode === 'album-style' &&
+        seed &&
+        a &&
+        (seed.artists || []).some(
+          (sa) => (sa.id || sa.name || '').toLowerCase() === a,
+        )
+      ) {
+        s += 0.06;
+      }
       if (recent.has(track.id)) s *= 0.35;
       // Mode style / radio : léger malus même artiste pour pousser la découverte
+      // artist-radio : on garde plus le seed artiste ; album-style : entre les deux
       if (
-        (mode === 'style' || mode === 'radio' || mode === 'discover') &&
         seed &&
         artistKey(track) &&
         artistKey(track) === artistKey(seed)
       ) {
-        s *= 0.82;
+        if (mode === 'artist-radio') s *= 0.95;
+        else if (mode === 'album-style') s *= 0.88;
+        else if (mode === 'style' || mode === 'radio' || mode === 'discover') s *= 0.82;
       }
       return { track, score: s };
     });
 
   const seedA = seed ? artistKey(seed) : '';
   const recentArtists = seedA ? [seedA] : [];
+  const artistCapWindow =
+    mode === 'artist-radio' ? 4 : mode === 'style' || mode === 'discover' || mode === 'album-style' ? 6 : 5;
   return rerank(scored, recentArtists, {
-    window: mode === 'style' || mode === 'discover' ? 6 : 5,
+    window: artistCapWindow,
     seedArtist: seedA,
+    seedArtistEvery: mode === 'artist-radio' ? 3 : 4,
   });
 }
 
@@ -384,6 +446,188 @@ export async function similarForUser(userId: string, trackId: string, seedTrack?
     mode: 'style',
   });
   return { tracks: ranked, related, radio };
+}
+
+function dedupeTracks(tracks: Track[]): Track[] {
+  const seen = new Set<string>();
+  const out: Track[] = [];
+  for (const t of tracks) {
+    if (!t?.id || seen.has(t.id)) continue;
+    if (!/^[a-zA-Z0-9_-]{11}$/.test(t.id)) continue;
+    seen.add(t.id);
+    out.push(t);
+  }
+  return out;
+}
+
+async function expandWithTasteAndSearch(opts: {
+  userId: string;
+  seed: Track;
+  pool: Track[];
+  excludeId?: string;
+  searchQueries?: string[];
+  libraryMax?: number;
+}) {
+  let pool = [...opts.pool];
+  const taste = getLibraryTasteTracks(opts.userId, 120);
+  const fromLibrary = pickLibraryNearSeed(opts.seed, taste, opts.libraryMax ?? 18);
+  if (fromLibrary.length) pool = [...pool, ...fromLibrary];
+
+  const queries = opts.searchQueries?.filter(Boolean) || [];
+  if (!queries.length && (opts.seed.title || opts.seed.artists?.length)) {
+    queries.push(styleSearchQuery(opts.seed));
+  }
+  for (const q of queries.slice(0, 3)) {
+    try {
+      const res = await search(q, 'song');
+      const extra = [...(res.songs || []), ...(res.videos || [])].filter(
+        (t) => t?.id && t.id !== opts.excludeId,
+      );
+      pool = [...pool, ...extra.slice(0, 16)];
+    } catch {
+      /* ignore */
+    }
+  }
+
+  try {
+    const artists = pickTasteArtists(opts.seed, taste, 2);
+    const tags = styleTags(opts.seed).slice(0, 1);
+    for (const name of artists) {
+      const q = `${name} ${tags[0] || 'songs'}`.trim();
+      const res = await search(q, 'song');
+      const extra = [...(res.songs || []), ...(res.videos || [])].filter(
+        (t) => t?.id && t.id !== opts.excludeId,
+      );
+      pool = [...pool, ...extra.slice(0, 8)];
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return dedupeTracks(pool);
+}
+
+/**
+ * Radio / similaires album : vibe de l’album (pas juste le 1er titre),
+ * + related/radio YT, + goûts biblio, + search « songs like ».
+ */
+export async function albumSimilarForUser(userId: string, albumId: string) {
+  const { album, tracks } = await getAlbum(albumId);
+  const playable = tracks.filter((t) => t?.id && /^[a-zA-Z0-9_-]{11}$/.test(t.id));
+  // Évite d’ancrer uniquement sur la piste 1 (related YT = souvent covers de ce titre)
+  let seed = playable[Math.min(1, Math.max(0, playable.length - 1))] || playable[0] || null;
+  if (!seed) return { tracks: [] as Track[], seed: null, album };
+
+  if ((!seed.artists || !seed.artists.length) && album.artists?.length) {
+    seed = { ...seed, artists: album.artists };
+  }
+
+  const { related, radio } = await getRelated(seed.id);
+  // Amorçage : pistes album (hors seed) + related/radio — filtre covers du seed
+  let pool: Track[] = [
+    ...playable.filter((t) => t.id !== seed!.id).slice(0, 12),
+    ...radio,
+    ...related,
+  ].filter((t) => !isRemixSpamOfSeed(t, seed!));
+
+  // 2ᵉ ancre différente pour élargir la vibe album
+  const mid = playable[Math.min(4, Math.max(0, playable.length - 1))];
+  if (mid && mid.id !== seed.id) {
+    try {
+      const r2 = await getRelated(mid.id);
+      pool = [
+        ...pool,
+        ...[...r2.radio.slice(0, 14), ...r2.related.slice(0, 10)].filter(
+          (t) => !isRemixSpamOfSeed(t, seed!) && !isRemixSpamOfSeed(t, mid),
+        ),
+      ];
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const artistName = album.artists?.[0]?.name || seed.artists?.[0]?.name || '';
+  const albumTitle = String(album.title || '').trim();
+  const tags = styleTags(seed);
+  const queries = [
+    artistName && tags.length ? `${artistName} ${tags.slice(0, 2).join(' ')} songs` : '',
+    artistName && albumTitle ? `${artistName} ${albumTitle} era playlist` : '',
+    artistName ? `${artistName} similar artists mix` : '',
+    styleSearchQuery(seed),
+  ].filter(Boolean);
+
+  pool = await expandWithTasteAndSearch({
+    userId,
+    seed,
+    pool,
+    excludeId: seed.id,
+    searchQueries: queries,
+    libraryMax: 22,
+  });
+
+  const ranked = await hybridRank({
+    userId,
+    candidates: pool,
+    seed,
+    mode: 'album-style',
+  });
+  return { tracks: ranked, seed, album, related, radio };
+}
+
+/**
+ * Radio / similaires artiste : tops + related + artistes similaires + biblio.
+ */
+export async function artistSimilarForUser(userId: string, artistId: string) {
+  const { artist, songs, similar } = await getArtist(artistId);
+  const playable = songs.filter((t) => t?.id && /^[a-zA-Z0-9_-]{11}$/.test(t.id));
+  let seed = playable[0] || null;
+  if (!seed) return { tracks: [] as Track[], seed: null, artist };
+
+  if (!seed.artists?.length) {
+    seed = {
+      ...seed,
+      artists: [{ name: artist.name || 'Artiste', id: artistId }],
+    };
+  }
+
+  const { related, radio } = await getRelated(seed.id);
+  let pool: Track[] = [...radio, ...related, ...playable.slice(0, 14)];
+
+  // Artistes similaires YTM → quelques titres via search
+  const simArtists = (similar || [])
+    .map((s) => String(s.title || s.artists?.[0]?.name || '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  for (const name of simArtists) {
+    try {
+      const res = await search(`${name} popular songs`, 'song');
+      pool = [...pool, ...(res.songs || []).slice(0, 8)];
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const queries = [
+    `${artist.name || ''} similar artists mix`.trim(),
+    styleSearchQuery(seed),
+  ].filter(Boolean);
+
+  pool = await expandWithTasteAndSearch({
+    userId,
+    seed,
+    pool,
+    excludeId: seed.id,
+    searchQueries: queries,
+    libraryMax: 20,
+  });
+
+  const ranked = await hybridRank({
+    userId,
+    candidates: pool,
+    seed,
+    mode: 'artist-radio',
+  });
+  return { tracks: ranked, seed, artist, related, radio };
 }
 
 export async function radioForUser(
