@@ -356,7 +356,7 @@ export async function handleStreamWarm(req: Request, res: Response) {
     ...new Set(
       raw
         .map((x: unknown) => String(x || ''))
-        .filter((id): id is string => /^[a-zA-Z0-9_-]{11}$/.test(id)),
+        .filter((id: string): id is string => /^[a-zA-Z0-9_-]{11}$/.test(id)),
     ),
   ].slice(0, 32) as string[];
   if (!ids.length) {
