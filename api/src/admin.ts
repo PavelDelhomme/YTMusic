@@ -45,6 +45,41 @@ function isLoopbackUrl(url: string) {
   return /127\.0\.0\.1|localhost/i.test(url);
 }
 
+function isPrivateHostUrl(url: string) {
+  try {
+    const h = new URL(url).hostname;
+    if (isLoopbackUrl(url)) return true;
+    if (/^10\.\d+\.\d+\.\d+$/.test(h)) return true;
+    if (/^192\.168\.\d+\.\d+$/.test(h)) return true;
+    if (/^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(h)) return true;
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/** Base publique pour liens APK / QR (jamais IP Docker / LAN privée en prod). */
+function publicDownloadBase(port: number): string {
+  const candidates = [
+    process.env.WEBAUTHN_ORIGIN,
+    process.env.DEPLOY_URL,
+    process.env.PUBLIC_APP_URL,
+    process.env.PROD_APP_URL,
+    process.env.APP_URL,
+  ]
+    .map((x) => String(x || '').trim().replace(/\/$/, ''))
+    .filter(Boolean);
+  for (const c of candidates) {
+    if (!isPrivateHostUrl(c)) return c;
+  }
+  const env = (process.env.APP_ENV || 'local').toLowerCase();
+  if (env === 'production' || env === 'prod' || env === 'preprod') {
+    return 'https://ytmusic.delhomme.ovh';
+  }
+  const lan = lanAddresses()[0];
+  return lan ? `http://${lan.address}:${port}` : `http://127.0.0.1:${port}`;
+}
+
 /** URL API à figer dans l’APK (hors Wi‑Fi = APP_URL / ANDROID_API_BASE_URL). */
 export function resolveAndroidApiBaseUrl(
   prefer: 'auto' | 'lan' | 'app_url' | string = 'auto',
@@ -66,14 +101,16 @@ export function resolveAndroidApiBaseUrl(
     return appUrl || lanUrl;
   }
 
-  if (explicit) return explicit;
-  if (
-    (env === 'production' || env === 'prod' || env === 'preprod') &&
-    appUrl &&
-    !isLoopbackUrl(appUrl)
-  ) {
-    return appUrl;
+  if (explicit) {
+    if (!isPrivateHostUrl(explicit) || env === 'local') return explicit;
   }
+  if (
+    (env === 'production' || env === 'prod' || env === 'preprod')
+  ) {
+    if (appUrl && !isPrivateHostUrl(appUrl)) return appUrl;
+    return 'https://ytmusic.delhomme.ovh';
+  }
+  if (appUrl && !isLoopbackUrl(appUrl) && !isPrivateHostUrl(appUrl)) return appUrl;
   if (appUrl && !isLoopbackUrl(appUrl)) return appUrl;
   return lanUrl;
 }
@@ -104,13 +141,7 @@ export function apkPublicInfo(port: number) {
   const st = ready ? statSync(APK_PATH) : null;
   const targetApi = resolveAndroidApiBaseUrl('auto', port);
   const appUrl = (process.env.APP_URL || '').trim().replace(/\/$/, '');
-  const lan = lanAddresses()[0];
-  const publicBase =
-    appUrl && !isLoopbackUrl(appUrl)
-      ? appUrl
-      : lan
-        ? `http://${lan.address}:${port}`
-        : `http://127.0.0.1:${port}`;
+  const publicBase = publicDownloadBase(port);
   return {
     ready,
     path: ready ? APK_PATH : null,

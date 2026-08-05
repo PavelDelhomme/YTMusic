@@ -751,7 +751,7 @@ fun NowPlayingScreen(
                                             scope.launch {
                                                 val mix = buildRadioQueue(container.api, "track", track.id, track)
                                                 if (mix.isNotEmpty()) {
-                                                    player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
+                                                    player.playRadioOrEnqueue(mix, "Mix")
                                                     Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
@@ -909,7 +909,7 @@ fun NowPlayingScreen(
                                 scope.launch {
                                     val mix = buildRadioQueue(container.api, "track", t.id, t)
                                     if (mix.isNotEmpty()) {
-                                        player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
+                                        player.playRadioOrEnqueue(mix, "Mix")
                                         Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
                                     }
                                 }
@@ -936,7 +936,7 @@ fun NowPlayingScreen(
                                 scope.launch {
                                     val mix = buildRadioQueue(container.api, "track", item.id, item)
                                     if (mix.isNotEmpty()) {
-                                        player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
+                                        player.playRadioOrEnqueue(mix, "Mix")
                                         Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
                                     }
                                 }
@@ -986,7 +986,7 @@ fun NowPlayingScreen(
                                     scope.launch {
                                         val mix = buildRadioQueue(container.api, "track", item.id, item)
                                         if (mix.isNotEmpty()) {
-                                            player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
+                                            player.playRadioOrEnqueue(mix, "Mix")
                                             Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
                                         }
                                     }
@@ -1015,7 +1015,7 @@ fun NowPlayingScreen(
                             scope.launch {
                                 val mix = buildRadioQueue(container.api, "track", t.id, t)
                                 if (mix.isNotEmpty()) {
-                                    player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
+                                    player.playRadioOrEnqueue(mix, "Mix")
                                     Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
                                 }
                             }
@@ -1316,7 +1316,7 @@ private fun QueueExpandedBody(
         scope.launch {
             val mix = buildRadioQueue(container.api, "track", track.id, track)
             if (mix.isNotEmpty()) {
-                player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
+                player.playRadioOrEnqueue(mix, "Mix")
             }
         }
     }
@@ -1844,7 +1844,7 @@ private fun InlineSyncedLyrics(
                             } else {
                                 MaterialTheme.typography.titleMedium
                             },
-                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                            fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Normal,
                             color = when {
                                 isActive -> PlayerFg
                                 past -> PlayerMuted.copy(alpha = 0.28f)
@@ -1853,10 +1853,10 @@ private fun InlineSyncedLyrics(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { onSeek(line.startMs.coerceAtLeast(0L)) }
-                                .padding(vertical = if (isActive) 12.dp else 7.dp)
+                                .padding(vertical = if (isActive) 14.dp else 7.dp)
                                 .graphicsLayer {
-                                    scaleX = if (isActive) 1.03f else 1f
-                                    scaleY = if (isActive) 1.03f else 1f
+                                    scaleX = if (isActive) 1.06f else 1f
+                                    scaleY = if (isActive) 1.06f else 1f
                                 },
                         )
                     }

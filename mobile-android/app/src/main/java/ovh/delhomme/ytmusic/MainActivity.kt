@@ -365,19 +365,17 @@ fun YtMusicAppContent(
                             }
                         }
                     }
-                    // Toute la radio/mix = file utilisateur (pas seulement le seed en « À suivre »)
-                    player.play(
-                        tracks,
-                        idx,
-                        title,
-                        userQueueEnd = if (radioish) tracks.size else null,
-                        sourceId = if (radioish) null else t?.album?.id,
-                        sourceKind = when {
-                            radioish -> "mix"
-                            t?.album?.id != null -> "album"
-                            else -> null
-                        },
-                    )
+                    if (radioish) {
+                        player.playRadioOrEnqueue(tracks, title, sourceKind = "mix")
+                    } else {
+                        player.play(
+                            tracks,
+                            idx,
+                            title,
+                            sourceId = t?.album?.id,
+                            sourceKind = if (t?.album?.id != null) "album" else null,
+                        )
+                    }
                     showNowPlaying = false
                 },
                 onLoggedOut = { loggedIn = false },
@@ -386,9 +384,7 @@ fun YtMusicAppContent(
                     scope.launch {
                         val mix = buildRadioQueue(container.api, "track", t.id, t)
                         if (mix.isNotEmpty()) {
-                            player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
-                        } else {
-                            player.play(listOf(t), 0, userQueueEnd = 1)
+                            player.playRadioOrEnqueue(mix, "Mix")
                         }
                     }
                 },
