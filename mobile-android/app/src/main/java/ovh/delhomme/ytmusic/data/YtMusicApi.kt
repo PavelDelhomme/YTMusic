@@ -213,6 +213,36 @@ data class PrefsResponse(
 )
 
 @JsonClass(generateAdapter = false)
+data class OfflineJobDto(
+    val id: String = "",
+    val kind: String? = null,
+    val target_id: String? = null,
+    val status: String? = null,
+    val progress: Int = 0,
+    val total: Int = 0,
+) {
+    fun pct(): Float {
+        if (total <= 0) return if (status == "done") 1f else 0f
+        return (progress.toFloat() / total).coerceIn(0f, 1f)
+    }
+
+    fun done(): Boolean = status == "done" || (total > 0 && progress >= total)
+}
+
+@JsonClass(generateAdapter = false)
+data class OfflineStatusResponse(val jobs: List<OfflineJobDto> = emptyList())
+
+@JsonClass(generateAdapter = false)
+data class OfflineDownloadsResponse(val downloads: List<OfflineDownloadDto> = emptyList())
+
+@JsonClass(generateAdapter = false)
+data class OfflineDownloadDto(
+    val trackId: String = "",
+    val status: String? = null,
+    val path: String? = null,
+)
+
+@JsonClass(generateAdapter = false)
 data class SavePrefsBody(
     val genres: List<String>? = null,
     val moods: List<String>? = null,
@@ -453,6 +483,12 @@ interface YtMusicApi {
 
     @POST("api/offline/start")
     suspend fun offlineStart(@Body body: Map<String, String>): Map<String, Any>
+
+    @GET("api/offline")
+    suspend fun offlineStatus(): OfflineStatusResponse
+
+    @GET("api/offline/downloads")
+    suspend fun offlineDownloads(): OfflineDownloadsResponse
 
     @POST("api/reco/feedback")
     suspend fun recoFeedback(@Body body: RecoFeedbackBody): Map<String, Any>

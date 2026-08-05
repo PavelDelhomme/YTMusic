@@ -36,6 +36,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -73,7 +74,9 @@ import ovh.delhomme.ytmusic.player.PlayerController
 import ovh.delhomme.ytmusic.ui.auth.LoginScreen
 import ovh.delhomme.ytmusic.ui.components.AddToPlaylistSheet
 import ovh.delhomme.ytmusic.ui.components.CastSheet
+import ovh.delhomme.ytmusic.ui.components.LocalNowPlaying
 import ovh.delhomme.ytmusic.ui.components.MiniPlayerBar
+import ovh.delhomme.ytmusic.ui.components.NowPlayingInfo
 import ovh.delhomme.ytmusic.ui.components.TrackActionsSheet
 import ovh.delhomme.ytmusic.ui.debug.DebugLogsScreen
 import ovh.delhomme.ytmusic.ui.detail.ArtistDetailScreen
@@ -267,6 +270,12 @@ fun YtMusicAppContent(
                         idx,
                         title,
                         userQueueEnd = if (radioish) tracks.size else null,
+                        sourceId = if (radioish) null else t?.album?.id,
+                        sourceKind = when {
+                            radioish -> "mix"
+                            t?.album?.id != null -> "album"
+                            else -> null
+                        },
                     )
                     showNowPlaying = false
                 },
@@ -314,14 +323,7 @@ private fun MainTabs(
 
     fun openDetail(item: TrackDto) {
         if (item.type?.equals("mix", ignoreCase = true) == true) {
-            scope.launch {
-                runCatching {
-                    container.ensureFreshToken()
-                    val mix = container.api.recoRadio(item.id)
-                    val tracks = mix.tracks.filter { it.isPlayable() }
-                    if (tracks.isNotEmpty()) onPlayNamed(tracks, 0, item.title)
-                }
-            }
+            nav.navigate("detail/mix/${Uri.encode(item.id)}")
             return
         }
         val kind = when {
@@ -679,6 +681,16 @@ private fun MainTabs(
         }
     }
 
+    CompositionLocalProvider(
+        LocalNowPlaying provides NowPlayingInfo(
+            trackId = playerUi.track?.id,
+            playing = playerUi.playing,
+            albumId = playerUi.track?.album?.id,
+            sourceId = playerUi.sourceId,
+            sourceKind = playerUi.sourceKind,
+            queueTitle = playerUi.queueTitle,
+        ),
+    ) {
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
         bottomBar = {
@@ -853,6 +865,7 @@ private fun MainTabs(
                 val kind = when (kindStr) {
                     "album" -> DetailKind.Album
                     "artist" -> DetailKind.Artist
+                    "mix" -> DetailKind.Mix
                     else -> DetailKind.Playlist
                 }
                 if (kind == DetailKind.Artist) {
@@ -996,4 +1009,5 @@ private fun MainTabs(
             )
         }
     }
+    } // CompositionLocalProvider
 }

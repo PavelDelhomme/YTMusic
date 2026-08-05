@@ -34,7 +34,20 @@ fun MediaCover(
     size: Dp,
     modifier: Modifier = Modifier,
     circle: Boolean = false,
+    /** Force l’overlay ; sinon déduit de [LocalNowPlaying]. */
+    playingOverlay: Boolean? = null,
 ) {
+    val now = LocalNowPlaying.current
+    val active = playingOverlay
+        ?: when {
+            now.matchesTrack(track.id) -> true
+            track.isAlbum() && now.matchesAlbum(track.id) -> true
+            (track.isPlaylist() || track.type.equals("mix", true)) &&
+                now.matchesSource(track.id) -> true
+            track.isAlbum() && now.matchesAlbum(track.album?.id) -> true
+            else -> false
+        }
+    val animating = active && now.playing
     val shape = when {
         circle || track.isArtist() -> CircleShape
         else -> RoundedCornerShape(8.dp)
@@ -44,6 +57,11 @@ fun MediaCover(
         track.isPlaylist() -> Icons.Default.QueueMusic
         track.isAlbum() -> Icons.Default.Album
         else -> Icons.Default.MusicNote
+    }
+    val barH = when {
+        size >= 160.dp -> 28.dp
+        size >= 80.dp -> 20.dp
+        else -> 14.dp
     }
     Box(
         modifier = modifier
@@ -72,6 +90,11 @@ fun MediaCover(
                 )
             },
         )
+        PlayingCoverOverlay(
+            active = active,
+            playing = animating,
+            barHeight = barH,
+        )
     }
 }
 
@@ -82,7 +105,14 @@ fun MixCollageCover(
     size: Dp,
     modifier: Modifier = Modifier,
     titleFallback: String = "M",
+    mixId: String? = null,
 ) {
+    val now = LocalNowPlaying.current
+    val active = when {
+        mixId != null && now.matchesSource(mixId) -> true
+        tracks.any { now.matchesTrack(it.id) } -> true
+        else -> false
+    }
     val covers = tracks.take(4).toMutableList()
     if (covers.isNotEmpty()) {
         while (covers.size < 4) covers.add(covers[covers.size % tracks.size.coerceAtLeast(1)])
@@ -143,5 +173,10 @@ fun MixCollageCover(
                 }
             }
         }
+        PlayingCoverOverlay(
+            active = active,
+            playing = active && now.playing,
+            barHeight = if (size >= 120.dp) 22.dp else 14.dp,
+        )
     }
 }

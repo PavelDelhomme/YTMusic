@@ -21,6 +21,7 @@ import {
   artistsFromHeader,
   extractYear,
   inferAlbumReleaseType,
+  isJunkArtistName,
 } from './mappers.js';
 import { getFullLibrary, getHistory } from './library.js';
 import { listFollows, listSearchHistory } from './prefs.js';
@@ -710,12 +711,17 @@ async function fetchTrackMeta(videoId: string, light = false) {
 
   let artists: { name: string; id?: string }[] = [];
   if (Array.isArray(basic.artists) && basic.artists.length) {
-    artists = basic.artists.map((a: any) => ({
-      name: String(a.name),
-      id: a.channel_id || a.id,
-    }));
-  } else if (basic.author) {
-    artists = parseAuthorField(String(basic.author), basic.channel_id);
+    artists = basic.artists
+      .map((a: any) => ({
+        name: String(a.name || '').trim(),
+        id: a.channel_id || a.id,
+      }))
+      .filter((a: { name: string }) => a.name && !isJunkArtistName(a.name));
+  }
+  if (!artists.length && basic.author) {
+    artists = parseAuthorField(String(basic.author), basic.channel_id).filter(
+      (a) => a.name && !isJunkArtistName(a.name),
+    );
   }
 
   let album: Track['album'] | undefined;
@@ -1230,6 +1236,15 @@ export async function getAlbum(albumId: string): Promise<{
   const cover = extractThumbs(header, album);
 
   let artists = artistsFromHeader(header);
+  // Certains payloads youtubei exposent les artistes à la racine
+  if (!artists.length && Array.isArray((album as any).artists)) {
+    artists = ((album as any).artists as any[])
+      .map((a) => ({
+        name: String(a?.name || '').trim(),
+        id: a?.channel_id || a?.id,
+      }))
+      .filter((a) => !isJunkArtistName(a.name));
+  }
   const year =
     extractYear(header.year) ||
     extractYear(header.subtitle) ||
@@ -1251,7 +1266,7 @@ export async function getAlbum(albumId: string): Promise<{
     const counts = new Map<string, { name: string; id?: string; n: number }>();
     for (const t of tracks) {
       for (const a of t.artists || []) {
-        if (!a.name) continue;
+        if (!a.name || isJunkArtistName(a.name)) continue;
         const key = (a.id || a.name).toLowerCase();
         const cur = counts.get(key);
         if (cur) cur.n += 1;
@@ -1264,10 +1279,37 @@ export async function getAlbum(albumId: string): Promise<{
       .map(({ name, id: artistId }) => ({ name, id: artistId }));
   }
 
+  // Dernier recours : meta du 1er titre (getInfo) — souvent fiable
+  if (!artists.length) {
+    const firstId = tracks.find((t) => /^[a-zA-Z0-9_-]{11}$/.test(t.id))?.id;
+    if (firstId) {
+      try {
+        const { track } = await fetchTrackMeta(firstId, true);
+        artists = (track.artists || []).filter((a) => a.name && !isJunkArtistName(a.name));
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  // Si light n’a rien donné (author vide), retenter sans light
+  if (!artists.length) {
+    const firstId = tracks.find((t) => /^[a-zA-Z0-9_-]{11}$/.test(t.id))?.id;
+    if (firstId) {
+      try {
+        const { track } = await fetchTrackMeta(firstId, false);
+        artists = (track.artists || []).filter((a) => a.name && !isJunkArtistName(a.name));
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   // Enrichir les pistes sans artiste
   if (artists.length) {
     for (const t of tracks) {
-      if (!t.artists?.length) t.artists = artists;
+      const useful = (t.artists || []).filter((a) => a.name && !isJunkArtistName(a.name));
+      if (!useful.length) t.artists = artists;
+      else t.artists = useful;
     }
   }
 

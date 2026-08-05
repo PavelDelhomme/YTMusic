@@ -65,7 +65,13 @@ data class TrackDto(
 ) {
     fun artistLine(): String {
         val names = artists?.mapNotNull { it.name.trim().takeIf { n -> n.isNotEmpty() } }
-            ?.filter { !it.equals("Inconnu", true) && !it.equals("Unknown", true) }
+            ?.filter {
+                !it.equals("Inconnu", true) &&
+                    !it.equals("Unknown", true) &&
+                    !it.equals("Artiste", true) &&
+                    !it.equals("Artist", true) &&
+                    !it.equals("N/A", true)
+            }
             .orEmpty()
         return names.joinToString(", ").ifBlank { "Artiste" }
     }

@@ -37,6 +37,9 @@ data class PlayerUiState(
     val userQueueEnd: Int = 0,
     /** Lecture automatique (suggestions après la file). */
     val autoplaySuggestions: Boolean = true,
+    /** Id de la collection lancée (album / playlist / mix). */
+    val sourceId: String? = null,
+    val sourceKind: String? = null,
 )
 
 /** Pont UI ↔ Media3 PlaybackService (lecture arrière-plan). */
@@ -66,6 +69,8 @@ class PlayerController(
     private var shuffleEnabled: Boolean = false
     private var repeatMode: RepeatMode = RepeatMode.Off
     private var userQueueEnd: Int = 0
+    private var sourceId: String? = null
+    private var sourceKind: String? = null
     private val playerPrefs = context.getSharedPreferences("ytm_player", Context.MODE_PRIVATE)
     private var autoplaySuggestions: Boolean =
         playerPrefs.getBoolean("autoplay_suggestions", true)
@@ -134,9 +139,16 @@ class PlayerController(
         title: String? = null,
         /** Fin exclusive file utilisateur ; null = toute la file lancée est « user ». */
         userQueueEnd: Int? = null,
+        sourceId: String? = null,
+        sourceKind: String? = null,
     ) {
         if (title != null) queueTitle = title
         PlaybackService.Holder.queueTitle = queueTitle
+        this.sourceId = sourceId
+            ?: tracks.getOrNull(startIndex)?.album?.id
+            ?: tracks.firstOrNull()?.album?.id
+        this.sourceKind = sourceKind
+            ?: if (this.sourceId != null) "album" else null
         ensureService()
         connect()
         warmAround(tracks, startIndex)
@@ -699,6 +711,8 @@ class PlayerController(
             queueTitle = queueTitle,
             userQueueEnd = userQueueEnd.coerceIn(0, queue.size),
             autoplaySuggestions = autoplaySuggestions,
+            sourceId = sourceId,
+            sourceKind = sourceKind,
         )
         if (idx in queue.indices) PlaybackService.Holder.index = idx
     }

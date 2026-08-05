@@ -66,50 +66,70 @@ fun TrackRow(
     trailing: String? = null,
     indexLabel: String? = null,
     highlighted: Boolean = false,
+    /** Lignes plus denses (page album). */
+    compact: Boolean = false,
+    showCover: Boolean = true,
 ) {
+    val vPad = if (compact) 4.dp else 8.dp
+    val coverSz = if (compact) 44.dp else 52.dp
+    val hPad = if (compact) 12.dp else 16.dp
     Row(
         modifier = modifier
             .fillMaxWidth()
             .background(
-                if (highlighted) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-                else Color.Transparent,
+                if (highlighted || LocalNowPlaying.current.matchesTrack(track.id)) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                } else Color.Transparent,
             )
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = { onMore?.invoke() },
             )
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = hPad, vertical = vPad),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (indexLabel != null) {
             Text(
                 indexLabel,
-                modifier = Modifier.width(28.dp),
+                modifier = Modifier.width(if (showCover) 28.dp else 32.dp),
                 style = MaterialTheme.typography.labelMedium,
-                color = if (highlighted) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (highlighted || LocalNowPlaying.current.matchesTrack(track.id)) {
+                    MaterialTheme.colorScheme.primary
+                } else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        MediaCover(track, 52.dp)
-        Spacer(Modifier.width(12.dp))
+        if (showCover) {
+            MediaCover(track, coverSz)
+            Spacer(Modifier.width(if (compact) 10.dp else 12.dp))
+        } else if (indexLabel == null) {
+            Spacer(Modifier.width(4.dp))
+        } else {
+            Spacer(Modifier.width(8.dp))
+        }
         Column(Modifier.weight(1f)) {
+            val now = LocalNowPlaying.current
+            val isActive = highlighted || now.matchesTrack(track.id)
             Text(
                 track.title,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodyLarge,
+                style = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Medium,
-                color = if (highlighted) MaterialTheme.colorScheme.primary
+                color = if (isActive) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurface,
             )
             when {
-                subtitle != null -> Text(
-                    subtitle,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                subtitle != null -> {
+                    if (subtitle.isNotEmpty()) {
+                        Text(
+                            subtitle,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 track.isPlaylist() -> Text(
                     "Playlist · ${track.artistLine()}",
                     maxLines = 1,
@@ -154,7 +174,10 @@ fun TrackRow(
             )
         }
         if (onMore != null) {
-            IconButton(onClick = onMore) {
+            IconButton(
+                onClick = onMore,
+                modifier = if (compact) Modifier.size(36.dp) else Modifier,
+            ) {
                 Icon(
                     Icons.Default.MoreVert,
                     contentDescription = "Plus d'options",

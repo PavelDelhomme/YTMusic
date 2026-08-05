@@ -118,6 +118,7 @@ import ovh.delhomme.ytmusic.player.PlayerController
 import ovh.delhomme.ytmusic.player.PlayerUiState
 import ovh.delhomme.ytmusic.player.RepeatMode
 import ovh.delhomme.ytmusic.ui.components.ArtistLinksText
+import ovh.delhomme.ytmusic.ui.components.DownloadStatusIcon
 import ovh.delhomme.ytmusic.ui.components.MediaCover
 import ovh.delhomme.ytmusic.ui.icons.MixIcon
 import kotlin.math.abs
@@ -557,10 +558,9 @@ fun NowPlayingScreen(
                                         track = track,
                                         positionMs = ui.positionMs,
                                         onSeek = { player.seek(it) },
-                                        onClose = { showLyrics = false },
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            // Cover + titre + artiste : carte paroles immersive
+                                            // Cover remplacée : carte paroles immersive
                                             .height(380.dp)
                                             .clip(RoundedCornerShape(16.dp))
                                             .background(Color.Black.copy(alpha = 0.42f)),
@@ -684,22 +684,65 @@ fun NowPlayingScreen(
                                             }
                                         }
                                         PlayerChromeAction.Lyrics -> SecondaryChip(
-                                            Icons.Default.Lyrics, slot.label, PlayerFg, showLabel = false,
+                                            Icons.Default.Lyrics,
+                                            slot.label,
+                                            if (showLyrics) SeekRed else PlayerFg,
+                                            showLabel = false,
+                                            active = showLyrics,
                                         ) { showLyrics = !showLyrics }
                                         PlayerChromeAction.AddToPlaylist -> SecondaryChip(
                                             Icons.Default.PlaylistAdd, slot.label, PlayerFg, showLabel = true,
                                         ) { onOpenAddToPlaylist?.invoke(track) }
-                                        PlayerChromeAction.Download -> SecondaryChip(
-                                            Icons.Default.Download, slot.label, PlayerFg, showLabel = false,
-                                        ) {
-                                            scope.launch {
-                                                runCatching { container.api.download(track.id) }
-                                                    .onSuccess {
-                                                        Toast.makeText(context, "Téléchargement lancé", Toast.LENGTH_SHORT).show()
+                                        PlayerChromeAction.Download -> {
+                                            var dlProgress by remember(track.id) { mutableStateOf<Float?>(null) }
+                                            var dlDone by remember(track.id) { mutableStateOf(false) }
+                                            LaunchedEffect(track.id) {
+                                                dlDone = runCatching {
+                                                    container.api.library().downloaded.contains(track.id)
+                                                }.getOrDefault(false)
+                                            }
+                                            Row(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(20.dp))
+                                                    .background(PlayerFg.copy(alpha = 0.08f))
+                                                    .clickable(enabled = dlProgress == null && !dlDone) {
+                                                        scope.launch {
+                                                            dlProgress = 0.08f
+                                                            val tick = launch {
+                                                                while (true) {
+                                                                    delay(350)
+                                                                    val cur = dlProgress ?: 0.08f
+                                                                    if (cur < 0.9f) {
+                                                                        dlProgress = (cur + 0.06f).coerceAtMost(0.9f)
+                                                                    }
+                                                                }
+                                                            }
+                                                            runCatching { container.api.download(track.id) }
+                                                                .onSuccess {
+                                                                    tick.cancel()
+                                                                    dlProgress = 1f
+                                                                    dlDone = true
+                                                                    delay(200)
+                                                                    dlProgress = null
+                                                                    Toast.makeText(context, "Téléchargé", Toast.LENGTH_SHORT).show()
+                                                                }
+                                                                .onFailure {
+                                                                    tick.cancel()
+                                                                    dlProgress = null
+                                                                    Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
+                                                                }
+                                                        }
                                                     }
-                                                    .onFailure {
-                                                        Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
-                                                    }
+                                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                DownloadStatusIcon(
+                                                    downloaded = dlDone,
+                                                    progress = dlProgress,
+                                                    size = 22.dp,
+                                                    tint = PlayerFg,
+                                                    accent = SeekRed,
+                                                )
                                             }
                                         }
                                         PlayerChromeAction.Mix -> SecondaryChip(
@@ -1014,12 +1057,15 @@ private fun SecondaryChip(
     label: String,
     tint: Color,
     showLabel: Boolean,
+    active: Boolean = false,
     onClick: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
-            .background(PlayerFg.copy(alpha = 0.08f))
+            .background(
+                if (active) SeekRed.copy(alpha = 0.18f) else PlayerFg.copy(alpha = 0.08f),
+            )
             .clickable(onClick = onClick)
             .padding(
                 horizontal = if (showLabel) 12.dp else 10.dp,
@@ -1033,7 +1079,7 @@ private fun SecondaryChip(
             Text(
                 label,
                 style = MaterialTheme.typography.labelMedium,
-                color = PlayerFg,
+                color = if (active) SeekRed else PlayerFg,
                 maxLines = 1,
             )
         }
@@ -1739,7 +1785,6 @@ private fun InlineSyncedLyrics(
     track: TrackDto,
     positionMs: Long,
     onSeek: (Long) -> Unit,
-    onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var text by remember(track.id) { mutableStateOf<String?>(null) }
@@ -1777,39 +1822,6 @@ private fun InlineSyncedLyrics(
     }
 
     Column(modifier = modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                Text(
-                    track.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = PlayerFg,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    track.artistLine(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = PlayerMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Text(
-                "Fermer",
-                color = PlayerFg,
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable(onClick = onClose)
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-            )
-        }
-        Spacer(Modifier.height(6.dp))
         when {
             loading -> Text(
                 "Chargement…",

@@ -125,15 +125,21 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
         onQueue: (List<TrackDto>, String) -> Unit,
     ) {
         viewModelScope.launch {
-            _state.value = _state.value.copy(radioLoadingId = categoryId)
+            val title = _state.value.radios.find { it.id == categoryId }?.title ?: "Mix"
+            // Preview déjà en mémoire → feedback immédiat, puis file complète
+            val preview = _state.value.radioPreviews[categoryId]
+                .orEmpty()
+                .filter { it.isPlayable() }
+            if (preview.isNotEmpty()) {
+                onQueue(preview, title)
+            } else {
+                _state.value = _state.value.copy(radioLoadingId = categoryId)
+            }
             runCatching {
                 container.ensureFreshToken()
                 val mix = container.api.recoRadio(categoryId)
                 val tracks = mix.tracks.filter { it.isPlayable() }
-                if (tracks.isNotEmpty()) {
-                    val title = _state.value.radios.find { it.id == categoryId }?.title ?: "Mix"
-                    onQueue(tracks, title)
-                }
+                if (tracks.isNotEmpty()) onQueue(tracks, title)
             }
             _state.value = _state.value.copy(radioLoadingId = null)
         }

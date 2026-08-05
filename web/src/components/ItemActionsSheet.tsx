@@ -15,7 +15,6 @@ import {
   PinOff,
   Play,
   Share2,
-  Smartphone,
   SlidersHorizontal,
   Sparkles,
   Trash2,
@@ -90,6 +89,7 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
   const [showPlaylists, setShowPlaylists] = useState(false);
   const [showSleep, setShowSleep] = useState(false);
   const [onDevice, setOnDevice] = useState(false);
+  const [dlProgress, setDlProgress] = useState<number | null>(null);
 
   useEffect(() => {
     if (!item) return;
@@ -299,14 +299,27 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
             {playlists.length === 0 && (
               <p className="px-3 py-2 text-sm text-yt-muted">Aucune playlist locale.</p>
             )}
-            {playlists.map((p) => (
-              <Row
-                key={p.id}
-                icon={<ListMusic className="h-4 w-4" />}
-                label={p.name}
-                onClick={() => after(() => void addToPlaylist(p.id, item))}
-              />
-            ))}
+            {playlists.map((p) => {
+              const already = (p.tracks || []).some((t) => t.id === item.id);
+              return (
+                <Row
+                  key={p.id}
+                  icon={
+                    already ? (
+                      <Check className="h-4 w-4 text-yt-red" />
+                    ) : (
+                      <ListMusic className="h-4 w-4" />
+                    )
+                  }
+                  label={p.name}
+                  sub={already ? 'Déjà dans cette playlist' : undefined}
+                  onClick={() => {
+                    if (already) return;
+                    after(() => void addToPlaylist(p.id, item));
+                  }}
+                />
+              );
+            })}
           </div>
         )}
 
@@ -346,21 +359,55 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
           )}
           {playable && (
             <Row
-              icon={onDevice ? <Smartphone className="h-4 w-4" /> : <Download className="h-4 w-4" />}
-              label={onDevice ? "Sur l'appareil" : 'Télécharger'}
-              onClick={() =>
+              icon={
+                onDevice ? (
+                  <Check className="h-4 w-4 text-yt-red" />
+                ) : dlProgress != null ? (
+                  <span className="relative flex h-4 w-4 items-center justify-center">
+                    <span
+                      className="absolute inset-0 rounded-full border-2 border-white/20"
+                      aria-hidden
+                    />
+                    <span
+                      className="absolute inset-0 rounded-full border-2 border-yt-red border-t-transparent animate-spin"
+                      aria-hidden
+                    />
+                    <span className="text-[8px] font-semibold tabular-nums text-yt-red">
+                      {Math.round(dlProgress * 100)}
+                    </span>
+                  </span>
+                ) : (
+                  <Download className="h-4 w-4" />
+                )
+              }
+              label={
+                onDevice
+                  ? "Sur l'appareil"
+                  : dlProgress != null
+                    ? `Téléchargement ${Math.round(dlProgress * 100)} %`
+                    : 'Télécharger'
+              }
+              disabled={busy || dlProgress != null}
+              onClick={() => {
+                if (onDevice || dlProgress != null) return;
                 after(async () => {
-                  if (onDevice) return;
                   setBusy(true);
+                  setDlProgress(0.08);
+                  const tick = window.setInterval(() => {
+                    setDlProgress((p) => (p == null ? 0.08 : Math.min(0.9, p + 0.07)));
+                  }, 350);
                   try {
                     await downloadAndCache(item);
                     await api.download(item.id).catch(() => undefined);
+                    setDlProgress(1);
                     setOnDevice(true);
                   } finally {
+                    window.clearInterval(tick);
+                    setDlProgress(null);
                     setBusy(false);
                   }
-                })
-              }
+                });
+              }}
             />
           )}
 

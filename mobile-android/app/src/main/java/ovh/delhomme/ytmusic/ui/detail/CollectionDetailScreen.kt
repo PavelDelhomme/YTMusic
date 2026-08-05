@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -65,7 +64,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.ArtistRef
@@ -76,9 +74,11 @@ import ovh.delhomme.ytmusic.data.resolvePlayableTracks
 import ovh.delhomme.ytmusic.player.PlayerController
 import ovh.delhomme.ytmusic.ui.components.MediaCover
 import ovh.delhomme.ytmusic.ui.components.TrackRow
+import ovh.delhomme.ytmusic.ui.components.DownloadStatusIcon
+import ovh.delhomme.ytmusic.ui.components.pollOfflineJob
 import ovh.delhomme.ytmusic.ui.icons.MixIcon
 
-enum class DetailKind { Album, Artist, Playlist }
+enum class DetailKind { Album, Artist, Playlist, Mix }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -111,12 +111,15 @@ fun CollectionDetailScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var inLib by remember { mutableStateOf(false) }
     var showAlbumMenu by remember { mutableStateOf(false) }
+    var offlineProgress by remember { mutableStateOf<Float?>(null) }
+    var offlineDone by remember { mutableStateOf(false) }
 
     fun recordCollectionPlay() {
         val entityKind = when (kind) {
             DetailKind.Album -> "album"
             DetailKind.Artist -> "artist"
             DetailKind.Playlist -> "playlist"
+            DetailKind.Mix -> "mix"
         }
         scope.launch {
             runCatching {
@@ -142,9 +145,38 @@ fun CollectionDetailScreen(
                 DetailKind.Album -> {
                     val r = container.api.album(id)
                     title = r.album?.title ?: seed?.title ?: "Album"
-                    val artists = r.album?.artists.orEmpty()
-                        .ifEmpty { r.tracks.flatMap { it.artists.orEmpty() }.distinctBy { it.name } }
-                    artistLine = artists.joinToString(", ") { it.name }.ifBlank { "Artiste" }
+                    fun usefulArtists(list: List<ArtistRef>?): List<ArtistRef> =
+                        list.orEmpty().filter {
+                            val n = it.name.trim()
+                            n.isNotEmpty() &&
+                                !n.equals("Artiste", true) &&
+                                !n.equals("Artist", true) &&
+                                !n.equals("Inconnu", true) &&
+                                !n.equals("Unknown", true)
+                        }
+                    val artists = usefulArtists(r.album?.artists)
+                        .ifEmpty {
+                            usefulArtists(
+                                r.tracks.flatMap { it.artists.orEmpty() }
+                                    .distinctBy { it.id ?: it.name },
+                            )
+                        }
+                        .ifEmpty { usefulArtists(seed?.artists) }
+                        .ifEmpty {
+                            // Fallback client : meta du 1er titre si l’API album n’a pas d’artiste
+                            val firstId = r.tracks.firstOrNull { it.id.matches(Regex("^[a-zA-Z0-9_-]{11}$")) }?.id
+                            if (firstId != null) {
+                                usefulArtists(
+                                    runCatching { container.api.track(firstId).track.artists }
+                                        .getOrNull(),
+                                )
+                            } else {
+                                emptyList()
+                            }
+                        }
+                    artistLine = artists.joinToString(", ") { it.name }.ifBlank {
+                        seed?.artistLine()?.takeIf { it != "Artiste" && it != "Artist" } ?: ""
+                    }
                     artistId = artists.firstOrNull()?.id
                     year = r.album?.year
                     releaseType = when {
@@ -157,11 +189,17 @@ fun CollectionDetailScreen(
                         append(releaseType)
                         year?.let { append(" - "); append(it) }
                     }
-                    cover = r.album?.asTrack() ?: seed ?: TrackDto(id = id, title = title, type = "album")
+                    cover = (r.album?.asTrack() ?: seed ?: TrackDto(id = id, title = title, type = "album"))
+                        .let { c ->
+                            val withId = if (c.id != id) c.copy(id = id, type = "album") else c.copy(type = "album")
+                            if (usefulArtists(withId.artists).isEmpty() && artists.isNotEmpty()) {
+                                withId.copy(artists = artists)
+                            } else withId
+                        }
                     tracks = r.tracks.filter { it.isPlayable() }.map { t ->
-                        if (t.artists.isNullOrEmpty() && artists.isNotEmpty()) {
+                        if (usefulArtists(t.artists).isEmpty() && artists.isNotEmpty()) {
                             t.copy(artists = artists)
-                        } else t
+                        } else t.copy(artists = usefulArtists(t.artists).ifEmpty { t.artists })
                     }
                     inLib = runCatching {
                         container.api.library().albums.any { it.id == id }
@@ -216,15 +254,44 @@ fun CollectionDetailScreen(
                         tracks = r.tracks.filter { it.isPlayable() }
                     }
                 }
+                DetailKind.Mix -> {
+                    title = seed?.title ?: id.replace('-', ' ').replace('_', ' ')
+                        .split(' ')
+                        .joinToString(" ") { w -> w.replaceFirstChar { c -> c.uppercase() } }
+                    subtitle = "Mix"
+                    cover = seed ?: TrackDto(id = id, title = title, type = "mix")
+                    // Preview rapide pour afficher la liste sans attendre le mix complet
+                    runCatching {
+                        val preview = container.api.recoRadio(id, preview = 1)
+                        val pt = preview.tracks.filter { it.isPlayable() }
+                        if (pt.isNotEmpty()) {
+                            tracks = pt
+                            cover = pt.first()
+                            subtitle = "${pt.size}+ titres · Mix"
+                            loading = false
+                        }
+                    }
+                    val r = container.api.recoRadio(id)
+                    val list = r.tracks.filter { it.isPlayable() }
+                    if (list.isNotEmpty()) {
+                        tracks = list
+                        cover = list.first()
+                        subtitle = "${list.size} titres · Mix"
+                    }
+                    inLib = runCatching {
+                        container.api.library().mixes.any { it.id == id }
+                    }.getOrDefault(false)
+                }
             }
         }.onFailure {
-            if (seed != null) {
-                tracks = resolvePlayableTracks(container.api, seed)
-                title = seed.title
+            if (seed != null || tracks.isNotEmpty()) {
+                if (tracks.isEmpty()) tracks = resolvePlayableTracks(container.api, seed!!)
+                title = title.ifBlank { seed?.title ?: "Mix" }
                 subtitle = when (kind) {
                     DetailKind.Album -> "Album"
                     DetailKind.Artist -> "Artiste"
                     DetailKind.Playlist -> "Playlist"
+                    DetailKind.Mix -> "Mix"
                 }
             } else {
                 error = it.message ?: "Impossible de charger"
@@ -281,18 +348,17 @@ fun CollectionDetailScreen(
                                 if (!aid.isNullOrBlank()) onOpenArtist(aid, artistLine)
                                 else Toast.makeText(context, "Artiste indisponible", Toast.LENGTH_SHORT).show()
                             },
-                            onDownload = {
-                                scope.launch {
-                                    runCatching {
-                                        container.api.offlineStart(
-                                            mapOf("kind" to "album", "targetId" to id),
-                                        )
-                                    }.onSuccess {
-                                        Toast.makeText(context, "Téléchargement démarré", Toast.LENGTH_SHORT).show()
-                                    }.onFailure {
-                                        Toast.makeText(context, it.message ?: "Échec offline", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
+                            onShuffle = {
+                                if (tracks.isEmpty()) return@AlbumHeroHeader
+                                recordCollectionPlay()
+                                val shuffled = tracks.shuffled()
+                                player?.play(
+                                    shuffled,
+                                    0,
+                                    title = title,
+                                    sourceId = id,
+                                    sourceKind = "album",
+                                ) ?: onPlay(shuffled, 0)
                             },
                             onToggleLibrary = {
                                 scope.launch {
@@ -306,7 +372,8 @@ fun CollectionDetailScreen(
                                                     id = id,
                                                     title = title,
                                                     type = "album",
-                                                    artists = cover?.artists ?: listOf(ArtistRef(artistLine, artistId)),
+                                                    artists = cover?.artists
+                                                        ?: listOf(ArtistRef(artistLine, artistId)),
                                                     thumbnails = cover?.thumbnails,
                                                 ),
                                             )
@@ -320,7 +387,13 @@ fun CollectionDetailScreen(
                             onPlay = {
                                 if (tracks.isEmpty()) return@AlbumHeroHeader
                                 recordCollectionPlay()
-                                onPlay(tracks, 0)
+                                player?.play(
+                                    tracks,
+                                    0,
+                                    title = title,
+                                    sourceId = id,
+                                    sourceKind = "album",
+                                ) ?: onPlay(tracks, 0)
                             },
                             onRadio = {
                                 radioBusy = true
@@ -352,14 +425,28 @@ fun CollectionDetailScreen(
                     itemsIndexed(tracks, key = { i, t -> "${t.id}-$i" }) { index, track ->
                         TrackRow(
                             track = track,
-                            onClick = { onPlay(tracks, index) },
+                            onClick = {
+                                player?.play(
+                                    tracks,
+                                    index,
+                                    title = title,
+                                    sourceId = id,
+                                    sourceKind = "album",
+                                ) ?: onPlay(tracks, index)
+                            },
                             onMore = { onMore(track, null) },
+                            // Artiste déjà dans le hero — lignes plus denses (durée conservée)
+                            subtitle = "",
+                            indexLabel = "${index + 1}",
+                            compact = true,
+                            showCover = false,
                         )
                     }
                 }
             }
             else -> {
-                // Playlist (et fallback artiste) — layout historique
+                // Playlist / Mix — layout historique
+                val headerLabel = if (kind == DetailKind.Mix) "Mix" else "Playlist"
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -370,10 +457,44 @@ fun CollectionDetailScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
                     }
                     Text(
-                        "Playlist",
+                        headerLabel,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
+                    Spacer(Modifier.weight(1f))
+                    if (kind == DetailKind.Mix) {
+                        IconButton(
+                            onClick = {
+                                scope.launch {
+                                    runCatching {
+                                        if (inLib) {
+                                            container.api.removeMix(id)
+                                            inLib = false
+                                            Toast.makeText(context, "Mix retiré", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            container.api.saveMix(
+                                                mapOf(
+                                                    "id" to id,
+                                                    "title" to title,
+                                                    "covers" to tracks.take(4),
+                                                    "tracks" to tracks.take(4),
+                                                ),
+                                            )
+                                            inLib = true
+                                            Toast.makeText(context, "Mix enregistré", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }.onFailure {
+                                        Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                        ) {
+                            Icon(
+                                if (inLib) Icons.Default.LibraryAddCheck else Icons.Default.LibraryAdd,
+                                contentDescription = if (inLib) "Retiré" else "Enregistrer",
+                            )
+                        }
+                    }
                 }
                 LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                     item {
@@ -407,7 +528,14 @@ fun CollectionDetailScreen(
                                         Button(
                                             onClick = {
                                                 recordCollectionPlay()
-                                                onPlay(tracks, 0)
+                                                val kindStr = if (kind == DetailKind.Mix) "mix" else "playlist"
+                                                player?.play(
+                                                    tracks,
+                                                    0,
+                                                    title = title,
+                                                    sourceId = id,
+                                                    sourceKind = kindStr,
+                                                ) ?: onPlayNamed(tracks, 0, title)
                                             },
                                             modifier = Modifier.weight(1f),
                                         ) {
@@ -418,7 +546,15 @@ fun CollectionDetailScreen(
                                         OutlinedButton(
                                             onClick = {
                                                 recordCollectionPlay()
-                                                onPlay(tracks.shuffled(), 0)
+                                                val kindStr = if (kind == DetailKind.Mix) "mix" else "playlist"
+                                                val shuffled = tracks.shuffled()
+                                                player?.play(
+                                                    shuffled,
+                                                    0,
+                                                    title = title,
+                                                    sourceId = id,
+                                                    sourceKind = kindStr,
+                                                ) ?: onPlayNamed(shuffled, 0, title)
                                             },
                                             modifier = Modifier.weight(1f),
                                         ) {
@@ -434,7 +570,16 @@ fun CollectionDetailScreen(
                     itemsIndexed(tracks, key = { i, t -> "${t.id}-$i" }) { index, track ->
                         TrackRow(
                             track = track,
-                            onClick = { onPlay(tracks, index) },
+                            onClick = {
+                                val kindStr = if (kind == DetailKind.Mix) "mix" else "playlist"
+                                player?.play(
+                                    tracks,
+                                    index,
+                                    title = title,
+                                    sourceId = id,
+                                    sourceKind = kindStr,
+                                ) ?: onPlayNamed(tracks, index, title)
+                            },
                             onMore = {
                                 onMore(track, if (kind == DetailKind.Playlist) id else null)
                             },
@@ -449,6 +594,37 @@ fun CollectionDetailScreen(
         AlbumOverflowSheet(
             title = title,
             onDismiss = { showAlbumMenu = false },
+            downloadProgress = offlineProgress,
+            downloaded = offlineDone,
+            onDownload = {
+                if (offlineDone || offlineProgress != null) return@AlbumOverflowSheet
+                scope.launch {
+                    offlineProgress = 0.05f
+                    runCatching {
+                        container.api.offlineStart(
+                            mapOf("kind" to "album", "targetId" to id),
+                        )
+                    }.onSuccess { resp ->
+                        val jobId = (resp["jobId"] as? String).orEmpty()
+                        if (jobId.isBlank()) {
+                            offlineProgress = null
+                            Toast.makeText(context, "Téléchargement démarré", Toast.LENGTH_SHORT).show()
+                            return@onSuccess
+                        }
+                        val ok = pollOfflineJob(container.api, jobId) { offlineProgress = it }
+                        offlineDone = ok
+                        offlineProgress = null
+                        Toast.makeText(
+                            context,
+                            if (ok) "Album téléchargé" else "Téléchargement en cours…",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }.onFailure {
+                        offlineProgress = null
+                        Toast.makeText(context, it.message ?: "Échec offline", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
             onPlayNext = {
                 showAlbumMenu = false
                 if (tracks.isEmpty()) return@AlbumOverflowSheet
@@ -508,14 +684,15 @@ private fun AlbumHeroHeader(
     radioBusy: Boolean,
     onBack: () -> Unit,
     onArtistClick: () -> Unit,
-    onDownload: () -> Unit,
+    onShuffle: () -> Unit,
     onToggleLibrary: () -> Unit,
     onPlay: () -> Unit,
     onRadio: () -> Unit,
     onMore: () -> Unit,
 ) {
     val screenW = LocalConfiguration.current.screenWidthDp.dp
-    val coverSize = (screenW * 0.72f).coerceIn(220.dp, 340.dp)
+    // ~moitié moins large qu’avant (~0.72 → ~0.36), lisible sans plein écran
+    val coverSize = (screenW * 0.36f).coerceIn(140.dp, 176.dp)
 
     Column(Modifier.fillMaxWidth()) {
         Row(
@@ -526,30 +703,32 @@ private fun AlbumHeroHeader(
         ) {
             IconButton(
                 onClick = onBack,
-                modifier = Modifier.size(52.dp),
+                modifier = Modifier.size(48.dp),
             ) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Retour",
-                    modifier = Modifier.size(28.dp),
+                    modifier = Modifier.size(26.dp),
                 )
             }
             Column(
                 Modifier.weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(
-                    artistLine,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onArtistClick)
-                        .padding(horizontal = 4.dp),
-                )
+                if (artistLine.isNotBlank()) {
+                    Text(
+                        artistLine,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onArtistClick)
+                            .padding(horizontal = 4.dp),
+                    )
+                }
                 Text(
                     metaLine,
                     style = MaterialTheme.typography.bodySmall,
@@ -559,22 +738,20 @@ private fun AlbumHeroHeader(
                     textAlign = TextAlign.Center,
                 )
             }
-            Spacer(Modifier.size(52.dp))
+            Spacer(Modifier.size(48.dp))
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            cover?.let { MediaCover(it, coverSize) }
         }
 
         Spacer(Modifier.height(12.dp))
 
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            cover?.let {
-                MediaCover(it, coverSize, modifier = Modifier.aspectRatio(1f))
-            }
-        }
-
-        Spacer(Modifier.height(20.dp))
-
         Text(
             title,
-            style = MaterialTheme.typography.headlineMedium.copy(fontSize = 28.sp),
+            style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
             maxLines = 3,
@@ -584,7 +761,7 @@ private fun AlbumHeroHeader(
                 .padding(horizontal = 24.dp),
         )
 
-        Spacer(Modifier.height(22.dp))
+        Spacer(Modifier.height(14.dp))
 
         Row(
             Modifier
@@ -594,10 +771,10 @@ private fun AlbumHeroHeader(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             RoundIconAction(
-                icon = Icons.Default.Download,
-                label = "Télécharger",
-                hint = "Télécharger l'album hors ligne",
-                onClick = onDownload,
+                icon = Icons.Default.Shuffle,
+                label = "Aléatoire",
+                hint = "Lecture aléatoire de l'album",
+                onClick = onShuffle,
             )
             RoundIconAction(
                 icon = if (inLibrary) Icons.Default.LibraryAddCheck else Icons.Default.LibraryAdd,
@@ -706,6 +883,9 @@ private fun RoundIconAction(
 private fun AlbumOverflowSheet(
     title: String,
     onDismiss: () -> Unit,
+    downloadProgress: Float?,
+    downloaded: Boolean,
+    onDownload: () -> Unit,
     onPlayNext: () -> Unit,
     onAddToQueue: () -> Unit,
     onAddToPlaylist: () -> Unit,
@@ -728,6 +908,30 @@ private fun AlbumOverflowSheet(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
             )
             HorizontalDivider()
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = downloadProgress == null && !downloaded, onClick = onDownload)
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                DownloadStatusIcon(
+                    downloaded = downloaded,
+                    progress = downloadProgress,
+                    size = 24.dp,
+                    accent = Color(0xFFFF0033),
+                )
+                Spacer(Modifier.width(16.dp))
+                Text(
+                    when {
+                        downloaded -> "Album téléchargé"
+                        downloadProgress != null ->
+                            "Téléchargement ${(downloadProgress * 100).toInt()} %"
+                        else -> "Télécharger l'album"
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
             AlbumMenuRow(Icons.Default.SkipNext, "Lire ensuite", onPlayNext)
             AlbumMenuRow(Icons.Default.QueueMusic, "Ajouter à la file d'attente", onAddToQueue)
             AlbumMenuRow(Icons.Default.PlaylistAdd, "Enregistrer dans une playlist", onAddToPlaylist)

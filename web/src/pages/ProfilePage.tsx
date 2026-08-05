@@ -7,6 +7,7 @@ import { Fingerprint, KeyRound, Shield, Smartphone, Sparkles, Trash2 } from 'luc
 import type { User } from '../api';
 import { markLocalPasskeyReady } from '../lib/passkeyEnrollment';
 import { OnboardingWizard } from '../components/OnboardingWizard';
+import { PerfToggleButton } from '../components/PerfHud';
 import { appVersionLabel } from '../lib/appVersion';
 
 function TwoFactorSection({ user, onUpdated }: { user: User; onUpdated: () => Promise<void> }) {
@@ -338,6 +339,15 @@ export function ProfilePage() {
           </section>
         </>
       )}
+
+      <section className="mb-8 rounded-2xl border border-yt-border bg-yt-surface p-5">
+        <h2 className="mb-2 font-display text-lg font-semibold">Performance</h2>
+        <p className="mb-3 text-sm text-yt-muted">
+          Affiche un panneau avec les timings (play, explore, mix…). Utile pour diagnostiquer les
+          lenteurs.
+        </p>
+        <PerfToggleButton className="rounded-full border border-yt-border bg-yt-elevated px-4 py-2 text-sm hover:bg-white/10" />
+      </section>
 
       <section className="rounded-2xl border border-yt-border bg-yt-surface p-5">
         <div className="mb-4 flex items-center gap-2">
