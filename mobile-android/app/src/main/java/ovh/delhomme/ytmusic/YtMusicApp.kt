@@ -5,6 +5,10 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.debug.CrashReporter
 
@@ -12,11 +16,17 @@ class YtMusicApp : Application(), ImageLoaderFactory {
     lateinit var container: AppContainer
         private set
 
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun onCreate() {
         super.onCreate()
         instance = this
         CrashReporter.install(this)
         container = AppContainer(this)
+        // Précharge les JWT en mémoire dès le boot (évite runBlocking DataStore)
+        appScope.launch {
+            runCatching { container.tokenStore.warmCache() }
+        }
     }
 
     override fun newImageLoader(): ImageLoader =
