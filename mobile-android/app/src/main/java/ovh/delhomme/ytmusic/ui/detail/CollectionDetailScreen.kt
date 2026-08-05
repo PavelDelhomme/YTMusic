@@ -229,6 +229,18 @@ fun CollectionDetailScreen(
         loading = false
     }
 
+    LaunchedEffect(tracks) {
+        if (tracks.isEmpty()) return@LaunchedEffect
+        val base = ovh.delhomme.ytmusic.BuildConfig.API_BASE_URL.trimEnd('/')
+        ovh.delhomme.ytmusic.player.StreamPrefetcher.warmAround(
+            base,
+            tracks.map { it.id },
+            0,
+            ahead = 4,
+            behind = 0,
+        )
+    }
+
     Column(Modifier.fillMaxSize()) {
         when {
             loading -> {
@@ -308,18 +320,25 @@ fun CollectionDetailScreen(
                             },
                             onRadio = {
                                 radioBusy = true
+                                // Joue tout de suite le 1er titre ; mix append ensuite
+                                val seed = tracks.firstOrNull()
+                                if (seed != null) {
+                                    onPlayNamed(listOf(seed), 0, "Mix album")
+                                }
                                 scope.launch {
                                     val mix = buildRadioQueue(
                                         container.api,
                                         "album",
                                         id,
-                                        tracks.firstOrNull(),
+                                        seed,
                                     )
                                     radioBusy = false
-                                    if (mix.isEmpty()) {
-                                        Toast.makeText(context, "Mix indisponible", Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        onPlayNamed(mix, 0, "Mix album")
+                                    val rest = mix.filter { it.id != seed?.id }
+                                    when {
+                                        rest.isNotEmpty() && player != null -> player.addManyToQueue(rest)
+                                        mix.isNotEmpty() && seed == null -> onPlayNamed(mix, 0, "Mix album")
+                                        mix.isEmpty() && seed == null ->
+                                            Toast.makeText(context, "Mix indisponible", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             },

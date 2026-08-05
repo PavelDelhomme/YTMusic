@@ -13,6 +13,7 @@ FROM deps AS build
 ARG BUILD_SHA=dev
 ARG BUILD_REF=local
 ENV BUILD_SHA=$BUILD_SHA BUILD_REF=$BUILD_REF
+COPY VERSION ./VERSION
 COPY web ./web
 COPY api ./api
 COPY tsconfig*.json* ./
@@ -22,10 +23,12 @@ FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ARG BUILD_SHA=dev
 ARG BUILD_REF=local
+ARG APP_VERSION=
 ENV NODE_ENV=production \
     PORT=8787 \
     BUILD_SHA=$BUILD_SHA \
-    BUILD_REF=$BUILD_REF
+    BUILD_REF=$BUILD_REF \
+    APP_VERSION=$APP_VERSION
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 make g++ ca-certificates curl \
@@ -41,6 +44,7 @@ RUN npm ci --omit=dev \
 
 COPY api ./api
 COPY bin ./bin
+COPY VERSION ./VERSION
 COPY --from=build /app/web/dist ./web/dist
 
 RUN mkdir -p /app/data /app/data/cache /app/data/img-cache /app/data/public/android \

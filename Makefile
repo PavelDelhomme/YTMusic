@@ -26,7 +26,8 @@ DEVICE ?= R5CT7263YJL
 	update-apps status status-watch \
 	logs logs-tail logs-watch logs-history logs-archive \
 	db-status db-backup \
-	ports kill-dev push-dev push-prod deploy-hint
+	ports kill-dev push-dev push-prod deploy-hint \
+	bump-patch bump-minor bump-major version
 
 help: ## Affiche cette aide colorée
 	@echo ""
@@ -50,12 +51,13 @@ help: ## Affiche cette aide colorée
 		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(C_CYAN)%-20s$(C_RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@printf "  $(C_GREEN)▶ Build / Docker / Git$(C_RESET)\n"
-	@grep -E '^(install|build|start|deploy-local|docker-|icons|clean-vite|env-check|push-|deploy-hint|update-apps|test-):.*?##' $(MAKEFILE_LIST) | \
+	@grep -E '^(install|build|start|deploy-local|docker-|icons|clean-vite|env-check|push-|deploy-hint|update-apps|test-|bump-|version):.*?##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "    $(C_CYAN)%-20s$(C_RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@printf "  $(C_DIM)Domaine prod : https://ytmusic.delhomme.ovh$(C_RESET)\n"
 	@printf "  $(C_DIM)Dev local    : make up-full  ·  make logs  ·  make android$(C_RESET)\n"
 	@printf "  $(C_DIM)Branches     : feat/* depuis dev → merge prod$(C_RESET)\n"
+	@printf "  $(C_DIM)Version      : d+X.Y.Z (local/dev) · p+X.Y.Z (prod) — make bump-patch|minor|major$(C_RESET)\n"
 	@echo ""
 
 # ---------------------------------------------------------------------------
@@ -285,6 +287,7 @@ update-apps: ## Rappel : comment MAJ web / mobile / desktop
 	@echo "  -----------------------------------"
 	@echo "  Web + PWA : push prod → CI GHCR → Portainer/Watchtower"
 	@echo "  APK Kotlin : make android / make android-prod"
+	@echo "  Version    : make bump-patch|minor|major  (affiche d+/p+ sous Déconnexion)"
 	@echo "  Docs : docs/DNS-ET-INSTALL.md  DEPLOY.md"
 	@echo ""
 
@@ -299,7 +302,7 @@ status: ## Statut coloré API / Vite / Docker / DB
 	@echo ""
 	@printf "  "; \
 	if curl -fsS --max-time 2 http://127.0.0.1:8787/api/health >/tmp/ytm-health.json 2>/dev/null; then \
-	  VER=$$(python3 -c "import json;d=json.load(open('/tmp/ytm-health.json'));print(d.get('version','?'),d.get('ref',''))" 2>/dev/null || echo ok); \
+	  VER=$$(python3 -c "import json;d=json.load(open('/tmp/ytm-health.json'));print(d.get('appVersion') or d.get('version','?'),d.get('ref',''))" 2>/dev/null || echo ok); \
 	  printf "\033[1;32m✅ UP\033[0m   %-22s \033[0;36m8787\033[0m  %s\n" "api" "$$VER"; \
 	else \
 	  printf "\033[1;31m❌ DOWN\033[0m %-22s \033[0;90m:8787\033[0m\n" "api"; \
@@ -433,3 +436,19 @@ deploy-hint: ## Guide déploiement Portainer / NPM / mobile
 	@echo ""
 	@echo "  Docs : DEPLOY.md"
 	@echo ""
+
+version: ## Affiche la version courante (fichier VERSION)
+	@v=$$(tr -d '[:space:]' <$(ROOT)/VERSION); \
+	  echo "VERSION $$v  →  d+$$v (local/dev) · p+$$v (prod)"
+
+bump-patch: ## Correctif : X.Y.Z → X.Y.(Z+1)
+	@chmod +x $(ROOT)/scripts/bump-version.sh
+	@bash $(ROOT)/scripts/bump-version.sh patch
+
+bump-minor: ## Fonctionnalité : X.Y.Z → X.(Y+1).0
+	@chmod +x $(ROOT)/scripts/bump-version.sh
+	@bash $(ROOT)/scripts/bump-version.sh minor
+
+bump-major: ## Breaking : X.Y.Z → (X+1).0.0
+	@chmod +x $(ROOT)/scripts/bump-version.sh
+	@bash $(ROOT)/scripts/bump-version.sh major

@@ -78,6 +78,7 @@ class PlaybackService : MediaSessionService() {
                 player.playWhenReady
             ) {
                 streamFailStreak.set(0)
+                StreamPrefetcher.markStreamOk()
             }
             // Pause volontaire uniquement — pas pendant rebuffer / skip
             // (sinon on tue le prefetch du titre suivant).
@@ -94,43 +95,91 @@ class PlaybackService : MediaSessionService() {
             val item = exo.currentMediaItem ?: return
             val id = item.mediaId
             if (id.isBlank()) return
+
+            val networkish = isNetworkOrServerError(error)
+            val streak = streamFailStreak.incrementAndGet()
+            AppLog.w(
+                "PlaybackService",
+                "onPlayerError code=${error.errorCode} network=$networkish streak=$streak id=$id",
+            )
+
+            // Serveur / réseau KO : stop immédiat, pas de reprepare ni skip cascade
+            if (networkish || streak >= 2) {
+                StreamPrefetcher.markStreamDown()
+                StreamPrefetcher.cancelIdle()
+                recoverGen.incrementAndGet()
+                exo.playWhenReady = false
+                runCatching { exo.stop() }
+                streamFailStreak.set(0)
+                android.os.Handler(mainLooper).post {
+                    android.widget.Toast.makeText(
+                        this@PlaybackService,
+                        if (networkish) {
+                            "Serveur injoignable — lecture stoppée"
+                        } else {
+                            "Lecture impossible — vérifie l’API / cookies YouTube"
+                        },
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                }
+                return
+            }
+
+            // 1 seul reprepare (CDN / proxy expiré) — ne compte pas comme « recovered » sync
             val attempt = recoverGen.incrementAndGet()
             scope.launch {
-                // 1) purge cache + reprepare (URL CDN / proxy expirée)
                 runCatching { PlayerCache.invalidate(this@PlaybackService, id) }
                 delay(200)
                 if (attempt != recoverGen.get()) return@launch
                 if (exo.currentMediaItem?.mediaId != id) return@launch
-                val recovered = runCatching {
+                runCatching {
                     val pos = exo.currentPosition.coerceAtLeast(0L)
                     exo.setMediaItem(item, pos)
                     exo.prepare()
                     exo.playWhenReady = true
-                    true
-                }.getOrDefault(false)
-                if (recovered) return@launch
-                // 2) Ne pas skipper en cascade (VPS sans cookies YouTube) —
-                // un seul essai sur le titre suivant, sinon stop.
-                delay(400)
-                if (attempt != recoverGen.get()) return@launch
-                if (exo.currentMediaItem?.mediaId != id) return@launch
-                val streak = streamFailStreak.incrementAndGet()
-                if (streak <= 1 && exo.hasNextMediaItem()) {
-                    exo.seekToNextMediaItem()
-                } else {
-                    streamFailStreak.set(0)
-                    exo.playWhenReady = false
-                    exo.stop()
-                    AppLog.w("PlaybackService", "stream KO après recovery (streak=$streak) — stop")
-                    android.os.Handler(mainLooper).post {
-                        android.widget.Toast.makeText(
-                            this@PlaybackService,
-                            "Lecture impossible — cookies YouTube manquants sur le serveur, ou API locale",
-                            android.widget.Toast.LENGTH_LONG,
-                        ).show()
-                    }
                 }
+                // Si ça échoue encore → 2ᵉ onPlayerError → stop (streak >= 2)
             }
+        }
+
+        private fun isNetworkOrServerError(error: PlaybackException): Boolean {
+            when (error.errorCode) {
+                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+                PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+                PlaybackException.ERROR_CODE_TIMEOUT,
+                -> return true
+            }
+            var c: Throwable? = error.cause
+            var depth = 0
+            while (c != null && depth++ < 6) {
+                val name = c.javaClass.name
+                if (
+                    c is java.net.UnknownHostException ||
+                    c is java.net.ConnectException ||
+                    c is java.net.SocketTimeoutException ||
+                    c is java.io.InterruptedIOException ||
+                    name.contains("UnknownHost") ||
+                    name.contains("ConnectException") ||
+                    name.contains("SocketTimeout")
+                ) {
+                    return true
+                }
+                val msg = (c.message ?: "").lowercase()
+                if (
+                    "failed to connect" in msg ||
+                    "unable to resolve" in msg ||
+                    "connection refused" in msg ||
+                    "network is unreachable" in msg ||
+                    "502" in msg ||
+                    "503" in msg ||
+                    "504" in msg
+                ) {
+                    return true
+                }
+                c = c.cause
+            }
+            return false
         }
     }
 
@@ -139,10 +188,10 @@ class PlaybackService : MediaSessionService() {
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs */ 12_000,
-                /* maxBufferMs */ 45_000,
-                /* bufferForPlaybackMs */ 600,
-                /* bufferForPlaybackAfterRebufferMs */ 1_500,
+                /* minBufferMs */ 8_000,
+                /* maxBufferMs */ 40_000,
+                /* bufferForPlaybackMs */ 350,
+                /* bufferForPlaybackAfterRebufferMs */ 1_000,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -337,6 +386,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun warmUpcoming(fromIndex: Int) {
+        if (StreamPrefetcher.isStreamDown()) return
         val queue = Holder.queue
         if (queue.isEmpty()) return
         val base = resolvedApiBase()

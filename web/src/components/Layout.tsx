@@ -28,6 +28,7 @@ import { useLibrary } from '../store/library';
 import { usePlayer, wireRemotePlayer, reportListenProgress, flushPlayerPersist } from '../store/player';
 import { useAuth } from '../store/auth';
 import { useSession } from '../store/session';
+import { appVersionLabel } from '../lib/appVersion';
 import { usePins } from '../store/pins';
 import { api } from '../api';
 import { installMediaKeys } from '../lib/mediaKeys';
@@ -448,6 +449,9 @@ export function Layout() {
           )}
           <span className="truncate">{isGuest ? 'Se connecter' : 'Déconnexion'}</span>
         </button>
+        <p className="mt-1 px-3 pb-1 text-[11px] tabular-nums tracking-wide text-yt-muted/70" title="Canal + version">
+          {appVersionLabel()}
+        </p>
       </div>
     </>
   );
@@ -720,6 +724,10 @@ export function Layout() {
           const s = usePlayer.getState();
           if (s.sleepUntilEnd) {
             s.setSleepTimer(null, null);
+            usePlayer.setState({ isPlaying: false });
+            return;
+          }
+          if (s.playError) {
             usePlayer.setState({ isPlaying: false });
             return;
           }

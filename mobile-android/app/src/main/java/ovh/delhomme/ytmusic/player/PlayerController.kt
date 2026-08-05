@@ -607,7 +607,13 @@ class PlayerController(
         if (userQueueEnd <= 0 || userQueueEnd > window.size) {
             userQueueEnd = window.size
         }
-        warmAround(window, idx) // format + CacheWriter suite (pas de contention sur piste courante)
+        val base = streamUrl("_").substringBefore("/api/stream/")
+        val currentId = window.getOrNull(idx)?.id
+        if (!currentId.isNullOrBlank()) {
+            // Court blocage (~450ms max) : chauffe le format API avant Exo prepare
+            StreamPrefetcher.warmCurrentBlocking(base, currentId, timeoutMs = 450L)
+        }
+        warmAround(window, idx) // format + CacheWriter suite (async)
         player.setMediaItems(
             window.map { mediaItem(it) },
             idx,

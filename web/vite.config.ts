@@ -2,10 +2,36 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
-export default defineConfig({
+function readAppVersion(): string {
+  try {
+    return readFileSync(resolve(__dirname, '../VERSION'), 'utf8').trim() || '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
+function resolveChannel(mode: string): 'd' | 'p' {
+  const ref = (process.env.BUILD_REF || process.env.APP_CHANNEL || '').toLowerCase()
+  if (ref === 'prod' || ref === 'p' || ref === 'production') return 'p'
+  if (ref === 'dev' || ref === 'd' || ref === 'local') return 'd'
+  // Sans BUILD_REF : `vite build` → p+ · `vite` (dev) → d+
+  return mode === 'production' ? 'p' : 'd'
+}
+
+export default defineConfig(({ mode }) => {
+  const appVersion = readAppVersion()
+  const channel = resolveChannel(mode)
+
+  return {
   // Charge .env à la racine du monorepo (aligné avec l’API)
   envDir: '..',
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+    __APP_CHANNEL__: JSON.stringify(channel),
+  },
   plugins: [
     react(),
     tailwindcss(),
@@ -140,4 +166,5 @@ export default defineConfig({
       },
     },
   },
+  }
 })

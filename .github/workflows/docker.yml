@@ -41,6 +41,10 @@ jobs:
             type=sha,prefix=
             type=ref,event=branch
 
+      - name: Read VERSION
+        id: ver
+        run: echo "value=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -54,6 +58,7 @@ jobs:
           build-args: |
             BUILD_SHA=${{ github.sha }}
             BUILD_REF=${{ github.ref_name }}
+            APP_VERSION=${{ steps.ver.outputs.value }}
 
       # Portainer CE pull sans login : package GHCR en public (repo public ≠ package public)
       - name: Ensure GHCR package is public
