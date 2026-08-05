@@ -74,6 +74,23 @@ body {
   animation: fade-up 0.35s ease-out both;
 }
 
+@keyframes playing-bar {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.playing-bars .playing-bar {
+  display: block;
+  height: 100%;
+  transform-origin: bottom center;
+  animation: playing-bar 0.85s ease-in-out infinite;
+}
+
 /* Shell app native (Capacitor) — moins « navigateur » */
 html.native-app,
 html.native-app body {

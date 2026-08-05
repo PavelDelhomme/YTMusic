@@ -19,6 +19,7 @@ import { PlayerBar } from './PlayerBar';
 import { QueuePanel } from './QueuePanel';
 import { AuthModal } from './AuthModal';
 import { DevicePicker } from './DevicePicker';
+import { PerfHud } from './PerfHud';
 import { InstallBanner } from './InstallBanner';
 import { ItemActionsSheet } from './ItemActionsSheet';
 import { NowPlaying, type NowPlayingTab } from './NowPlaying';
@@ -702,6 +703,7 @@ export function Layout() {
         />
       )}
       <DevicePicker open={devicesOpen} onClose={() => setDevicesOpen(false)} />
+      <PerfHud />
       <ItemActionsSheet onOpenEqualizer={() => setEqOpen(true)} />
       <EqualizerPanel open={eqOpen} onClose={() => setEqOpen(false)} />
 

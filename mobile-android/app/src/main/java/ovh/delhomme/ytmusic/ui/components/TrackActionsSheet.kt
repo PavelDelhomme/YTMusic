@@ -75,6 +75,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -82,6 +83,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.ArtistRef
@@ -118,6 +120,7 @@ fun TrackActionsSheet(
     var pinned by remember { mutableStateOf(false) }
     var showSleep by remember { mutableStateOf(false) }
     var downloaded by remember { mutableStateOf(false) }
+    var downloadProgress by remember { mutableStateOf<Float?>(null) }
     var albumInLibrary by remember { mutableStateOf(false) }
     var songInLibrary by remember { mutableStateOf(false) }
     var liked by remember(track.id) { mutableStateOf(track.id in likedIds) }
@@ -404,24 +407,48 @@ fun TrackActionsSheet(
                 }
             }
             SheetAction(
-                if (downloaded) Icons.Default.DownloadDone else Icons.Default.Download,
-                if (downloaded) "Sur l'appareil" else "Télécharger",
+                leading = {
+                    DownloadStatusIcon(
+                        downloaded = downloaded,
+                        progress = downloadProgress,
+                        size = 26.dp,
+                        accent = Color(0xFFFF0033),
+                    )
+                },
+                label = when {
+                    downloaded -> "Sur l'appareil"
+                    downloadProgress != null -> "Téléchargement ${(downloadProgress!! * 100).toInt()} %"
+                    else -> "Télécharger"
+                },
+                enabled = downloadProgress == null,
             ) {
                 if (downloaded) {
                     Toast.makeText(context, "Déjà sur l'appareil", Toast.LENGTH_SHORT).show()
-                    onDismiss()
-                } else {
-                    scope.launch {
-                        runCatching { container.api.download(enriched.id) }
-                            .onSuccess {
-                                downloaded = true
-                                Toast.makeText(context, "Téléchargement lancé", Toast.LENGTH_SHORT).show()
-                            }
-                            .onFailure {
-                                Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
-                            }
-                        onDismiss()
+                    return@SheetAction
+                }
+                scope.launch {
+                    downloadProgress = 0.08f
+                    val tick = launch {
+                        while (true) {
+                            delay(350)
+                            val cur = downloadProgress ?: 0.08f
+                            if (cur < 0.9f) downloadProgress = (cur + 0.06f).coerceAtMost(0.9f)
+                        }
                     }
+                    runCatching { container.api.download(enriched.id) }
+                        .onSuccess {
+                            tick.cancel()
+                            downloadProgress = 1f
+                            downloaded = true
+                            delay(250)
+                            downloadProgress = null
+                            Toast.makeText(context, "Téléchargé", Toast.LENGTH_SHORT).show()
+                        }
+                        .onFailure {
+                            tick.cancel()
+                            downloadProgress = null
+                            Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
+                        }
                 }
             }
 
@@ -746,22 +773,42 @@ private fun SheetAction(
     icon: ImageVector,
     label: String,
     sub: String? = null,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    SheetAction(
+        leading = {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(26.dp))
+        },
+        label = label,
+        sub = sub,
+        enabled = enabled,
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun SheetAction(
+    leading: @Composable () -> Unit,
+    label: String,
+    sub: String? = null,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(26.dp))
+        leading()
         Spacer(Modifier.width(18.dp))
         Column {
             Text(
                 label,
                 style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.55f),
             )
             if (!sub.isNullOrBlank()) {
                 Text(
@@ -788,11 +835,16 @@ fun AddToPlaylistSheet(
     var loading by remember { mutableStateOf(true) }
     var showCreate by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
+    var containedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(track.id) {
         loading = true
         playlists = runCatching { container.api.library().playlists }.getOrDefault(emptyList())
             .sortedByDescending { it.updatedAt ?: it.createdAt ?: 0L }
+        containedIds = playlists
+            .filter { pl -> pl.tracks.orEmpty().any { it.id == track.id } }
+            .map { it.id }
+            .toSet()
         loading = false
     }
 
@@ -836,18 +888,29 @@ fun AddToPlaylistSheet(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         recent.forEach { pl ->
+                            val already = pl.id in containedIds
                             Column(
                                 Modifier
                                     .width(96.dp)
                                     .clickable {
-                                        scope.launch {
-                                            runCatching { container.api.addToPlaylist(pl.id, track) }
+                                        if (already) {
                                             Toast.makeText(
                                                 context,
-                                                "Ajouté à ${pl.displayName()}",
+                                                "Déjà dans ${pl.displayName()}",
                                                 Toast.LENGTH_SHORT,
                                             ).show()
-                                            onDismiss()
+                                            return@clickable
+                                        }
+                                        scope.launch {
+                                            runCatching { container.api.addToPlaylist(pl.id, track) }
+                                                .onSuccess {
+                                                    containedIds = containedIds + pl.id
+                                                    Toast.makeText(
+                                                        context,
+                                                        "Ajouté à ${pl.displayName()}",
+                                                        Toast.LENGTH_SHORT,
+                                                    ).show()
+                                                }
                                         }
                                     },
                                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -870,6 +933,21 @@ fun AddToPlaylistSheet(
                                         ),
                                         88.dp,
                                     )
+                                    if (already) {
+                                        Box(
+                                            Modifier
+                                                .matchParentSize()
+                                                .background(Color.Black.copy(alpha = 0.45f)),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Icon(
+                                                Icons.Default.CheckCircle,
+                                                contentDescription = "Déjà ajouté",
+                                                tint = Color(0xFFFF0033),
+                                                modifier = Modifier.size(32.dp),
+                                            )
+                                        }
+                                    }
                                 }
                                 Spacer(Modifier.height(6.dp))
                                 Text(
@@ -879,6 +957,14 @@ fun AddToPlaylistSheet(
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurface,
                                 )
+                                if (already) {
+                                    Text(
+                                        "Déjà ajouté",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFFFF0033),
+                                        maxLines = 1,
+                                    )
+                                }
                             }
                         }
                     }
@@ -899,18 +985,29 @@ fun AddToPlaylistSheet(
                     modifier = Modifier.height(320.dp),
                 ) {
                     items(playlists, key = { it.id }) { pl ->
+                        val already = pl.id in containedIds
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    scope.launch {
-                                        runCatching { container.api.addToPlaylist(pl.id, track) }
+                                    if (already) {
                                         Toast.makeText(
                                             context,
-                                            "Ajouté à ${pl.displayName()}",
+                                            "Déjà dans ${pl.displayName()}",
                                             Toast.LENGTH_SHORT,
                                         ).show()
-                                        onDismiss()
+                                        return@clickable
+                                    }
+                                    scope.launch {
+                                        runCatching { container.api.addToPlaylist(pl.id, track) }
+                                            .onSuccess {
+                                                containedIds = containedIds + pl.id
+                                                Toast.makeText(
+                                                    context,
+                                                    "Ajouté à ${pl.displayName()}",
+                                                    Toast.LENGTH_SHORT,
+                                                ).show()
+                                            }
                                     }
                                 }
                                 .padding(horizontal = 20.dp, vertical = 12.dp),
@@ -928,16 +1025,26 @@ fun AddToPlaylistSheet(
                                 48.dp,
                             )
                             Spacer(Modifier.width(14.dp))
-                            Column {
+                            Column(Modifier.weight(1f)) {
                                 Text(
                                     pl.displayName(),
                                     fontWeight = FontWeight.Medium,
                                     color = MaterialTheme.colorScheme.onSurface,
                                 )
                                 Text(
-                                    "${pl.tracks?.size ?: 0} titres",
+                                    if (already) "Déjà dans cette playlist"
+                                    else "${pl.tracks?.size ?: 0} titres",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = if (already) Color(0xFFFF0033)
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (already) {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFF0033),
+                                    modifier = Modifier.size(22.dp),
                                 )
                             }
                         }
