@@ -174,7 +174,7 @@ function ensureLikedPlaylist(userId: string, playlist: Record<string, unknown>) 
   return true;
 }
 
-function upsertLocalPlaylist(userId: string, name: string, ytmId: string, tracks: Track[]) {
+async function upsertLocalPlaylist(userId: string, name: string, ytmId: string, tracks: Track[]) {
   const existing = listPlaylists(userId).find(
     (p) => p.description.includes(`ytm:${ytmId}`) || p.name === name,
   );
@@ -185,7 +185,7 @@ function upsertLocalPlaylist(userId: string, name: string, ytmId: string, tracks
   let added = 0;
   for (const t of tracks) {
     const before = pl.tracks.length;
-    pl = addToPlaylist(userId, pl.id, t);
+    pl = await addToPlaylist(userId, pl.id, t);
     if (pl.tracks.length > before) added += 1;
   }
   return { playlistId: pl.id, added };
@@ -325,7 +325,7 @@ export async function syncYtmLibrary(userId: string): Promise<{
       }
       try {
         const full = await fetchPlaylistTracks(yt, m.id, 500);
-        const mirror = upsertLocalPlaylist(userId, full.title || m.title, m.id, full.tracks || []);
+        const mirror = await upsertLocalPlaylist(userId, full.title || m.title, m.id, full.tracks || []);
         stats.playlistTracks += mirror.added;
       } catch {
         /* playlist privée / indispo */

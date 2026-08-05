@@ -1962,7 +1962,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
           (t) => isPlayable(t) && t.id !== seedTrack?.id,
         );
         const albumRest = albumTracks.filter((t) => t.id !== seedTrack?.id).slice(0, 6);
-        pool = [...radio, ...albumRest];
+        pool = diversifyByArtist([...radio, ...albumRest], seedTrack?.artists?.[0]);
       } else {
         const [radioRes, artistRes] = await Promise.all([
           api.artistRadio(id).catch(() => ({ tracks: [] as Track[] })),
@@ -1973,8 +1973,11 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         const radio = (radioRes.tracks || []).filter(
           (t) => isPlayable(t) && t.id !== seedTrack?.id,
         );
-        // Amorçage avec tops artiste puis radio (similaires liés / voisins)
-        pool = [...songs.filter((t) => t.id !== seedTrack?.id).slice(0, 8), ...radio];
+        // Tops artiste en amorçage, puis radio perso (déjà ranked côté API)
+        pool = diversifyByArtist(
+          [...songs.filter((t) => t.id !== seedTrack?.id).slice(0, 8), ...radio],
+          seedTrack?.artists?.[0],
+        );
       }
 
       // Dédup

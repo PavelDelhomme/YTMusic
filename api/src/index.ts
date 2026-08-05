@@ -63,6 +63,7 @@ import {
   listDownloads,
   markDownloaded,
   listPlaylists,
+  repairLibraryTrackMeta,
 } from './library.js';
 import { handleStream, handleStreamUrl, handleStreamWarm, downloadTrack, cachePath, resolveStreamUpstream } from './stream.js';
 import { importByKind, importByQueryOrUrl } from './import.js';
@@ -147,6 +148,8 @@ import {
   radioForUser,
   RADIO_CATEGORIES,
   similarForUser,
+  albumSimilarForUser,
+  artistSimilarForUser,
   suggestSearch,
 } from './reco.js';
 import {
@@ -1466,7 +1469,8 @@ app.get('/api/artist/:id', accountRequired, async (req, res) => {
 
 app.get('/api/artist/:id/radio', accountRequired, async (req, res) => {
   try {
-    res.json({ tracks: await getArtistRadio(p(req.params.id)) });
+    const ranked = await artistSimilarForUser(req.userId!, p(req.params.id));
+    res.json({ tracks: ranked.tracks.length ? ranked.tracks : await getArtistRadio(p(req.params.id)) });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -1492,7 +1496,8 @@ app.get('/api/album/:id', accountRequired, async (req, res) => {
 
 app.get('/api/album/:id/radio', accountRequired, async (req, res) => {
   try {
-    res.json({ tracks: await getAlbumRadio(p(req.params.id)) });
+    const ranked = await albumSimilarForUser(req.userId!, p(req.params.id));
+    res.json({ tracks: ranked.tracks.length ? ranked.tracks : await getAlbumRadio(p(req.params.id)) });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -1541,8 +1546,22 @@ app.post('/api/download/:id', accountRequired, async (req, res) => {
   }
 });
 
-app.get('/api/library', accountRequired, (req, res) => {
-  res.json(getFullLibrary(req.userId!));
+app.get('/api/library', accountRequired, async (req, res) => {
+  try {
+    // Auto-répare les « Sans titre » encore en cache (playlists / likes)
+    const repaired = await repairLibraryTrackMeta(req.userId!);
+    res.json(repaired.library);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post('/api/library/repair-meta', accountRequired, async (req, res) => {
+  try {
+    res.json(await repairLibraryTrackMeta(req.userId!));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
 });
 
 app.post('/api/library/like', accountRequired, (req, res) => {
@@ -1669,9 +1688,9 @@ app.delete('/api/library/playlists/:id', accountRequired, (req, res) => {
   }
 });
 
-app.post('/api/library/playlists/:id/tracks', accountRequired, (req, res) => {
+app.post('/api/library/playlists/:id/tracks', accountRequired, async (req, res) => {
   try {
-    res.json(addToPlaylist(req.userId!, p(req.params.id), req.body as Track));
+    res.json(await addToPlaylist(req.userId!, p(req.params.id), req.body as Track));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
