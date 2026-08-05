@@ -2,11 +2,17 @@ import { CoverImage } from './CoverImage';
 import type { Track } from '../api';
 import { Library, MoreHorizontal, Pause, Play, Plus } from 'lucide-react';
 import type { MouseEvent } from 'react';
+import { PlayingCoverOverlay } from './PlayingBars';
+import { useNowPlayingMatch } from '../lib/nowPlaying';
 
-/** Carte mix style album : mosaïque 2×2 + play / save / ⋮ (style YTM). */
+/** Carte mix style album : mosaïque 2×2. Clic carte → ouvrir ; Play → lecture. */
 export function MixCollageCard({
+  id,
   title,
   tracks,
+  onOpen,
+  onPlay,
+  /** @deprecated utiliser onOpen / onPlay */
   onClick,
   busy,
   subtitle = 'Mix',
@@ -15,9 +21,12 @@ export function MixCollageCard({
   onSave,
   onMore,
 }: {
+  id?: string;
   title: string;
   tracks: Track[];
-  onClick: () => void;
+  onOpen?: () => void;
+  onPlay?: () => void;
+  onClick?: () => void;
   busy?: boolean;
   subtitle?: string;
   saved?: boolean;
@@ -25,10 +34,19 @@ export function MixCollageCard({
   onSave?: () => void;
   onMore?: () => void;
 }) {
+  const open = onOpen || onClick || (() => undefined);
+  const play = onPlay || onClick || open;
   const covers = tracks.slice(0, 4);
   while (covers.length < 4 && covers.length > 0) {
     covers.push(covers[covers.length % Math.max(1, tracks.length)]!);
   }
+  const { active: nowActive, playing: nowPlaying } = useNowPlayingMatch({
+    id: id || title,
+    type: 'mix',
+    tracks,
+    covers: tracks,
+  });
+  const showPlaying = playing || nowActive;
 
   const stop = (e: MouseEvent) => {
     e.preventDefault();
@@ -40,11 +58,11 @@ export function MixCollageCard({
       <div
         role="button"
         tabIndex={0}
-        onClick={onClick}
+        onClick={open}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            onClick();
+            open();
           }
         }}
         className="relative aspect-square cursor-pointer overflow-hidden rounded-lg bg-yt-elevated shadow-md ring-1 ring-white/5 transition group-hover:ring-white/20 disabled:opacity-60"
@@ -70,21 +88,28 @@ export function MixCollageCard({
           </div>
         )}
 
-        {/* Play toujours visible mobile ; desktop au hover */}
+        <PlayingCoverOverlay active={showPlaying} playing={playing || nowPlaying} size="md" />
+
         <button
           type="button"
-          title={playing ? 'Pause / relancer' : 'Lire'}
+          title={playing || nowPlaying ? 'Pause / relancer' : 'Lire'}
           disabled={busy}
           onClick={(e) => {
             stop(e);
-            onClick();
+            play();
           }}
-          className="absolute right-2 top-2 flex h-10 w-10 items-center justify-center rounded-full bg-yt-red text-white shadow-lg opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 disabled:opacity-60"
+          className={`absolute right-2 top-2 z-[2] flex h-10 w-10 items-center justify-center rounded-full bg-yt-red text-white shadow-lg transition sm:group-hover:opacity-100 disabled:opacity-60 ${
+            showPlaying ? 'opacity-100' : 'opacity-100 sm:opacity-0'
+          }`}
         >
-          {playing ? <Pause className="h-5 w-5 fill-white" /> : <Play className="h-5 w-5 fill-white" />}
+          {playing || nowPlaying ? (
+            <Pause className="h-5 w-5 fill-white" />
+          ) : (
+            <Play className="h-5 w-5 fill-white" />
+          )}
         </button>
 
-        <div className="pointer-events-none absolute bottom-2 right-2 flex gap-1 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100">
+        <div className="pointer-events-none absolute bottom-2 right-2 z-[2] flex gap-1 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100">
           {onMore && (
             <button
               type="button"
@@ -115,13 +140,17 @@ export function MixCollageCard({
         </div>
 
         {busy && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-xs font-medium text-white">
+          <div className="absolute inset-0 z-[3] flex items-center justify-center bg-black/50 text-xs font-medium text-white">
             …
           </div>
         )}
       </div>
       <div className="mt-2 px-0.5">
-        <button type="button" onClick={onClick} className="block w-full truncate text-left text-sm font-medium hover:underline">
+        <button
+          type="button"
+          onClick={open}
+          className="block w-full truncate text-left text-sm font-medium hover:underline"
+        >
           {title}
         </button>
         <div className="truncate text-xs text-yt-muted">{subtitle}</div>

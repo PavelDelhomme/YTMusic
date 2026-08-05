@@ -202,15 +202,21 @@ fun HomeScreen(
                                             .size(132.dp)
                                             .clip(RoundedCornerShape(8.dp))
                                             .clickable(enabled = !loading) {
-                                                vm.playRadio(radio.id) { tracks, title ->
-                                                    onPlayNamed(tracks, 0, title)
-                                                }
+                                                onOpenDetail(
+                                                    TrackDto(
+                                                        id = radio.id,
+                                                        title = radio.title,
+                                                        type = "mix",
+                                                        thumbnails = preview.firstOrNull()?.thumbnails,
+                                                    ),
+                                                )
                                             },
                                     ) {
                                         MixCollageCover(
                                             tracks = preview,
                                             size = 132.dp,
                                             titleFallback = radio.title,
+                                            mixId = radio.id,
                                         )
                                         // Play toujours visible (mobile)
                                         Box(
@@ -305,6 +311,16 @@ fun HomeScreen(
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.Medium,
                                         color = MaterialTheme.colorScheme.onBackground,
+                                        modifier = Modifier.clickable {
+                                            onOpenDetail(
+                                                TrackDto(
+                                                    id = radio.id,
+                                                    title = radio.title,
+                                                    type = "mix",
+                                                    thumbnails = preview.firstOrNull()?.thumbnails,
+                                                ),
+                                            )
+                                        },
                                     )
                                     Text(
                                         "Mix radio",

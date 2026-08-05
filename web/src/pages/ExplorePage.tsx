@@ -1,25 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, type Shelf, type Track } from '../api';
+import { Link, useNavigate } from 'react-router-dom';
+import { Loader2, Radio, RefreshCw } from 'lucide-react';
+import { api, type Track } from '../api';
 import { ShelfRow } from '../components/MediaCard';
 import { MixCollageCard } from '../components/MixCollageCard';
 import { usePlayer } from '../store/player';
 import { useLibrary } from '../store/library';
 import { useItemActions } from '../store/itemActions';
-import { Loader2, Radio } from 'lucide-react';
-
-type RadioCat = { id: string; title: string };
-
-type RadioShelf = Shelf & { id: string };
+import { useExplore } from '../store/explore';
+import { perfStart } from '../lib/perf';
+import { warmFormats } from '../lib/streamPrefetch';
 
 export function ExplorePage() {
-  const [ytShelves, setYtShelves] = useState<Shelf[]>([]);
-  const [radioShelves, setRadioShelves] = useState<RadioShelf[]>([]);
-  const [radios, setRadios] = useState<RadioCat[]>([]);
-  const [radioPreviews, setRadioPreviews] = useState<Record<string, Track[]>>({});
-  const [loading, setLoading] = useState(true);
-  const [loadingRadios, setLoadingRadios] = useState(false);
-  const [pendingRadios, setPendingRadios] = useState<string[]>([]);
-  const [error, setError] = useState('');
+  const navigate = useNavigate();
+  const ytShelves = useExplore((s) => s.ytShelves);
+  const radios = useExplore((s) => s.radios);
+  const radioShelves = useExplore((s) => s.radioShelves);
+  const radioPreviews = useExplore((s) => s.radioPreviews);
+  const pendingRadios = useExplore((s) => s.pendingRadios);
+  const loading = useExplore((s) => s.loading);
+  const loadingRadios = useExplore((s) => s.loadingRadios);
+  const refreshing = useExplore((s) => s.refreshing);
+  const error = useExplore((s) => s.error);
+  const ensureLoaded = useExplore((s) => s.ensureLoaded);
+  const refresh = useExplore((s) => s.refresh);
+
   const [startingId, setStartingId] = useState<string | null>(null);
   const playQueue = usePlayer((s) => s.playQueue);
   const isPlaying = usePlayer((s) => s.isPlaying);
@@ -27,77 +32,39 @@ export function ExplorePage() {
   const hasMix = useLibrary((s) => s.hasMix);
   const saveMix = useLibrary((s) => s.saveMix);
   const openActions = useItemActions((s) => s.open);
-  const cancelled = useRef(false);
+
+  const pullRef = useRef<{ y: number; atTop: boolean } | null>(null);
+  const [pullDy, setPullDy] = useState(0);
 
   useEffect(() => {
-    cancelled.current = false;
-    setLoading(true);
-    setError('');
-    setRadioShelves([]);
-    setPendingRadios([]);
+    const end = perfStart('explore.ensure');
+    void ensureLoaded().finally(() => end());
+  }, [ensureLoaded]);
 
-    (async () => {
-      try {
-        const r = await api.explore();
-        if (cancelled.current) return;
-        setYtShelves(r.shelves || []);
-        const cats = r.radios?.length
-          ? r.radios
-          : (await api.recoRadios().catch(() => ({ radios: [] as RadioCat[] }))).radios || [];
-        setRadios(cats);
-        setLoading(false);
-
-        // Radios une par une (preview light) — page utilisable tout de suite
-        if (!cats.length) return;
-        setLoadingRadios(true);
-        setPendingRadios(cats.map((c) => c.id));
-        for (const cat of cats) {
-          if (cancelled.current) return;
-          try {
-            const mix = await api.recoRadio(cat.id, { preview: true });
-            if (cancelled.current) return;
-            const items = (mix.tracks || []).slice(0, 12);
-            if (items.length) {
-              setRadioShelves((prev) => {
-                if (prev.some((s) => s.id === cat.id)) return prev;
-                return [...prev, { id: cat.id, title: `Radio · ${cat.title}`, items }];
-              });
-              setRadioPreviews((prev) => ({ ...prev, [cat.id]: items.slice(0, 4) }));
-            }
-          } catch {
-            /* radio individuelle KO → on continue */
-          } finally {
-            if (!cancelled.current) {
-              setPendingRadios((prev) => prev.filter((id) => id !== cat.id));
-            }
-          }
-        }
-        if (!cancelled.current) setLoadingRadios(false);
-      } catch (e) {
-        if (!cancelled.current) {
-          setError(String((e as Error).message || e));
-          setLoading(false);
-          setLoadingRadios(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled.current = true;
-    };
-  }, []);
-
-  const startRadio = async (id: string) => {
+  const playRadioFast = async (id: string, title: string) => {
     setStartingId(id);
-    setError('');
+    const end = perfStart('mix.play', id);
     try {
+      // Joue d’abord le preview déjà en mémoire → feedback immédiat
+      const preview = (radioPreviews[id] || []).filter((t) =>
+        /^[a-zA-Z0-9_-]{11}$/.test(t.id),
+      );
+      if (preview.length) {
+        void playQueue(preview, 0, { sourceId: id, sourceKind: 'mix' });
+        void warmFormats([preview[0]!.id, preview[1]?.id].filter(Boolean) as string[]);
+      }
       const r = await api.recoRadio(id);
-      if (r.tracks?.length) void playQueue(r.tracks, 0);
-      else setError('Aucun titre pour cette radio.');
+      if (r.tracks?.length) {
+        void playQueue(r.tracks, 0, { sourceId: id, sourceKind: 'mix' });
+        void warmFormats(r.tracks.slice(0, 3).map((t) => t.id));
+      } else if (!preview.length) {
+        useExplore.setState({ error: 'Aucun titre pour cette radio.' });
+      }
     } catch (e) {
-      setError(String((e as Error).message || e));
+      useExplore.setState({ error: String((e as Error).message || e) });
     } finally {
       setStartingId(null);
+      end(title);
     }
   };
 
@@ -107,14 +74,56 @@ export function ExplorePage() {
   };
 
   return (
-    <div className="animate-fade-up">
-      <h1 className="mb-2 font-display text-3xl font-semibold tracking-tight">Explorer</h1>
-      <p className="mb-6 text-sm text-yt-muted">
-        Radios automatiques + nouveautés YouTube — chargement progressif.
-      </p>
+    <div
+      className="animate-fade-up"
+      onTouchStart={(e) => {
+        const scrollTop =
+          (e.currentTarget.closest('main') as HTMLElement | null)?.scrollTop ??
+          document.documentElement.scrollTop;
+        pullRef.current = { y: e.touches[0]?.clientY ?? 0, atTop: scrollTop <= 2 };
+      }}
+      onTouchMove={(e) => {
+        const p = pullRef.current;
+        if (!p?.atTop) return;
+        const dy = (e.touches[0]?.clientY ?? 0) - p.y;
+        if (dy > 0) setPullDy(Math.min(72, dy));
+      }}
+      onTouchEnd={() => {
+        if (pullDy > 56) void refresh();
+        setPullDy(0);
+        pullRef.current = null;
+      }}
+    >
+      {pullDy > 8 && (
+        <div
+          className="mb-2 flex items-center justify-center gap-2 text-xs text-yt-muted transition"
+          style={{ height: pullDy }}
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${pullDy > 56 ? 'animate-spin' : ''}`} />
+          {pullDy > 56 ? 'Relâche pour actualiser' : 'Tirer pour actualiser'}
+        </div>
+      )}
+
+      <div className="mb-2 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="font-display text-3xl font-semibold tracking-tight">Explorer</h1>
+          <p className="mt-1 text-sm text-yt-muted">
+            Radios + nouveautés — mise à jour auto ~45 min, ou tire vers le bas.
+          </p>
+        </div>
+        <button
+          type="button"
+          title="Actualiser"
+          disabled={refreshing || loading}
+          onClick={() => void refresh()}
+          className="mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white disabled:opacity-50"
+        >
+          <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
 
       {radios.length > 0 && (
-        <section className="mb-8">
+        <section className="mb-8 mt-4">
           <div className="mb-3 flex items-center gap-2">
             <Radio className="h-4 w-4 text-yt-muted" />
             <h2 className="font-display text-lg font-semibold">Mixés pour toi</h2>
@@ -123,6 +132,7 @@ export function ExplorePage() {
             {radios.map((r) => (
               <MixCollageCard
                 key={r.id}
+                id={r.id}
                 title={r.title}
                 tracks={radioPreviews[r.id] || []}
                 busy={startingId === r.id}
@@ -133,7 +143,8 @@ export function ExplorePage() {
                   Boolean(currentId) &&
                   (radioPreviews[r.id] || []).some((t) => t.id === currentId)
                 }
-                onClick={() => void startRadio(r.id)}
+                onOpen={() => navigate(`/mix/${encodeURIComponent(r.id)}`)}
+                onPlay={() => void playRadioFast(r.id, r.title)}
                 onSave={() => {
                   const covers = radioPreviews[r.id] || [];
                   void saveMix({ id: r.id, title: r.title, covers, tracks: covers });
@@ -168,7 +179,13 @@ export function ExplorePage() {
       {!loading &&
         radioShelves.map((shelf) => (
           <div key={shelf.id} className="relative">
-            <div className="mb-[-0.5rem] flex justify-end px-1">
+            <div className="mb-[-0.5rem] flex items-center justify-between gap-2 px-1">
+              <Link
+                to={`/mix/${encodeURIComponent(shelf.id)}`}
+                className="text-xs text-yt-muted hover:text-white"
+              >
+                Voir le mix
+              </Link>
               <button
                 type="button"
                 onClick={() => playShelf(shelf.items)}

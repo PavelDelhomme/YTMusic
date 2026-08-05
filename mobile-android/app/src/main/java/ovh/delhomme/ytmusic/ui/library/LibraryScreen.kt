@@ -510,7 +510,7 @@ private fun buildLibraryContent(
                 playableQueue = emptyList(),
                 emptyMessage = "Aucun mix. Sur Accueil → Mixés pour toi, enregistre un mix (+).",
                 showPlayAll = false,
-                collectionHint = if (rows.isNotEmpty()) "Ouvre un mix pour le lancer" else null,
+                collectionHint = if (rows.isNotEmpty()) "Ouvre un mix pour voir la liste" else null,
             )
         }
         LibraryFilter.Albums -> {

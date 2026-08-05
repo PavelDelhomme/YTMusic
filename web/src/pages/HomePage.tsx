@@ -8,6 +8,9 @@ import { usePins } from '../store/pins';
 import { useLibrary } from '../store/library';
 import { useItemActions } from '../store/itemActions';
 import { Pin, Play, Radio } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { warmFormats } from '../lib/streamPrefetch';
+import { perfStart } from '../lib/perf';
 
 const HOME_CACHE_KEY = 'ytm_home_v1';
 
@@ -44,6 +47,7 @@ function writeHomeCache(payload: Omit<HomeCache, 'at'>) {
 }
 
 export function HomePage() {
+  const navigate = useNavigate();
   const [shelves, setShelves] = useState<Shelf[]>([]);
   const [seeds, setSeeds] = useState<string[]>([]);
   const [page, setPage] = useState(0);
@@ -185,13 +189,25 @@ export function HomePage() {
 
   const startRadio = async (id: string) => {
     setStartingRadio(id);
+    const end = perfStart('home.mix.play');
     try {
+      const preview = (radioPreviews[id] || []).filter((t) =>
+        /^[a-zA-Z0-9_-]{11}$/.test(t.id),
+      );
+      if (preview.length) {
+        void playQueue(preview, 0, { sourceId: id, sourceKind: 'mix' });
+        void warmFormats(preview.slice(0, 2).map((t) => t.id));
+      }
       const r = await api.recoRadio(id);
-      if (r.tracks?.length) void playQueue(r.tracks, 0);
+      if (r.tracks?.length) {
+        void playQueue(r.tracks, 0, { sourceId: id, sourceKind: 'mix' });
+        void warmFormats(r.tracks.slice(0, 3).map((t) => t.id));
+      }
     } catch (e) {
       console.error(e);
     } finally {
       setStartingRadio(null);
+      end(id);
     }
   };
 
@@ -265,6 +281,7 @@ export function HomePage() {
             {radios.map((r) => (
               <MixCollageCard
                 key={r.id}
+                id={r.id}
                 title={r.title}
                 tracks={radioPreviews[r.id] || []}
                 busy={startingRadio === r.id}
@@ -275,7 +292,8 @@ export function HomePage() {
                   Boolean(currentId) &&
                   (radioPreviews[r.id] || []).some((t) => t.id === currentId)
                 }
-                onClick={() => void startRadio(r.id)}
+                onOpen={() => navigate(`/mix/${encodeURIComponent(r.id)}`)}
+                onPlay={() => void startRadio(r.id)}
                 onSave={() => void saveRadioMix(r.id, r.title)}
                 onMore={() => openMixMenu(r.id, r.title)}
               />
