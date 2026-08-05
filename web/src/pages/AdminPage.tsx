@@ -294,17 +294,22 @@ export function AdminPage() {
           <h3 className="font-display text-lg font-semibold">Cookies YouTube (stream VPS)</h3>
         </div>
         <p className="mb-3 text-sm text-yt-muted">
-          Sur un VPS, YouTube bloque souvent le stream (« Sign in to confirm you’re not a bot »).
-          Colle le header <code className="text-white">Cookie</code> depuis{' '}
-          <code className="text-white">youtube.com</code> (navigateur connecté) pour débloquer la
-          lecture. Fichier stocké dans le volume Docker (
-          <code className="text-white">/app/data/youtube-cookies.header</code>).
+          Sur un VPS, YouTube bloque l’IP datacenter — <strong className="text-white">même avec des cookies
+          Chrome</strong>. Solution fiable : faire passer le stream par ton PC (IP maison).
+        </p>
+        <pre className="mb-2 overflow-x-auto rounded-xl border border-yt-border bg-black/40 px-3 py-2 text-xs text-emerald-300">
+bash scripts/link-home-stream.sh
+        </pre>
+        <p className="mb-3 text-xs text-yt-muted">
+          Laisse le PC allumé. Stop : <code className="text-white">bash scripts/link-home-stream.sh stop</code>.
+          Option cookies (souvent insuffisante seule) :
+          <code className="text-white"> bash scripts/push-youtube-cookies.sh</code>
         </p>
         <dl className="mb-3 grid gap-2 text-sm sm:grid-cols-2">
           <div>
-            <dt className="text-xs text-yt-muted">État</dt>
+            <dt className="text-xs text-yt-muted">État cookies</dt>
             <dd className="font-medium">
-              {status?.youtubeCookies?.configured ? 'Configuré ✓' : 'Absent — stream KO sur VPS'}
+              {status?.youtubeCookies?.configured ? 'Configuré ✓' : 'Absent'}
               {status?.youtubeCookies?.source ? ` · ${status.youtubeCookies.source}` : ''}
             </dd>
           </div>
@@ -314,15 +319,17 @@ export function AdminPage() {
           </div>
         </dl>
         <ol className="mb-3 list-decimal space-y-1 pl-5 text-xs text-yt-muted">
-          <li>Chrome / Firefox → fenêtre privée → connecte-toi sur youtube.com</li>
-          <li>F12 → Network → une requête vers youtube.com → Request Headers → Cookie</li>
-          <li>Colle ci-dessous → Enregistrer (puis Admin prod ou local selon où tu es)</li>
+          <li>PC allumé + API locale</li>
+          <li>
+            <code className="text-white">bash scripts/link-home-stream.sh</code>
+          </li>
+          <li>Sinon cookies (fallback) : push-youtube-cookies.sh ou collage ci-dessous</li>
         </ol>
         <textarea
           value={ytCookie}
           onChange={(e) => setYtCookie(e.target.value)}
           rows={3}
-          placeholder="Cookie: VISITOR_INFO1_LIVE=…; SID=…; …"
+          placeholder="Cookie: … ou Netscape cookies.txt (fallback)"
           className="mb-3 w-full rounded-xl border border-yt-border bg-yt-bg px-3 py-2 font-mono text-xs text-white"
         />
         <div className="flex flex-wrap gap-2">
