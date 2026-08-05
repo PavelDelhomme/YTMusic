@@ -44,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
+import ovh.delhomme.ytmusic.BuildConfig
 import ovh.delhomme.ytmusic.auth.PasskeyAuth
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.RefreshBody
@@ -215,6 +216,14 @@ fun AccountSheet(
                         onLoggedOut()
                     }
                 },
+            )
+            Text(
+                BuildConfig.APP_VERSION_LABEL,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
             )
         }
     }

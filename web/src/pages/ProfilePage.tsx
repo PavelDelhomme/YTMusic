@@ -7,6 +7,7 @@ import { Fingerprint, KeyRound, Shield, Smartphone, Sparkles, Trash2 } from 'luc
 import type { User } from '../api';
 import { markLocalPasskeyReady } from '../lib/passkeyEnrollment';
 import { OnboardingWizard } from '../components/OnboardingWizard';
+import { appVersionLabel } from '../lib/appVersion';
 
 function TwoFactorSection({ user, onUpdated }: { user: User; onUpdated: () => Promise<void> }) {
   const [secret, setSecret] = useState<string | null>(null);
@@ -358,6 +359,10 @@ export function ProfilePage() {
           </div>
         </div>
       </section>
+
+      <p className="mt-8 text-center text-xs tabular-nums tracking-wide text-yt-muted/70">
+        Version {appVersionLabel()}
+      </p>
     </div>
   );
 }

@@ -30,6 +30,46 @@ let fullOrder: string[] = [];
 /** Invalide les préchargements d’arrière-plan quand on change de titre trop vite. */
 let prefetchGeneration = 0;
 
+/** Circuit-breaker : API/stream injoignable → stop prefetch / retries (évite spam). */
+let streamDownUntil = 0;
+let streamFailStreak = 0;
+
+export function isStreamDown(): boolean {
+  return Date.now() < streamDownUntil;
+}
+
+export function markStreamOk(): void {
+  streamFailStreak = 0;
+  streamDownUntil = 0;
+}
+
+/** Signale un échec réseau / 5xx. Après 2 échecs → pause 45s. */
+export function markStreamFailure(reason?: string): void {
+  streamFailStreak += 1;
+  if (streamFailStreak >= 2) {
+    streamDownUntil = Date.now() + 45_000;
+    bumpPrefetchGeneration();
+    if (typeof console !== 'undefined') {
+      console.warn('[stream] down — pause prefetch/retries', reason || '', `streak=${streamFailStreak}`);
+    }
+  }
+}
+
+function noteFetchResult(res: Response | null, err?: unknown): void {
+  if (err) {
+    markStreamFailure(err instanceof Error ? err.message : 'network');
+    return;
+  }
+  if (!res) return;
+  if (res.ok || res.status === 206) {
+    markStreamOk();
+    return;
+  }
+  if (res.status === 0 || res.status === 502 || res.status === 503 || res.status === 504) {
+    markStreamFailure(`HTTP ${res.status}`);
+  }
+}
+
 function isVideoId(id: string) {
   return /^[a-zA-Z0-9_-]{11}$/.test(id);
 }
@@ -65,7 +105,7 @@ export function bumpPrefetchGeneration() {
 
 /** Chauffe le déchiffrement googlevideo côté API (latence principale). */
 export async function warmFormat(id: string): Promise<void> {
-  if (!isVideoId(id)) return;
+  if (!isVideoId(id) || isStreamDown()) return;
   const last = warmDone.get(id);
   if (last && Date.now() - last < 4 * 60_000) return;
   if (inflightWarm.has(id)) return;
@@ -75,13 +115,14 @@ export async function warmFormat(id: string): Promise<void> {
       credentials: 'include',
       headers: await authHeaders(),
     });
+    noteFetchResult(res);
     if (res.ok) warmDone.set(id, Date.now());
     if (warmDone.size > 80) {
       const first = warmDone.keys().next().value;
       if (first) warmDone.delete(first);
     }
-  } catch {
-    /* ignore */
+  } catch (e) {
+    noteFetchResult(null, e);
   } finally {
     inflightWarm.delete(id);
   }
@@ -89,6 +130,7 @@ export async function warmFormat(id: string): Promise<void> {
 
 /** Batch warm format (1 requête HTTP). */
 export async function warmFormats(ids: string[]): Promise<void> {
+  if (isStreamDown()) return;
   const need = [...new Set(ids.filter(isVideoId))].filter((id) => {
     const last = warmDone.get(id);
     return !(last && Date.now() - last < 4 * 60_000);
@@ -104,20 +146,22 @@ export async function warmFormats(ids: string[]): Promise<void> {
       },
       body: JSON.stringify({ ids: need.slice(0, 16) }),
     });
+    noteFetchResult(res);
     if (res.ok) {
       const now = Date.now();
       for (const id of need.slice(0, 16)) warmDone.set(id, now);
-    } else {
+    } else if (!isStreamDown()) {
       await runPool(need.slice(0, 8), WARM_CONCURRENCY, warmFormat);
     }
-  } catch {
-    await runPool(need.slice(0, 6), WARM_CONCURRENCY, warmFormat);
+  } catch (e) {
+    noteFetchResult(null, e);
+    // Pas de fallback individuel si l’API est down (évite N requêtes mortes)
   }
 }
 
 /** Précharge le début du flux (Range) en RAM — démarrage quasi immédiat. */
 export async function warmHead(id: string, gen?: number, bytes = HEAD_BYTES): Promise<void> {
-  if (!isVideoId(id)) return;
+  if (!isVideoId(id) || isStreamDown()) return;
   if (gen !== undefined && gen !== prefetchGeneration) return;
   if (headCache.has(id)) {
     touchLru(headCache, id, MAX_HEAD);
@@ -128,7 +172,7 @@ export async function warmHead(id: string, gen?: number, bytes = HEAD_BYTES): Pr
   try {
     if (gen !== undefined && gen !== prefetchGeneration) return;
     await warmFormat(id);
-    if (gen !== undefined && gen !== prefetchGeneration) return;
+    if (gen !== undefined && gen !== prefetchGeneration || isStreamDown()) return;
     const res = await fetch(apiUrl(`/api/stream/${id}`), {
       credentials: 'include',
       headers: {
@@ -136,6 +180,7 @@ export async function warmHead(id: string, gen?: number, bytes = HEAD_BYTES): Pr
         Range: `bytes=0-${bytes - 1}`,
       },
     });
+    noteFetchResult(res);
     if (gen !== undefined && gen !== prefetchGeneration) return;
     if (!res.ok && res.status !== 206) return;
     const buf = await res.arrayBuffer();
@@ -147,8 +192,8 @@ export async function warmHead(id: string, gen?: number, bytes = HEAD_BYTES): Pr
       if (first === undefined) break;
       headCache.delete(first);
     }
-  } catch {
-    /* ignore */
+  } catch (e) {
+    noteFetchResult(null, e);
   } finally {
     inflightHead.delete(id);
   }
@@ -156,7 +201,7 @@ export async function warmHead(id: string, gen?: number, bytes = HEAD_BYTES): Pr
 
 /** Met toute la piste en Cache Storage (play instantané au skip). */
 export async function warmFull(id: string, gen?: number): Promise<void> {
-  if (!isVideoId(id) || typeof caches === 'undefined') return;
+  if (!isVideoId(id) || typeof caches === 'undefined' || isStreamDown()) return;
   if (gen !== undefined && gen !== prefetchGeneration) return;
   if (inflightFull.has(id)) return;
   inflightFull.add(id);
@@ -170,18 +215,19 @@ export async function warmFull(id: string, gen?: number): Promise<void> {
       return;
     }
     await warmFormat(id);
-    if (gen !== undefined && gen !== prefetchGeneration) return;
+    if (gen !== undefined && gen !== prefetchGeneration || isStreamDown()) return;
     const res = await fetch(url, {
       credentials: 'include',
       headers: await authHeaders(),
     });
+    noteFetchResult(res);
     if (gen !== undefined && gen !== prefetchGeneration) return;
     if (!res.ok) return;
     await cache.put(url, res.clone());
     bumpFull(id);
     await evictFull(cache);
-  } catch {
-    /* ignore */
+  } catch (e) {
+    noteFetchResult(null, e);
   } finally {
     inflightFull.delete(id);
   }
@@ -236,6 +282,7 @@ export function prefetchAround(
   currentIndex: number,
   opts?: { ahead?: number; behind?: number; fullAhead?: number; delayFullMs?: number },
 ) {
+  if (isStreamDown()) return;
   const ahead = opts?.ahead ?? 4;
   const behind = opts?.behind ?? 1;
   const fullAhead = opts?.fullAhead ?? 1;

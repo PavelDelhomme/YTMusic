@@ -32,6 +32,26 @@ object StreamPrefetcher {
     private const val DISK_CACHE_MB = 24L // warm JSON / resolve — octets audio = SimpleCache Exo
     private val JSON = "application/json; charset=utf-8".toMediaType()
 
+    @Volatile private var streamDownUntil = 0L
+    private var streamFailStreak = 0
+
+    fun isStreamDown(): Boolean = System.currentTimeMillis() < streamDownUntil
+
+    fun markStreamOk() {
+        streamFailStreak = 0
+        streamDownUntil = 0L
+    }
+
+    fun markStreamDown(pauseMs: Long = 45_000L) {
+        streamDownUntil = System.currentTimeMillis() + pauseMs
+        cancelIdle()
+    }
+
+    private fun noteNetworkFailure() {
+        streamFailStreak += 1
+        if (streamFailStreak >= 2) markStreamDown()
+    }
+
     private val client: OkHttpClient by lazy {
         val dir = File(YtMusicApp.instance.cacheDir, "stream-prefetch").apply { mkdirs() }
         OkHttpClient.Builder()
@@ -69,35 +89,82 @@ object StreamPrefetcher {
         YtMusicApp.instance.container.tokenStore.peekAccess()?.let { "Bearer $it" }
 
     fun warm(resolveUrl: String) {
-        if (resolveUrl.isBlank()) return
+        if (resolveUrl.isBlank() || isStreamDown()) return
         synchronized(recent) {
             val last = recent[resolveUrl]
             if (last != null && System.currentTimeMillis() - last < 120_000L) return
         }
         if (!inFlight.add(resolveUrl)) return
-        val req = Request.Builder()
+        val builder = Request.Builder()
             .url(resolveUrl)
             .header("X-YTM-Client", "android")
             .tag("ytm-prefetch")
             .get()
-            .build()
-        client.newCall(req).enqueue(object : Callback {
+        authHeader()?.let { builder.header("Authorization", it) }
+        client.newCall(builder.build()).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 inFlight.remove(resolveUrl)
+                noteNetworkFailure()
             }
 
             override fun onResponse(call: Call, response: Response) {
                 response.close()
                 inFlight.remove(resolveUrl)
-                synchronized(recent) {
-                    recent[resolveUrl] = System.currentTimeMillis()
+                if (response.isSuccessful) {
+                    markStreamOk()
+                    synchronized(recent) {
+                        recent[resolveUrl] = System.currentTimeMillis()
+                    }
+                } else if (response.code in 500..599) {
+                    noteNetworkFailure()
                 }
             }
         })
     }
 
+    /**
+     * Chauffe le format du titre courant de façon synchrone (court) avant prepare() —
+     * réduit le cold-start API (~déchiffrement googlevideo).
+     */
+    fun warmCurrentBlocking(baseApi: String, trackId: String, timeoutMs: Long = 450L) {
+        if (trackId.length != 11 || isStreamDown()) return
+        val key = "warm:$trackId"
+        synchronized(recent) {
+            val last = recent[key]
+            if (last != null && System.currentTimeMillis() - last < 60_000L) return
+        }
+        val body = JSONObject().put("ids", JSONArray(listOf(trackId))).toString().toRequestBody(JSON)
+        val builder = Request.Builder()
+            .url("${baseApi.trimEnd('/')}/api/stream/warm")
+            .header("X-YTM-Client", "android")
+            .header("Content-Type", "application/json")
+            .tag("ytm-prefetch")
+            .post(body)
+        authHeader()?.let { builder.header("Authorization", it) }
+        try {
+            val timed = client.newBuilder()
+                .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                .connectTimeout(timeoutMs.coerceAtMost(400), TimeUnit.MILLISECONDS)
+                .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                .build()
+            timed.newCall(builder.build()).execute().use { response ->
+                if (response.isSuccessful) {
+                    markStreamOk()
+                    synchronized(recent) {
+                        recent[key] = System.currentTimeMillis()
+                    }
+                } else if (response.code in 500..599) {
+                    noteNetworkFailure()
+                }
+            }
+        } catch (_: Exception) {
+            // timeout / réseau — laisser Exo démarrer quand même
+        }
+    }
+
     /** Batch resolve formats côté API (1 requête au lieu de N). */
     private fun warmBatch(baseApi: String, trackIds: List<String>) {
+        if (isStreamDown()) return
         val ids = trackIds.distinct().filter { it.length == 11 }.take(MAX_WARM)
         if (ids.isEmpty()) return
         val key = "warm:${ids.sorted().joinToString(",")}"
@@ -117,20 +184,23 @@ object StreamPrefetcher {
         client.newCall(builder.build()).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 inFlight.remove(key)
-                ids.take(4).forEach { id ->
-                    warm("${baseApi.trimEnd('/')}/api/stream/$id/url")
-                }
+                noteNetworkFailure()
             }
 
             override fun onResponse(call: Call, response: Response) {
                 response.close()
                 inFlight.remove(key)
                 if (!response.isSuccessful) {
-                    ids.take(4).forEach { id ->
-                        warm("${baseApi.trimEnd('/')}/api/stream/$id/url")
+                    if (response.code in 500..599) {
+                        noteNetworkFailure()
+                    } else if (!isStreamDown()) {
+                        ids.take(2).forEach { id ->
+                            warm("${baseApi.trimEnd('/')}/api/stream/$id/url")
+                        }
                     }
                     return
                 }
+                markStreamOk()
                 synchronized(recent) {
                     recent[key] = System.currentTimeMillis()
                 }
@@ -140,12 +210,13 @@ object StreamPrefetcher {
 
     /** Chauffe format + début audio (Exo cache) pour un id. */
     fun warmTrack(baseApi: String, trackId: String) {
-        if (trackId.length != 11) return
+        if (trackId.length != 11 || isStreamDown()) return
         warmBatch(baseApi, listOf(trackId))
         exoPrefetch(baseApi, trackId, priority = true)
     }
 
     private fun exoPrefetch(baseApi: String, trackId: String, priority: Boolean) {
+        if (isStreamDown()) return
         val unmetered = isUnmetered()
         val bytes = when {
             priority && unmetered -> HEAD_NEXT_WIFI
@@ -158,10 +229,12 @@ object StreamPrefetcher {
     }
 
     fun warmMany(resolveUrls: List<String>) {
+        if (isStreamDown()) return
         resolveUrls.distinct().take(MAX_WARM).forEach { warm(it) }
     }
 
     fun warmTracks(baseApi: String, trackIds: List<String>) {
+        if (isStreamDown()) return
         val ids = trackIds.distinct().filter { it.length == 11 }.take(MAX_WARM)
         if (ids.isEmpty()) return
         warmBatch(baseApi, ids)
@@ -178,7 +251,7 @@ object StreamPrefetcher {
         ahead: Int = 3,
         behind: Int = 1,
     ) {
-        if (queueIds.isEmpty()) return
+        if (queueIds.isEmpty() || isStreamDown()) return
         val unmetered = isUnmetered()
         // Format warm toujours pour +2 même en data (léger) ; octets Exo plus limités
         val aheadN = if (unmetered) ahead else 2
