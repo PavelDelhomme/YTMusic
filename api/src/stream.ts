@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, statSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
@@ -11,6 +11,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 const YTDLP = join(ROOT, 'bin', 'yt-dlp');
 const CACHE_DIR = join(ROOT, 'data', 'cache');
+const STREAM_UPSTREAM_FILE = join(ROOT, 'data', 'stream-upstream.url');
 
 function ensureCache() {
   if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
@@ -19,6 +20,75 @@ function ensureCache() {
 export function cachePath(videoId: string) {
   ensureCache();
   return join(CACHE_DIR, `${videoId}.m4a`);
+}
+
+/** Base URL de l’API maison (env ou fichier volume). */
+export function resolveStreamUpstream(): string | null {
+  const env = (process.env.STREAM_UPSTREAM || '').trim().replace(/\/$/, '');
+  if (env) return env;
+  try {
+    if (existsSync(STREAM_UPSTREAM_FILE)) {
+      const v = readFileSync(STREAM_UPSTREAM_FILE, 'utf8').trim().replace(/\/$/, '');
+      if (v.startsWith('http://') || v.startsWith('https://')) return v;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/** Relais stream vers l’API maison (évite le blocage IP datacenter YouTube). */
+async function proxyStreamToHome(
+  req: Request,
+  res: Response,
+  homeBase: string,
+  videoId: string,
+) {
+  const url = `${homeBase}/api/stream/${videoId}`;
+  const headers: Record<string, string> = {
+    'X-YTM-Stream-Relay': '1',
+  };
+  if (req.headers.range) headers.Range = String(req.headers.range);
+  const auth = req.headers.authorization;
+  if (auth) headers.Authorization = String(auth);
+  const upstream = await fetch(url, {
+    headers,
+    signal: AbortSignal.timeout(45_000),
+  });
+  if (upstream.status >= 400) {
+    const detail = await upstream.text().catch(() => '');
+    throw new Error(`home stream ${upstream.status}: ${detail.slice(0, 180)}`);
+  }
+  if (!upstream.body) throw new Error('home stream sans corps');
+  const reader = upstream.body.getReader();
+  const first = await reader.read();
+  if (first.done || !first.value?.byteLength) throw new Error('home stream vide');
+
+  res.status(upstream.status);
+  const ct = upstream.headers.get('content-type');
+  if (ct) res.setHeader('Content-Type', ct);
+  else res.setHeader('Content-Type', 'audio/mp4');
+  const cr = upstream.headers.get('content-range');
+  if (cr) res.setHeader('Content-Range', cr);
+  const cl = upstream.headers.get('content-length');
+  if (cl) res.setHeader('Content-Length', cl);
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'private, max-age=60');
+  res.setHeader('X-YTM-Stream-Via', 'home');
+
+  if (!res.write(Buffer.from(first.value))) {
+    await new Promise((r) => res.once('drain', r));
+  }
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      if (!res.write(Buffer.from(value))) {
+        await new Promise((r) => res.once('drain', r));
+      }
+    }
+  }
+  res.end();
 }
 
 async function streamViaInnertube(videoId: string, res: Response) {
@@ -167,6 +237,18 @@ export async function handleStream(req: Request, res: Response) {
     return;
   }
 
+  // VPS → PC maison (IP résidentielle) : STREAM_UPSTREAM ou data/stream-upstream.url
+  const homeUpstream = resolveStreamUpstream();
+  if (homeUpstream) {
+    try {
+      await proxyStreamToHome(req, res, homeUpstream, videoId);
+      return;
+    } catch (err) {
+      console.warn('[stream] STREAM_UPSTREAM KO, fallback local VPS:', (err as Error).message);
+      // continue → résolution VPS (cookies / souvent bloqué)
+    }
+  }
+
   try {
     const format = await getAudioFormat(videoId);
     if (format.url) {
@@ -270,15 +352,18 @@ export async function handleStreamUrl(req: Request, res: Response) {
 /** Warm batch : déchiffre plusieurs formats en parallèle (prefetch file d’attente). */
 export async function handleStreamWarm(req: Request, res: Response) {
   const raw = Array.isArray(req.body?.ids) ? req.body.ids : [];
-  const ids = [...new Set(raw.map((x: unknown) => String(x || '')).filter((id: string) => /^[a-zA-Z0-9_-]{11}$/.test(id)))].slice(
-    0,
-    32,
-  );
+  const ids = [
+    ...new Set(
+      raw
+        .map((x: unknown) => String(x || ''))
+        .filter((id): id is string => /^[a-zA-Z0-9_-]{11}$/.test(id)),
+    ),
+  ].slice(0, 32) as string[];
   if (!ids.length) {
     res.status(400).json({ error: 'ids requis' });
     return;
   }
-  const results = await Promise.allSettled(ids.map((id) => getAudioFormat(id)));
+  const results = await Promise.allSettled(ids.map((id: string) => getAudioFormat(id)));
   const ok = results.filter((r) => r.status === 'fulfilled').length;
   res.json({ ok: true, requested: ids.length, warmed: ok });
 }

@@ -64,7 +64,7 @@ import {
   markDownloaded,
   listPlaylists,
 } from './library.js';
-import { handleStream, handleStreamUrl, handleStreamWarm, downloadTrack, cachePath } from './stream.js';
+import { handleStream, handleStreamUrl, handleStreamWarm, downloadTrack, cachePath, resolveStreamUpstream } from './stream.js';
 import { importByKind, importByQueryOrUrl } from './import.js';
 import { handleOfflineStatus, startOfflineCollection } from './offline.js';
 import { handleImageProxy } from './img.js';
@@ -252,6 +252,7 @@ app.get('/api/health', (_req, res) => {
       source: ytCookies.source,
       hint: ytCookies.hint,
     },
+    streamUpstream: resolveStreamUpstream(),
   });
 });
 
