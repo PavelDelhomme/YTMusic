@@ -189,7 +189,7 @@ fun AccountSheet(
             AccountRow(
                 icon = { Icon(Icons.Default.BugReport, contentDescription = null) },
                 title = "API & logs",
-                subtitle = "URL serveur · ${container.resolvedApiBase()}",
+                subtitle = "${container.apiEnvLabel()} · ${container.resolvedApiBase()}",
                 onClick = {
                     onDismiss()
                     onOpenDebugLogs?.invoke()
