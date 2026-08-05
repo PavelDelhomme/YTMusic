@@ -603,6 +603,10 @@ interface YtMusicApi {
     @POST("api/pins")
     suspend fun addPin(@Body body: Map<String, @JvmSuppressWildcards Any?>): PinsResponse
 
+    /** Upsert multi-appareils — union serveur. */
+    @POST("api/pins/sync")
+    suspend fun syncPins(@Body body: Map<String, @JvmSuppressWildcards Any?>): PinsResponse
+
     @DELETE("api/pins/{id}")
     suspend fun removePin(@Path("id") id: String): PinsResponse
 
