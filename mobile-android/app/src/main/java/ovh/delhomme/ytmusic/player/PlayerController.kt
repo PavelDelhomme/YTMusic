@@ -480,12 +480,30 @@ class PlayerController(
     }
 
     fun toggleShuffle() {
-        shuffleEnabled = !shuffleEnabled
-        player()?.let {
-            it.shuffleModeEnabled = shuffleEnabled
-            syncFrom(it)
-        } ?: run {
-            _state.value = _state.value.copy(shuffle = shuffleEnabled)
+        val turningOn = !shuffleEnabled
+        shuffleEnabled = turningOn
+        val c = player()
+        if (c != null && turningOn) {
+            val idx = c.currentMediaItemIndex.coerceAtLeast(0)
+            val queue = PlaybackService.Holder.queue.toMutableList()
+            if (idx < queue.lastIndex) {
+                val head = queue.take(idx + 1)
+                val rest = queue.drop(idx + 1).shuffled()
+                val newQ = head + rest
+                PlaybackService.Holder.queue = newQ
+                while (c.mediaItemCount > idx + 1) c.removeMediaItem(idx + 1)
+                rest.forEach { c.addMediaItem(mediaItem(it)) }
+            }
+            // Ordre géré manuellement — pas le shuffle ExoPlayer (qui changerait le « next »)
+            c.shuffleModeEnabled = false
+            syncFrom(c)
+            _state.value = _state.value.copy(shuffle = true)
+        } else {
+            c?.let {
+                it.shuffleModeEnabled = false
+                syncFrom(it)
+            }
+            _state.value = _state.value.copy(shuffle = false)
         }
     }
 
@@ -592,6 +610,73 @@ class PlayerController(
         tracks.filter { it.isPlayable() }.forEach { addToQueue(it) }
     }
 
+    /**
+     * Ajoute (ou remplace) la suite après le titre courant sans le relancer.
+     * Cap par défaut pour ne pas saturer (mix / radio).
+     */
+    fun enqueueAfterCurrent(
+        tracks: List<TrackDto>,
+        replaceRest: Boolean = true,
+        cap: Int = 36,
+        title: String? = null,
+        sourceId: String? = null,
+        sourceKind: String? = null,
+    ) {
+        val extras = tracks.filter { it.isPlayable() }.distinctBy { it.id }.take(cap)
+        if (extras.isEmpty()) return
+        val c = player()
+        if (c == null || PlaybackService.Holder.queue.isEmpty()) {
+            play(extras, 0, title = title, sourceId = sourceId, sourceKind = sourceKind)
+            return
+        }
+        if (title != null) setQueueTitle(title)
+        if (sourceId != null) this.sourceId = sourceId
+        if (sourceKind != null) this.sourceKind = sourceKind
+        val idx = c.currentMediaItemIndex.coerceAtLeast(0)
+        val queue = PlaybackService.Holder.queue.toMutableList()
+        val currentId = queue.getOrNull(idx)?.id
+        val filtered = extras.filter { it.id != currentId }
+        val head = queue.take(idx + 1)
+        val kept = if (replaceRest) {
+            emptyList()
+        } else {
+            queue.drop(idx + 1).filter { t -> filtered.none { it.id == t.id } }
+        }
+        val newQ = (head + filtered + kept).take(idx + 1 + 90)
+        while (c.mediaItemCount > idx + 1) {
+            c.removeMediaItem(idx + 1)
+        }
+        filtered.take((newQ.size - head.size).coerceAtLeast(0)).forEach { c.addMediaItem(mediaItem(it)) }
+        PlaybackService.Holder.queue = newQ
+        userQueueEnd = newQ.size
+        warmAround(newQ, idx)
+        syncFrom(c)
+    }
+
+    /** Radio / Mix : si un titre tourne déjà, n’ajoute que la suite (sans reset). */
+    fun playRadioOrEnqueue(mix: List<TrackDto>, title: String, sourceKind: String = "mix") {
+        val playable = mix.filter { it.isPlayable() }
+        if (playable.isEmpty()) return
+        val st = _state.value
+        if (st.playing && st.track != null) {
+            enqueueAfterCurrent(
+                playable,
+                replaceRest = true,
+                cap = 36,
+                title = title,
+                sourceKind = sourceKind,
+            )
+        } else {
+            play(
+                playable.take(37),
+                0,
+                title = title,
+                userQueueEnd = playable.take(37).size,
+                sourceKind = sourceKind,
+            )
+        }
+    }
+
     private fun mediaItem(t: TrackDto): MediaItem =
         mediaItemFor(t, streamUrl, queueTitle)
 
@@ -634,10 +719,16 @@ class PlayerController(
         warmAround(window, idx) // format + CacheWriter suite (async)
         ensureAudibleMediaVolume(YtMusicApp.instance)
         player.volume = 1f
+        val playingSame =
+            autoplay &&
+                player.isPlaying &&
+                player.currentMediaItem?.mediaId == currentId &&
+                !currentId.isNullOrBlank()
+        val pos = if (playingSame) player.currentPosition.coerceAtLeast(0L) else startPositionMs.coerceAtLeast(0L)
         player.setMediaItems(
             window.map { mediaItem(it) },
             idx,
-            startPositionMs.coerceAtLeast(0L),
+            pos,
         )
         applyRepeatShuffle(player)
         player.prepare()

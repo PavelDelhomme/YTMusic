@@ -982,6 +982,7 @@ app.get('/api/deploy/apk/info', (req, res) => {
     builtAt: info.builtAt,
     sizeBytes: info.sizeBytes,
     downloadPath: info.downloadPath,
+    downloadUrl: info.downloadUrl,
   });
 });
 

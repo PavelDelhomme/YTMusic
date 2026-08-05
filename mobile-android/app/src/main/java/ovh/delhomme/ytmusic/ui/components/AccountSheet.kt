@@ -67,6 +67,7 @@ fun AccountSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var user by remember { mutableStateOf<UserDto?>(null) }
     var passkeyInfo by remember { mutableStateOf<String?>(null) }
+    var updateHint by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         user = runCatching {
@@ -214,6 +215,41 @@ fun AccountSheet(
                         container.tokenStore.clear()
                         onDismiss()
                         onLoggedOut()
+                    }
+                },
+            )
+            AccountRow(
+                icon = { Icon(Icons.Default.Download, contentDescription = null) },
+                title = "Mettre à jour l'app",
+                subtitle = updateHint ?: "Vérifier une nouvelle version sur le serveur",
+                onClick = {
+                    scope.launch {
+                        runCatching {
+                            container.ensureFreshToken()
+                            val info = container.api.apkInfo()
+                            val remoteCode = info.versionCode ?: 0
+                            val localCode = BuildConfig.VERSION_CODE
+                            if (info.ready != true) {
+                                Toast.makeText(context, "APK pas encore publiée", Toast.LENGTH_SHORT).show()
+                                return@launch
+                            }
+                            if (remoteCode <= localCode) {
+                                updateHint = "À jour (v$localCode)"
+                                Toast.makeText(context, "Déjà à jour", Toast.LENGTH_SHORT).show()
+                                return@launch
+                            }
+                            updateHint = "v$remoteCode disponible"
+                            val url = info.downloadUrl?.takeIf {
+                                it.startsWith("https://") || it.startsWith("http://")
+                            } ?: "${container.apiBaseUrl.trimEnd('/')}/api/deploy/apk"
+                            val intent = android.content.Intent(
+                                android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse(url),
+                            )
+                            context.startActivity(intent)
+                        }.onFailure {
+                            Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 },
             )

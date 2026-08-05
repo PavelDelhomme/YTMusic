@@ -93,6 +93,11 @@ type PlayerState = {
   clearPlayedFromQueue: () => void;
   appendRelated: (tracks: Track[]) => void;
   clearQueue: () => void;
+  /** Insère / remplace la suite après le titre courant sans le relancer. */
+  enqueueAfterCurrent: (
+    tracks: Track[],
+    opts?: { replaceRest?: boolean; cap?: number; sourceId?: string | null; sourceKind?: PlayerState['sourceKind'] },
+  ) => void;
   startMix: (track: Track) => Promise<void>;
   /** Radio style YTM : depuis un titre, album ou artiste. */
   startRadio: (opts: {
@@ -1269,6 +1274,47 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     }
     const playTrack = isPlayable(track) ? track : nextQueue[0];
     const idx = Math.max(0, nextQueue.findIndex((t) => t.id === playTrack.id));
+    const prev = get().current;
+    const audio = get().audioEl;
+    const sameStillPlaying =
+      Boolean(prev?.id) &&
+      prev!.id === playTrack.id &&
+      Boolean(audio) &&
+      audio!.dataset.trackId === playTrack.id &&
+      !audio!.paused &&
+      !audio!.ended;
+    // Même titre déjà en cours → met à jour la file sans couper / sans progress 0
+    if (sameStillPlaying) {
+      const keepBoundary = Boolean(opts?.keepUserBoundary);
+      set({
+        current: playTrack,
+        queue: nextQueue,
+        queueIndex: idx >= 0 ? idx : 0,
+        userQueueEnd: keepBoundary
+          ? Math.min(Math.max(get().userQueueEnd || 0, (idx >= 0 ? idx : 0) + 1), nextQueue.length)
+          : nextQueue.length,
+        sourceId:
+          opts?.sourceId !== undefined
+            ? opts.sourceId
+            : keepBoundary
+              ? get().sourceId
+              : get().sourceId,
+        sourceKind:
+          opts?.sourceKind !== undefined
+            ? opts.sourceKind
+            : keepBoundary
+              ? get().sourceKind
+              : get().sourceKind,
+        isLoading: false,
+        playError: null,
+      });
+      schedulePrefetch(nextQueue, idx >= 0 ? idx : 0);
+      persistPlayer();
+      publish();
+      refreshMediaSession();
+      end('soft-continue');
+      return;
+    }
     const keepBoundary = Boolean(opts?.keepUserBoundary);
     const inferredAlbum =
       opts?.sourceId === undefined && playTrack.album?.id
@@ -1628,9 +1674,27 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
 
   toggleShuffle: () => {
-    set((s) => ({ shuffle: !s.shuffle }));
+    const turningOn = !get().shuffle;
+    if (turningOn) {
+      // Réordonne uniquement la suite — le titre en cours ne bouge pas
+      set((s) => {
+        const qi = s.queueIndex;
+        const head = s.queue.slice(0, qi + 1);
+        const rest = s.queue.slice(qi + 1);
+        for (let i = rest.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          const tmp = rest[i]!;
+          rest[i] = rest[j]!;
+          rest[j] = tmp;
+        }
+        return { shuffle: true, queue: [...head, ...rest] };
+      });
+    } else {
+      set({ shuffle: false });
+    }
     if (!isActivePlayer()) sendCmd({ action: 'shuffle', value: get().shuffle });
     else publish();
+    persistPlayer();
   },
 
   cycleRepeat: () => {
@@ -1802,6 +1866,46 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     publish();
   },
 
+  enqueueAfterCurrent: (tracks, opts) => {
+    const cap = opts?.cap ?? 36;
+    const replaceRest = opts?.replaceRest !== false;
+    const state = get();
+    const extras = tracks
+      .filter(isPlayable)
+      .filter((t) => t.id !== state.current?.id)
+      .filter((t, i, arr) => arr.findIndex((x) => x.id === t.id) === i)
+      .slice(0, cap);
+    if (!extras.length) return;
+
+    if (!state.current || state.queue.length === 0) {
+      void get().play(extras[0]!, extras, {
+        preserveQueue: true,
+        sourceId: opts?.sourceId ?? undefined,
+        sourceKind: opts?.sourceKind ?? undefined,
+      });
+      return;
+    }
+
+    set((s) => {
+      const qi = s.queueIndex;
+      const head = s.queue.slice(0, qi + 1);
+      const kept = replaceRest
+        ? []
+        : s.queue.slice(qi + 1).filter((t) => !extras.some((e) => e.id === t.id));
+      const q = [...head, ...extras, ...kept].slice(0, qi + 1 + 90);
+      return {
+        queue: q,
+        userQueueEnd: Math.max(q.length, qi + 1),
+        showQueue: true,
+        sourceId: opts?.sourceId !== undefined ? opts.sourceId : s.sourceId,
+        sourceKind: opts?.sourceKind !== undefined ? opts.sourceKind : s.sourceKind,
+      };
+    });
+    schedulePrefetch(get().queue, get().queueIndex);
+    persistPlayer();
+    publish();
+  },
+
   startMix: async (track) => {
     await get().startRadio({ kind: 'track', id: track.id, seed: track });
   },
@@ -1890,9 +1994,31 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       }
       if (!seedTrack) return;
 
-      const mix = [seedTrack, ...pool.filter((t) => t.id !== seedTrack!.id)];
+      const RADIO_CAP = 36;
+      const upcoming = pool.filter((t) => t.id !== seedTrack!.id).slice(0, RADIO_CAP);
+      const mix = [seedTrack, ...upcoming];
       set({ related: pool });
-      // Toute la radio = file utilisateur (pas « À suivre »)
+
+      const cur = get().current;
+      const audio = get().audioEl;
+      const soft =
+        Boolean(cur?.id) &&
+        (cur!.id === seedTrack.id || get().isPlaying) &&
+        Boolean(audio) &&
+        !audio!.paused;
+
+      if (soft) {
+        // Titre en cours intact — on remplace / alimente seulement la suite
+        get().enqueueAfterCurrent(upcoming, {
+          replaceRest: true,
+          cap: RADIO_CAP,
+          sourceId: kind === 'track' ? seedTrack.id : id,
+          sourceKind: kind === 'track' ? 'radio' : kind === 'album' ? 'album' : 'artist',
+        });
+        set({ showQueue: true, showLyrics: false, autoplay: true, isLoading: false });
+        return;
+      }
+
       await get().play(seedTrack, mix, { preserveQueue: true, noAutoRadio: true });
       set({ showQueue: true, showLyrics: false, autoplay: true });
       // Remplit « À suivre » après, sans mélanger avec le mix

@@ -27,6 +27,7 @@ export function ExplorePage() {
 
   const [startingId, setStartingId] = useState<string | null>(null);
   const playQueue = usePlayer((s) => s.playQueue);
+  const enqueueAfterCurrent = usePlayer((s) => s.enqueueAfterCurrent);
   const isPlaying = usePlayer((s) => s.isPlaying);
   const currentId = usePlayer((s) => s.current?.id);
   const hasMix = useLibrary((s) => s.hasMix);
@@ -44,18 +45,26 @@ export function ExplorePage() {
   const playRadioFast = async (id: string, title: string) => {
     setStartingId(id);
     const end = perfStart('mix.play');
+    const soft = Boolean(isPlaying && currentId);
     try {
-      // Joue d’abord le preview déjà en mémoire → feedback immédiat
       const preview = (radioPreviews[id] || []).filter((t) =>
         /^[a-zA-Z0-9_-]{11}$/.test(t.id),
       );
       if (preview.length) {
-        void playQueue(preview, 0, { sourceId: id, sourceKind: 'mix' });
+        if (soft) {
+          enqueueAfterCurrent(preview, { replaceRest: true, cap: 36, sourceId: id, sourceKind: 'mix' });
+        } else {
+          void playQueue(preview, 0, { sourceId: id, sourceKind: 'mix' });
+        }
         void warmFormats([preview[0]!.id, preview[1]?.id].filter(Boolean) as string[]);
       }
       const r = await api.recoRadio(id);
       if (r.tracks?.length) {
-        void playQueue(r.tracks, 0, { sourceId: id, sourceKind: 'mix' });
+        if (soft || (usePlayer.getState().isPlaying && usePlayer.getState().current?.id)) {
+          enqueueAfterCurrent(r.tracks, { replaceRest: true, cap: 36, sourceId: id, sourceKind: 'mix' });
+        } else {
+          void playQueue(r.tracks, 0, { sourceId: id, sourceKind: 'mix' });
+        }
         void warmFormats(r.tracks.slice(0, 3).map((t) => t.id));
       } else if (!preview.length) {
         useExplore.setState({ error: 'Aucun titre pour cette radio.' });

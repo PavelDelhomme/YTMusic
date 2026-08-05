@@ -70,6 +70,18 @@ data class DeviceLoginInviteResponse(
 )
 
 @JsonClass(generateAdapter = false)
+data class ApkInfoResponse(
+    val ready: Boolean? = false,
+    val versionName: String? = null,
+    val versionCode: Int? = null,
+    val apiBaseUrl: String? = null,
+    val builtAt: String? = null,
+    val sizeBytes: Long? = null,
+    val downloadPath: String? = null,
+    val downloadUrl: String? = null,
+)
+
+@JsonClass(generateAdapter = false)
 data class LibrarySongResponse(val saved: Boolean, val library: LibraryResponse? = null)
 
 @JsonClass(generateAdapter = false)
@@ -403,6 +415,9 @@ interface YtMusicApi {
 
     @POST("api/auth/device-login/poll")
     suspend fun deviceLoginPoll(@Body body: Map<String, String>): DeviceLoginPollResponse
+
+    @GET("api/deploy/apk/info")
+    suspend fun apkInfo(): ApkInfoResponse
 
     @GET("api/home")
     suspend fun home(): HomeResponse

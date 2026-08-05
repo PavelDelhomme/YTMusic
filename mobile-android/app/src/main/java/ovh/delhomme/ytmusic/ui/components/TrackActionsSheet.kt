@@ -458,7 +458,7 @@ fun TrackActionsSheet(
                     runCatching {
                         val mix = buildRadioQueue(container.api, "track", enriched.id, enriched)
                         if (mix.isNotEmpty()) {
-                            player.play(mix, 0, title = "En rapport", userQueueEnd = mix.size)
+                            player.playRadioOrEnqueue(mix, "En rapport")
                             Toast.makeText(context, "Mix démarré", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -472,7 +472,7 @@ fun TrackActionsSheet(
                             val mix = buildRadioQueue(
                                 container.api, "track", enriched.id, enriched, stayClose = true,
                             )
-                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio", userQueueEnd = mix.size)
+                            if (mix.isNotEmpty()) player.playRadioOrEnqueue(mix, "Radio")
                         }
                         onDismiss()
                     }
@@ -483,7 +483,7 @@ fun TrackActionsSheet(
                     scope.launch {
                         runCatching {
                             val mix = buildRadioQueue(container.api, "album", albumId, enriched)
-                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio album", userQueueEnd = mix.size)
+                            if (mix.isNotEmpty()) player.playRadioOrEnqueue(mix, "Radio album")
                         }
                         onDismiss()
                     }
@@ -496,7 +496,7 @@ fun TrackActionsSheet(
                             val artistId = resolveArtistId(container.api, artist.id, artist.name)
                                 ?: return@runCatching
                             val mix = buildRadioQueue(container.api, "artist", artistId, enriched)
-                            if (mix.isNotEmpty()) player.play(mix, 0, title = "Radio artiste", userQueueEnd = mix.size)
+                            if (mix.isNotEmpty()) player.playRadioOrEnqueue(mix, "Radio artiste")
                         }
                         onDismiss()
                     }
