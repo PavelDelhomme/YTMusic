@@ -866,12 +866,17 @@ private fun MainTabs(
                         kind = kind,
                         id = id,
                         reloadToken = detailReloadToken,
+                        player = player,
                         onBack = { nav.popBackStack() },
                         onPlay = onPlayTracks,
                         onPlayNamed = onPlayNamed,
                         onMore = { track, playlistId ->
                             menuTrack = track
                             menuPlaylistId = playlistId
+                        },
+                        onOpenArtist = { artistId, name -> openArtist(artistId, name) },
+                        onOpenAddToPlaylist = { track ->
+                            addToPlaylistTrack = track
                         },
                     )
                 }
