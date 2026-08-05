@@ -43,6 +43,8 @@ import {
   isTrackInLibrary,
   toggleLikePlaylist,
   saveAlbum,
+  saveAlbumWithTracks,
+  expandLibraryAlbumTracks,
   removeAlbum,
   saveMix,
   removeMix,
@@ -1620,9 +1622,25 @@ app.post('/api/library/like-playlist', accountRequired, (req, res) => {
   }
 });
 
-app.post('/api/library/albums', accountRequired, (req, res) => {
+app.post('/api/library/albums', accountRequired, async (req, res) => {
   try {
-    res.json({ album: saveAlbum(req.userId!, req.body), library: getFullLibrary(req.userId!) });
+    const result = await saveAlbumWithTracks(req.userId!, req.body || {});
+    res.json({
+      album: result.album,
+      tracksAdded: result.tracksAdded,
+      tracksTotal: result.tracksTotal,
+      library: getFullLibrary(req.userId!),
+    });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+/** Backfill : injecte les titres de tous les albums déjà en biblio. */
+app.post('/api/library/albums/expand-tracks', accountRequired, async (req, res) => {
+  try {
+    const result = await expandLibraryAlbumTracks(req.userId!);
+    res.json({ ok: true, ...result });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
