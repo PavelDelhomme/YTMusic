@@ -333,6 +333,44 @@ export async function handleStreamUrl(req: Request, res: Response) {
     return;
   }
   const wantVideo = String(req.query.type || req.query.media || '') === 'video';
+
+  // VPS → PC maison : chauffe le resolve chez soi, mais renvoie TOUJOURS le proxy API.
+  // Les URLs googlevideo sont liées à l’IP du PC maison → 403 depuis navigateur/téléphone.
+  const homeUpstream = resolveStreamUpstream();
+  if (homeUpstream) {
+    try {
+      const q = wantVideo ? '?type=video' : '';
+      const headers: Record<string, string> = {
+        'X-YTM-Stream-Relay': '1',
+      };
+      const relayTok = (process.env.STREAM_RELAY_TOKEN || '').trim();
+      if (relayTok) headers['X-YTM-Stream-Relay-Token'] = relayTok;
+      const auth = req.headers.authorization;
+      if (auth) headers.Authorization = String(auth);
+      const upstream = await fetch(`${homeUpstream}/api/stream/${videoId}/url${q}`, {
+        headers,
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!upstream.ok) {
+        const detail = await upstream.text().catch(() => '');
+        console.warn(
+          `[stream-url] STREAM_UPSTREAM warm ${upstream.status}:`,
+          detail.slice(0, 160),
+        );
+      }
+    } catch (err) {
+      console.warn('[stream-url] STREAM_UPSTREAM warm KO:', (err as Error).message);
+    }
+    res.json({
+      url: `/api/stream/${videoId}${wantVideo ? '?type=video' : ''}`,
+      expiresAt: Date.now() + 3_600_000,
+      mimeType: wantVideo ? 'video/mp4' : 'audio/mp4',
+      kind: wantVideo ? 'video' : 'audio',
+      via: 'proxy',
+    });
+    return;
+  }
+
   try {
     const format = wantVideo ? await getVideoFormat(videoId) : await getAudioFormat(videoId);
     res.json({
