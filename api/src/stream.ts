@@ -29,12 +29,21 @@ async function streamViaInnertube(videoId: string, res: Response) {
     format: 'any',
   });
 
+  const reader = stream.getReader();
+  const first = await reader.read();
+  if (first.done || !first.value?.byteLength) {
+    throw new Error('Innertube stream vide');
+  }
+
+  res.status(200);
   res.setHeader('Content-Type', 'audio/mp4');
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Cache-Control', 'public, max-age=3600');
 
-  const reader = stream.getReader();
   try {
+    if (!res.write(Buffer.from(first.value))) {
+      await new Promise((r) => res.once('drain', r));
+    }
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -74,15 +83,47 @@ function streamViaYtDlp(videoId: string, res: Response) {
       { stdio: ['ignore', 'pipe', 'pipe'] },
     );
 
-    res.setHeader('Content-Type', 'audio/mp4');
-    res.setHeader('Transfer-Encoding', 'chunked');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
+    let started = false;
+    let settled = false;
+    const fail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      try {
+        proc.kill('SIGTERM');
+      } catch {
+        /* ignore */
+      }
+      reject(err);
+    };
 
-    proc.stdout.pipe(res);
-    proc.on('error', reject);
+    proc.stdout.once('data', (chunk: Buffer) => {
+      if (settled) return;
+      started = true;
+      res.status(200);
+      res.setHeader('Content-Type', 'audio/mp4');
+      res.setHeader('Transfer-Encoding', 'chunked');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.write(chunk);
+      proc.stdout.pipe(res);
+    });
+
+    let errBuf = '';
+    proc.stderr.on('data', (d: Buffer) => {
+      errBuf += d.toString('utf8');
+    });
+    proc.on('error', (err) => fail(err instanceof Error ? err : new Error(String(err))));
     proc.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`yt-dlp exit ${code}`));
+      if (settled) return;
+      if (started && code === 0) {
+        settled = true;
+        resolve();
+        return;
+      }
+      fail(
+        new Error(
+          `yt-dlp exit ${code}${errBuf.trim() ? `: ${errBuf.trim().slice(0, 240)}` : ''}`,
+        ),
+      );
     });
     res.on('close', () => {
       try {
@@ -143,26 +184,36 @@ export async function handleStream(req: Request, res: Response) {
       if (upstream.status >= 400) {
         throw new Error(`upstream audio ${upstream.status}`);
       }
+      if (!upstream.body) {
+        throw new Error('upstream sans corps');
+      }
+      if (upstream.headers.get('content-length') === '0') {
+        throw new Error('upstream content-length 0');
+      }
+      const reader = upstream.body.getReader();
+      const first = await reader.read();
+      if (first.done || !first.value?.byteLength) {
+        throw new Error('upstream audio vide');
+      }
       res.status(upstream.status);
       const ct = upstream.headers.get('content-type');
-      const cl = upstream.headers.get('content-length');
       const cr = upstream.headers.get('content-range');
       const ar = upstream.headers.get('accept-ranges');
       if (ct) res.setHeader('Content-Type', ct);
-      if (cl) res.setHeader('Content-Length', cl);
+      else res.setHeader('Content-Type', 'audio/mp4');
       if (cr) res.setHeader('Content-Range', cr);
       if (ar) res.setHeader('Accept-Ranges', ar);
       res.setHeader('Cache-Control', 'public, max-age=1800');
-      if (!upstream.body) {
-        res.end();
-        return;
+      if (!res.write(Buffer.from(first.value))) {
+        await new Promise((r) => res.once('drain', r));
       }
-      const reader = upstream.body.getReader();
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        if (!res.write(Buffer.from(value))) {
-          await new Promise((r) => res.once('drain', r));
+        if (value) {
+          if (!res.write(Buffer.from(value))) {
+            await new Promise((r) => res.once('drain', r));
+          }
         }
       }
       res.end();
@@ -183,7 +234,11 @@ export async function handleStream(req: Request, res: Response) {
     await streamViaYtDlp(videoId, res);
   } catch (err) {
     if (!res.headersSent) {
-      res.status(502).json({ error: 'Impossible de streamer audio', detail: String(err) });
+      res.status(502).json({
+        error: 'Impossible de streamer audio',
+        detail: String(err),
+        hint: 'VPS : Admin → Cookies YouTube (anti-bot), ou utilise l’API locale',
+      });
     }
   }
 }

@@ -547,6 +547,11 @@ class PlayerController(
         syncFrom(c)
     }
 
+    /** Insère plusieurs titres juste après le courant (ordre conservé). */
+    fun playNextMany(tracks: List<TrackDto>) {
+        tracks.filter { it.isPlayable() }.asReversed().forEach { playNext(it) }
+    }
+
     fun addToQueue(track: TrackDto) {
         if (!track.isPlayable()) return
         val c = player() ?: run {
@@ -563,6 +568,10 @@ class PlayerController(
         c.addMediaItem(end, mediaItem(track))
         StreamPrefetcher.warmTrack(streamUrl("_").substringBefore("/api/stream/"), track.id)
         syncFrom(c)
+    }
+
+    fun addManyToQueue(tracks: List<TrackDto>) {
+        tracks.filter { it.isPlayable() }.forEach { addToQueue(it) }
     }
 
     private fun mediaItem(t: TrackDto): MediaItem =

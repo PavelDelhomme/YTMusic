@@ -122,6 +122,13 @@ class PlaybackService : MediaSessionService() {
                     exo.playWhenReady = false
                     exo.stop()
                     AppLog.w("PlaybackService", "stream KO après recovery (streak=$streak) — stop")
+                    android.os.Handler(mainLooper).post {
+                        android.widget.Toast.makeText(
+                            this@PlaybackService,
+                            "Lecture impossible — cookies YouTube manquants sur le serveur, ou API locale",
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                    }
                 }
             }
         }

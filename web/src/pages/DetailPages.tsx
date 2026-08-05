@@ -1,16 +1,32 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, type Track } from '../api';
 import { TrackRow } from '../components/TrackRow';
 import { ShelfRow } from '../components/MediaCard';
 import { CoverImage } from '../components/CoverImage';
 import { usePlayer } from '../store/player';
 import { useLibrary } from '../store/library';
-import { Play, Download, Library, Heart, Radio, Check, UserPlus, UserMinus, Shuffle, ChevronRight } from 'lucide-react';
+import { usePins } from '../store/pins';
+import {
+  Play,
+  Download,
+  Library,
+  Heart,
+  Radio,
+  Check,
+  UserPlus,
+  UserMinus,
+  Shuffle,
+  ChevronRight,
+  ArrowLeft,
+  MoreVertical,
+  Disc3,
+} from 'lucide-react';
 import { ArtistLinks } from '../components/ArtistLinks';
 import { BackButton } from '../components/BackButton';
 import { HomeShelfSkeleton } from '../components/HomeShelfSkeleton';
 import { warmFormats } from '../lib/streamPrefetch';
+import { useItemActions } from '../store/itemActions';
 
 function DetailLoading() {
   return (
@@ -418,14 +434,22 @@ export function ArtistSongsPage() {
 
 export function AlbumPage() {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
   const [data, setData] = useState<Awaited<ReturnType<typeof api.album>> | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [radio, setRadio] = useState<Track[]>([]);
+  const [menuOpen, setMenuOpen] = useState(false);
   const playQueue = usePlayer((s) => s.playQueue);
+  const addNext = usePlayer((s) => s.addNext);
+  const addToQueue = usePlayer((s) => s.addToQueue);
   const startRadio = usePlayer((s) => s.startRadio);
   const { hasAlbum, applyLibrary } = useLibrary();
+  const togglePin = usePins((s) => s.togglePin);
+  const isPinned = usePins((s) => s.pins.some((p) => p.targetId === id));
+  const openItemActions = useItemActions((s) => s.open);
   const [radioBusy, setRadioBusy] = useState(false);
+  const [libBusy, setLibBusy] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -437,12 +461,10 @@ export function AlbumPage() {
       .album(id)
       .then((album) => {
         setData(album);
-        // Préchauffe formats des 1ers titres → play album quasi immédiat
         void warmFormats((album.tracks || []).slice(0, 4).map((t) => t.id));
       })
       .catch((e) => setError(String(e.message || e)))
       .finally(() => setLoading(false));
-    // Radio album en différé — ne pas saturer l’API avant un éventuel play
     const radioTimer = window.setTimeout(() => {
       api.albumRadio(id).then((r) => setRadio(r.tracks)).catch(() => setRadio([]));
     }, 1_200);
@@ -477,76 +499,205 @@ export function AlbumPage() {
     );
   }
 
+  const artists = data.album.artists || [];
+  const artistLabel = artists.map((a) => a.name).filter(Boolean).join(', ') || 'Artiste';
+  const releaseType =
+    data.album.releaseType ||
+    (data.tracks.length <= 1 ? 'Single' : data.tracks.length <= 6 ? 'EP' : 'Album');
+  const metaLine = data.album.year ? `${releaseType} - ${data.album.year}` : releaseType;
+  const inLib = hasAlbum(data.album.id);
+  const primaryArtist = artists.find((a) => a.id) || artists[0];
+
+  const recordPlay = () => {
+    void useLibrary.getState().recordEntityPlay({
+      id: data.album.id,
+      kind: 'album',
+      title: data.album.title,
+      thumbnails: data.album.thumbnails,
+      artists: data.album.artists,
+    });
+  };
+
+  const playAlbum = () => {
+    recordPlay();
+    void playQueue(data.tracks, 0);
+  };
+
   return (
-    <>
-      <CollectionHeader
-        kind="Album"
-        title={data.album.title}
-        subtitle={
-          <>
-            <ArtistLinks
-              track={{ artists: data.album.artists }}
-              emptyLabel={data.album.year ? null : 'Album'}
-            />
-            {data.album.year ? (
-              <>
-                {data.album.artists?.length ? ' · ' : ''}
-                {data.album.year}
-              </>
-            ) : null}
-          </>
-        }
-        cover={data.album}
-        tracks={data.tracks}
-        inLibrary={hasAlbum(data.album.id)}
-        onPlay={() => {
-          void useLibrary.getState().recordEntityPlay({
-            id: data.album.id,
-            kind: 'album',
-            title: data.album.title,
-            thumbnails: data.album.thumbnails,
-            artists: data.album.artists,
-          });
-          void playQueue(data.tracks, 0);
-        }}
-        onShuffle={() => {
-          void useLibrary.getState().recordEntityPlay({
-            id: data.album.id,
-            kind: 'album',
-            title: data.album.title,
-            thumbnails: data.album.thumbnails,
-            artists: data.album.artists,
-          });
-          const shuffled = [...data.tracks].sort(() => Math.random() - 0.5);
-          void playQueue(shuffled, 0);
-        }}
-        onRadio={() => {
-          setRadioBusy(true);
-          void startRadio({
-            kind: 'album',
-            id: data.album.id,
-            seed: data.tracks.find((t) => t.id?.length === 11) || data.tracks[0],
-          }).finally(() => setRadioBusy(false));
-        }}
-        radioBusy={radioBusy}
-        onAddLibrary={async () => {
-          if (hasAlbum(data.album.id)) {
-            const r = await api.removeAlbum(data.album.id);
-            applyLibrary(r.library);
-          } else {
-            const r = await api.saveAlbum({
+    <div className="animate-fade-up">
+      {/* Top : retour + artiste / type-année */}
+      <div className="mb-4 flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => {
+            if (window.history.length > 1) window.history.back();
+            else navigate('/');
+          }}
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-white transition hover:bg-yt-elevated"
+          aria-label="Retour"
+        >
+          <ArrowLeft className="h-7 w-7" />
+        </button>
+        <div className="min-w-0 flex-1 text-center">
+          <button
+            type="button"
+            className="block w-full truncate text-base font-semibold text-white hover:underline"
+            onClick={() => {
+              if (primaryArtist?.id) navigate(`/artist/${primaryArtist.id}`);
+            }}
+          >
+            {artistLabel}
+          </button>
+          <p className="truncate text-sm text-yt-muted">{metaLine}</p>
+        </div>
+        <div className="h-12 w-12 shrink-0" aria-hidden />
+      </div>
+
+      {/* Vignette centrée */}
+      <div className="mx-auto mb-6 w-[min(72vw,20rem)] max-w-sm shadow-2xl sm:w-[min(50vw,22rem)]">
+        <CoverImage item={data.album} size={800} rounded="lg" />
+      </div>
+
+      {/* Titre */}
+      <h1 className="mb-6 px-2 text-center font-display text-3xl font-bold tracking-tight sm:text-4xl">
+        {data.album.title}
+      </h1>
+
+      {/* 5 boutons ronds */}
+      <div className="mb-8 flex items-center justify-evenly gap-1 px-2 sm:justify-center sm:gap-6">
+        <button
+          type="button"
+          title="Télécharger"
+          onClick={() => void api.offlineStart('album', data.album.id)}
+          className="flex h-12 w-12 items-center justify-center rounded-full text-white/90 transition hover:bg-yt-elevated"
+        >
+          <Download className="h-6 w-6" />
+        </button>
+        <button
+          type="button"
+          title={inLib ? 'Dans la bibliothèque' : "Enregistrer l'album"}
+          disabled={libBusy}
+          onClick={() => {
+            void (async () => {
+              setLibBusy(true);
+              try {
+                if (inLib) {
+                  const r = await api.removeAlbum(data.album.id);
+                  applyLibrary(r.library);
+                } else {
+                  const r = await api.saveAlbum({
+                    id: data.album.id,
+                    title: data.album.title,
+                    year: data.album.year,
+                    artists: data.album.artists,
+                    thumbnails: data.album.thumbnails,
+                    type: 'album',
+                  });
+                  applyLibrary(r.library);
+                }
+              } finally {
+                setLibBusy(false);
+              }
+            })();
+          }}
+          className="flex h-12 w-12 items-center justify-center rounded-full text-white/90 transition hover:bg-yt-elevated disabled:opacity-50"
+        >
+          {inLib ? <Disc3 className="h-6 w-6 fill-current text-yt-red" /> : <Disc3 className="h-6 w-6" />}
+        </button>
+        <button
+          type="button"
+          title="Lecture"
+          onClick={playAlbum}
+          className="flex h-[4.25rem] w-[4.25rem] items-center justify-center rounded-full bg-white text-black shadow-lg transition hover:scale-[1.03]"
+        >
+          <Play className="h-9 w-9 fill-black" />
+        </button>
+        <button
+          type="button"
+          title="Mix"
+          disabled={radioBusy}
+          onClick={() => {
+            setRadioBusy(true);
+            void startRadio({
+              kind: 'album',
               id: data.album.id,
-              title: data.album.title,
-              year: data.album.year,
-              artists: data.album.artists,
-              thumbnails: data.album.thumbnails,
-              type: 'album',
-            });
-            applyLibrary(r.library);
-          }
-        }}
-        onOffline={() => void api.offlineStart('album', data.album.id)}
-      />
+              seed: data.tracks.find((t) => t.id?.length === 11) || data.tracks[0],
+            }).finally(() => setRadioBusy(false));
+          }}
+          className="flex h-12 w-12 items-center justify-center rounded-full text-white/90 transition hover:bg-yt-elevated disabled:opacity-50"
+        >
+          <Radio className="h-6 w-6" />
+        </button>
+        <div className="relative">
+          <button
+            type="button"
+            title="Plus d'options"
+            onClick={() => setMenuOpen((v) => !v)}
+            className="flex h-12 w-12 items-center justify-center rounded-full text-white/90 transition hover:bg-yt-elevated"
+          >
+            <MoreVertical className="h-6 w-6" />
+          </button>
+          {menuOpen && (
+            <>
+              <button
+                type="button"
+                className="fixed inset-0 z-40 cursor-default"
+                aria-label="Fermer le menu"
+                onClick={() => setMenuOpen(false)}
+              />
+              <div className="absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-xl border border-yt-border bg-yt-elevated py-1 shadow-xl">
+                <AlbumMenuItem
+                  label="Lire ensuite"
+                  onClick={() => {
+                    [...data.tracks].reverse().forEach((t) => addNext(t));
+                    setMenuOpen(false);
+                  }}
+                />
+                <AlbumMenuItem
+                  label="Ajouter à la file d'attente"
+                  onClick={() => {
+                    data.tracks.forEach((t) => addToQueue(t));
+                    setMenuOpen(false);
+                  }}
+                />
+                <AlbumMenuItem
+                  label="Enregistrer dans une playlist"
+                  onClick={() => {
+                    const seed = data.tracks[0];
+                    if (seed) openItemActions(seed);
+                    setMenuOpen(false);
+                  }}
+                />
+                <AlbumMenuItem
+                  label="Accéder à la page de l'artiste"
+                  onClick={() => {
+                    if (primaryArtist?.id) navigate(`/artist/${primaryArtist.id}`);
+                    setMenuOpen(false);
+                  }}
+                />
+                <AlbumMenuItem
+                  label={isPinned ? "Retirer de l'accès rapide" : "Ajouter à l'accès rapide"}
+                  onClick={() => {
+                    void togglePin({
+                      id: data.album.id,
+                      title: data.album.title,
+                      type: 'album',
+                      artists: data.album.artists,
+                      thumbnails: data.album.thumbnails,
+                    });
+                    setMenuOpen(false);
+                  }}
+                />
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {data.tracks.map((t, i) => (
+        <TrackRow key={`${t.id}-${i}`} track={t} index={i} queue={data.tracks} showAlbum={false} />
+      ))}
+
       {radio.length > 0 && (
         <section className="mt-10">
           <h2 className="mb-3 font-display text-xl font-semibold">Similaires à cet album</h2>
@@ -555,7 +706,19 @@ export function AlbumPage() {
           ))}
         </section>
       )}
-    </>
+    </div>
+  );
+}
+
+function AlbumMenuItem({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="block w-full px-4 py-2.5 text-left text-sm text-white/90 transition hover:bg-white/10"
+    >
+      {label}
+    </button>
   );
 }
 

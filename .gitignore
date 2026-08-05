@@ -24,3 +24,4 @@ mobile-android/build/
 mobile-android/local.properties
 *.apk
 *.aab
+.venv-cookies/
