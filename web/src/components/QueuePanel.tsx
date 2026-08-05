@@ -3,7 +3,7 @@ import { usePlayer } from '../store/player';
 import { TrackRow } from './TrackRow';
 import { SaveQueueSheet } from './SaveQueueSheet';
 import { SyncedLyrics } from './NowPlaying';
-import { ListMusic, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles, X } from 'lucide-react';
+import { ListMusic, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles, Trash2, X } from 'lucide-react';
 
 type PanelTab = 'queue' | 'similar';
 
@@ -114,12 +114,21 @@ export function QueuePanel() {
                 type="button"
                 disabled={userTracks.length === 0}
                 onClick={() => setSaveOpen(true)}
-                className="inline-flex items-center gap-1 rounded-full bg-white/8 px-2.5 py-1.5 text-xs text-white hover:bg-white/14 disabled:opacity-40"
+                className="flex h-8 w-8 items-center justify-center rounded-full text-yt-muted hover:bg-yt-hover hover:text-white disabled:opacity-40"
                 title="Enregistrer la file"
               >
-                <Save className="h-3.5 w-3.5" />
-                Enregistrer
+                <Save className="h-4 w-4" />
               </button>
+              {queueIndex > 0 && (
+                <button
+                  type="button"
+                  onClick={() => clearPlayedFromQueue()}
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-yt-muted hover:bg-yt-hover hover:text-white"
+                  title="Effacer déjà joués"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
             </>
           )}
           {!showLyrics && panelTab === 'similar' && related.length > 0 && (
@@ -143,8 +152,22 @@ export function QueuePanel() {
       </div>
 
       {!showLyrics && (
-        <div className="flex border-b border-yt-border">
-          <button
+        <div
+          className="flex border-b border-yt-border touch-pan-y"
+          onTouchStart={(e) => {
+            (e.currentTarget as HTMLElement & { _sx?: number })._sx = e.touches[0]?.clientX;
+          }}
+          onTouchEnd={(e) => {
+            const el = e.currentTarget as HTMLElement & { _sx?: number };
+            const sx = el._sx;
+            const x = e.changedTouches[0]?.clientX;
+            if (sx == null || x == null) return;
+            const dx = x - sx;
+            if (Math.abs(dx) < 56) return;
+            if (dx < 0) setPanelTab('similar');
+            else setPanelTab('queue');
+          }}
+        >          <button
             type="button"
             onClick={() => setPanelTab('queue')}
             className={`flex flex-1 items-center justify-center gap-1.5 border-b-2 px-2 py-2.5 text-xs font-semibold uppercase tracking-wide transition ${
@@ -214,23 +237,6 @@ export function QueuePanel() {
           </div>
         ) : (
           <>
-            <div className="mb-2 flex items-center justify-between gap-2 px-2 text-xs text-yt-muted">
-              <span>
-                {userTracks.length} titre{userTracks.length > 1 ? 's' : ''} dans ta file
-                {queueIndex > 0
-                  ? ` · ${Math.min(queueIndex, userTracks.length)} déjà joué${queueIndex > 1 ? 's' : ''}`
-                  : ''}
-              </span>
-              {queueIndex > 0 && (
-                <button
-                  type="button"
-                  onClick={() => clearPlayedFromQueue()}
-                  className="shrink-0 font-medium text-yt-muted hover:text-white"
-                >
-                  Effacer déjà joués
-                </button>
-              )}
-            </div>
             {userTracks.map((track, i) => (
               <div
                 key={`u-${track.id}-${i}`}
@@ -273,7 +279,7 @@ export function QueuePanel() {
               </div>
             )}
 
-            <section className="mt-5 border-t border-yt-border pt-4">
+            <section className="mt-4 border-t border-yt-border pt-3">
               <div className="mb-2 flex items-center justify-between gap-2 px-2">
                 <div className="min-w-0">
                   <h4 className="flex items-center gap-2 font-display text-sm font-semibold">
@@ -297,8 +303,7 @@ export function QueuePanel() {
                     }`}
                   />
                 </button>
-              </div>
-              {!autoplay && (
+              </div>              {!autoplay && (
                 <p className="px-2 text-xs text-yt-muted">Lecture automatique désactivée.</p>
               )}
               {autoplay &&
