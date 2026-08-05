@@ -22,7 +22,6 @@ import {
   MoreVertical,
   Disc3,
 } from 'lucide-react';
-import { ArtistLinks } from '../components/ArtistLinks';
 import { BackButton } from '../components/BackButton';
 import { HomeShelfSkeleton } from '../components/HomeShelfSkeleton';
 import { warmFormats } from '../lib/streamPrefetch';
