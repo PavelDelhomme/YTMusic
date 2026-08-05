@@ -3,7 +3,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { sanitizeTrack } from './mappers.js';
+import { sanitizeTrack, isWeakTitle } from './mappers.js';
 import type { Track } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -176,7 +176,9 @@ export function upsertTrack(track: Track) {
     ? sanitizeTrack({
         ...prev,
         ...clean,
-        title: clean.title || prev.title,
+        title: isWeakTitle(clean.title, clean.id)
+          ? prev.title || clean.title
+          : clean.title || prev.title,
         artists: clean.artists?.length ? clean.artists : prev.artists,
         thumbnails: clean.thumbnails?.length ? clean.thumbnails : prev.thumbnails,
         album: clean.album || prev.album,
@@ -185,6 +187,12 @@ export function upsertTrack(track: Track) {
           typeof clean.durationSeconds === 'number' && clean.durationSeconds > 0
             ? clean.durationSeconds
             : prev.durationSeconds,
+        type:
+          clean.type && clean.type !== 'unknown'
+            ? clean.type === 'video' && prev.type === 'song'
+              ? 'song'
+              : clean.type
+            : prev.type,
       })
     : clean;
   db.prepare(

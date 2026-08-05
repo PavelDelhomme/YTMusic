@@ -69,8 +69,12 @@ export function sanitizeTrack(track: Track): Track {
 
   return {
     ...track,
+    title: (() => {
+      const cleaned = cleanMusicTitle(String(track.title || ''));
+      return cleaned || track.title;
+    })(),
     artists: Array.isArray(track.artists)
-      ? track.artists.filter((a) => a?.name && !isJunkArtistName(String(a.name)))
+      ? track.artists.filter((a) => a?.name && isPlausibleArtistName(String(a.name)))
       : track.artists,
     duration,
     durationSeconds,
@@ -82,10 +86,12 @@ export function sanitizeLibraryItem<T extends { artists?: { name: string; id?: s
   item: T,
 ): T {
   if (!item || typeof item !== 'object') return item;
-  if (!Array.isArray(item.artists)) return item;
+  const title = item.title != null ? cleanMusicTitle(String(item.title)) || item.title : item.title;
+  if (!Array.isArray(item.artists)) return title !== item.title ? { ...item, title } : item;
   return {
     ...item,
-    artists: item.artists.filter((a) => a?.name && !isJunkArtistName(String(a.name))),
+    title,
+    artists: item.artists.filter((a) => a?.name && isPlausibleArtistName(String(a.name))),
   };
 }
 
@@ -172,7 +178,8 @@ export function isJunkArtistName(name: string) {
     !name ||
     name === '•' ||
     name === '·' ||
-    /^(song|album|playlist|video|ep|single|artist|artiste|inconnu|unknown|n\/a|various artists|va|divers)$/i.test(
+    // « Various Artists » est un vrai libellé YTM — ne pas le jeter (sinon UI → « Artiste »)
+    /^(song|album|playlist|video|ep|single|artist|artiste|inconnu|unknown|n\/a|va|divers)$/i.test(
       name,
     ) ||
     /^\d+:\d+$/.test(name) ||
@@ -190,6 +197,87 @@ export function isJunkArtistName(name: string) {
     /views?/i.test(name) ||
     /monthly audience/i.test(name)
   );
+}
+
+/** Écarte le bruit Wikipedia / URLs / pavés collés dans les headers album. */
+export function isPlausibleArtistName(name: string) {
+  const n = String(name || '').trim();
+  if (!n || isJunkArtistName(n)) return false;
+  if (n.length > 80) return false;
+  if (/\n/.test(n)) return false;
+  if (/https?:\/\//i.test(n)) return false;
+  if (/wikipedia|creativecommons|creative commons|under creative|from wikipedia/i.test(n)) {
+    return false;
+  }
+  return true;
+}
+
+export function isWeakTitle(title: string | undefined | null, id?: string) {
+  const t = String(title || '').trim();
+  if (!t) return true;
+  if (/^(sans titre|untitled|unknown|n\/a)$/i.test(t)) return true;
+  if (id && t === id) return true;
+  return false;
+}
+
+/** Titre « musique » : enlève Official Video / Lyrics / 4K… (vidéos YT en file titre). */
+export function cleanMusicTitle(raw: string): string {
+  let t = String(raw || '').trim();
+  if (!t) return '';
+  t = t
+    .replace(
+      /\s*[\[(【]\s*(official\s*)?(music\s*)?v[ií]d[eé]o(\s*version)?\s*[\]】)]/gi,
+      '',
+    )
+    .replace(
+      /\s*[\[(【]\s*official\s*(audio|lyric\s*video|visuali[sz]er|hd|4k(?:\s*(?:upgrade|remaster(?:ed)?))?|remaster(?:ed)?)\s*[\]】)]/gi,
+      '',
+    )
+    .replace(
+      /\s*[\[(【]\s*(lyric\s*video|lyrics?|audio|visuali[sz]er|hd|4k(?:\s*(?:upgrade|remaster(?:ed)?))?|remaster(?:ed)?)\s*[\]】)]/gi,
+      '',
+    )
+    .replace(/\s*[\[(【]\s*\d{3,4}p\s*[\]】)]/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s*[-–—]\s*$/g, '')
+    .trim();
+  return t || String(raw || '').trim();
+}
+
+/** Enlève « - Artiste » en fin de titre si déjà dans artists (clips YT). */
+export function stripRedundantArtistSuffix(
+  title: string,
+  artists: { name: string }[] | undefined,
+): string {
+  let t = String(title || '').trim();
+  if (!t || !artists?.length) return t;
+  for (const a of artists) {
+    const name = String(a?.name || '').trim();
+    if (!name || name.length < 2) continue;
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`\\s*[-–—|/]\\s*${escaped}(?:\\s*[/,&].*)?\\s*$`, 'i');
+    if (re.test(t)) t = t.replace(re, '').trim();
+  }
+  return t || String(title || '').trim();
+}
+
+function musicVideoTypeOf(item: any): string {
+  const paths = [
+    item?.endpoint?.payload?.watchEndpointMusicSupportedConfigs?.watchEndpointMusicConfig
+      ?.musicVideoType,
+    item?.overlay?.content?.endpoint?.payload?.watchEndpointMusicSupportedConfigs
+      ?.watchEndpointMusicConfig?.musicVideoType,
+    item?.overlay?.endpoint?.payload?.watchEndpointMusicSupportedConfigs?.watchEndpointMusicConfig
+      ?.musicVideoType,
+    item?.flex_columns?.[0]?.title?.runs?.[0]?.endpoint?.payload?.watchEndpointMusicSupportedConfigs
+      ?.watchEndpointMusicConfig?.musicVideoType,
+    item?.flex_columns?.[0]?.title?.endpoint?.payload?.watchEndpointMusicSupportedConfigs
+      ?.watchEndpointMusicConfig?.musicVideoType,
+  ];
+  for (const p of paths) {
+    if (typeof p === 'string' && p) return p;
+  }
+  return '';
 }
 
 /** Extrait une année propre depuis un sous-titre type « Album • 2026 ». */
@@ -286,7 +374,7 @@ export function artistsFromHeader(header: any): { name: string; id?: string }[] 
   const collected: { name: string; id?: string }[] = [];
   const push = (list: { name: string; id?: string }[]) => {
     for (const a of list) {
-      if (isJunkArtistName(a.name)) continue;
+      if (!isPlausibleArtistName(a.name)) continue;
       if (!collected.some((x) => x.name === a.name && x.id === a.id)) collected.push(a);
     }
   };
@@ -314,9 +402,8 @@ export function artistsFromHeader(header: any): { name: string; id?: string }[] 
   push(artistsFromRuns(header.strapline_text_one?.runs));
   push(artistsFromRuns(header.strapline_text?.runs));
   push(artistsFromRuns(header.byline?.runs));
-  push(artistsFromRuns(header.description?.runs));
+  // Ne PAS parser description : souvent un pavé Wikipedia collé comme « artistes »
   push(artistsFromRuns(header.strapline?.runs));
-  push(artistsFromRuns(header.description?.description?.runs));
 
   // Menu / boutons « Accéder à l'artiste »
   const menuish = [
@@ -339,7 +426,7 @@ export function artistsFromHeader(header: any): { name: string; id?: string }[] 
     if (
       (String(browseId || '').startsWith('UC') || String(pageType).includes('ARTIST')) &&
       label &&
-      !isJunkArtistName(label) &&
+      isPlausibleArtistName(label) &&
       !/^(accéder|go to|view|voir)/i.test(label)
     ) {
       push([{ name: label, id: String(browseId) }]);
@@ -363,11 +450,20 @@ export function artistsFromHeader(header: any): { name: string; id?: string }[] 
     }
   }
 
-  // Préférer ceux avec id, mais garder les noms utiles sans id
-  const withIds = collected.filter((a) => a.id);
-  if (!withIds.length) return collected;
+  // Préférer ceux avec id canal UC, puis id quelconque, puis noms utiles
+  const plausible = collected.filter((a) => isPlausibleArtistName(a.name));
+  const withUc = plausible.filter((a) => String(a.id || '').startsWith('UC'));
+  if (withUc.length) {
+    const names = new Set(withUc.map((a) => a.name.toLowerCase()));
+    for (const a of plausible) {
+      if (!a.id && a.name && !names.has(a.name.toLowerCase())) withUc.push(a);
+    }
+    return withUc;
+  }
+  const withIds = plausible.filter((a) => a.id);
+  if (!withIds.length) return plausible;
   const names = new Set(withIds.map((a) => a.name.toLowerCase()));
-  for (const a of collected) {
+  for (const a of plausible) {
     if (!a.id && a.name && !names.has(a.name.toLowerCase())) withIds.push(a);
   }
   return withIds;
@@ -380,7 +476,7 @@ export function artistsFrom(item: any): { name: string; id?: string }[] {
         name: String(a.name || '').trim(),
         id: a.channel_id || a.id,
       }))
-      .filter((a: { name: string }) => !isJunkArtistName(a.name));
+      .filter((a: { name: string }) => isPlausibleArtistName(a.name));
   }
 
   if (item?.author?.name) {
@@ -397,18 +493,18 @@ export function artistsFrom(item: any): { name: string; id?: string }[] {
         name: String(a.name || '').trim(),
         id: a.channel_id || a.id,
       }))
-      .filter((a: { name: string }) => !isJunkArtistName(a.name));
+      .filter((a: { name: string }) => isPlausibleArtistName(a.name));
   }
 
   const flex = item?.flex_columns || [];
   for (let i = 1; i < flex.length; i++) {
     const fromRuns = artistsFromRuns(flex[i]?.title?.runs);
     const withIds = fromRuns.filter((a) => a.id);
-    if (withIds.length) return withIds;
+    if (withIds.length) return withIds.filter((a) => isPlausibleArtistName(a.name));
   }
   for (let i = 1; i < flex.length; i++) {
     const fromRuns = artistsFromRuns(flex[i]?.title?.runs).filter(
-      (a) => a.id || !isJunkArtistName(a.name),
+      (a) => a.id || isPlausibleArtistName(a.name),
     );
     const cleaned = fromRuns.filter((a) => a.id || (a.name.length < 80 && !a.name.includes(' - ')));
     if (cleaned.some((a) => a.id)) return cleaned.filter((a) => a.id);
@@ -422,14 +518,16 @@ export function artistsFrom(item: any): { name: string; id?: string }[] {
     const start = /^(song|album|playlist|video|ep|single)$/i.test(parts[0] || '') ? 1 : 0;
     for (let j = start; j < parts.length; j++) {
       const chunk = parts[j];
-      if (!chunk || isJunkArtistName(chunk)) continue;
+      if (!chunk || !isPlausibleArtistName(chunk)) continue;
       if (/^\d/.test(chunk) || /views?/i.test(chunk) || extractYear(chunk) === chunk) continue;
       return splitAuthorString(chunk);
     }
   }
 
   // subtitle runs on two-row / album cards
-  const fromSub = artistsFromRuns(item?.subtitle?.runs);
+  const fromSub = artistsFromRuns(item?.subtitle?.runs).filter((a) =>
+    isPlausibleArtistName(a.name),
+  );
   if (fromSub.length) return fromSub;
 
   return [];
@@ -437,6 +535,9 @@ export function artistsFrom(item: any): { name: string; id?: string }[] {
 
 function inferType(id: string, item: any): Track['type'] {
   const explicit = item.item_type;
+  const mvt = musicVideoTypeOf(item);
+  // ATV = audio track YouTube Music → toujours un titre, pas une « vidéo »
+  if (mvt.includes('ATV') && /^[a-zA-Z0-9_-]{11}$/.test(id)) return 'song';
   if (
     explicit === 'song' ||
     explicit === 'video' ||
@@ -444,6 +545,8 @@ function inferType(id: string, item: any): Track['type'] {
     explicit === 'playlist' ||
     explicit === 'artist'
   ) {
+    // Clip officiel : on garde type video mais le titre est nettoyé à l’affichage
+    if (explicit === 'video' && mvt.includes('ATV')) return 'song';
     return explicit;
   }
 
@@ -457,7 +560,10 @@ function inferType(id: string, item: any): Track['type'] {
     return 'playlist';
   // Tuiles Moods & genres / Charts (browse FE…) — pas des titres jouables
   if (id.startsWith('mood:') || id.startsWith('FE') || id.includes('moods_and_genres')) return 'playlist';
-  if (/^[a-zA-Z0-9_-]{11}$/.test(id)) return 'song';
+  if (/^[a-zA-Z0-9_-]{11}$/.test(id)) {
+    if (mvt.includes('OMV') || mvt.includes('UGC')) return 'video';
+    return 'song';
+  }
   return 'unknown';
 }
 
@@ -506,9 +612,17 @@ export function mapListItem(item: any, fallbackThumbs?: Thumb[]): Track | null {
 
   if (!id) return null;
 
-  let title = asText(item.title) || asText(item.name);
+  let title =
+    cleanMusicTitle(asText(item.title) || asText(item.name) || '') ||
+    cleanMusicTitle(asText(item.flex_columns?.[0]?.title) || '') ||
+    cleanMusicTitle(asText(item.flex_columns?.[0]?.title?.runs) || '') ||
+    cleanMusicTitle(asText(item.overlay?.content?.accessibility?.accessibility_data?.label) || '');
+  // Accessibilité type « Play SongName by Artist » → tenter d’extraire le titre
   if (!title) {
-    title = asText(item.flex_columns?.[0]?.title);
+    const label = asText(item.overlay?.content?.accessibility?.accessibility_data?.label) ||
+      asText(item.accessibility?.accessibility_data?.label);
+    const m = String(label).match(/^(?:play|écouter|lecture)\s+(.+?)(?:\s+by\s+|\s+de\s+)/i);
+    if (m?.[1]) title = cleanMusicTitle(m[1]);
   }
   if (!title && item.item_type === 'artist') {
     title = 'Artiste';
@@ -531,6 +645,9 @@ export function mapListItem(item: any, fallbackThumbs?: Thumb[]): Track | null {
   let artists = artistsFrom(item);
   if (type === 'artist' && !artists.length) {
     artists = [{ name: title, id: String(id) }];
+  }
+  if (title && title !== 'Sans titre' && title !== 'Artiste') {
+    title = stripRedundantArtistSuffix(title, artists) || title;
   }
 
   let thumbnails = extractThumbs(item);
@@ -572,10 +689,15 @@ export function mapTwoRowItem(item: any, fallbackThumbs?: Thumb[]): Track | null
   if (!id) return null;
 
   const title =
-    asText(item.title) ||
-    asText(item.title?.runs) ||
-    (Array.isArray(item.title?.runs) ? item.title.runs.map((r: any) => r.text || '').join('') : '') ||
-    'Sans titre';
+    cleanMusicTitle(
+      asText(item.title) ||
+        asText(item.title?.runs) ||
+        (Array.isArray(item.title?.runs)
+          ? item.title.runs.map((r: any) => r.text || '').join('')
+          : '') ||
+        asText(item.name) ||
+        '',
+    ) || 'Sans titre';
   // Normalise endpoint pour inferType
   if (!item.endpoint?.payload && (item.navigationEndpoint || item.endpoint?.browseEndpoint)) {
     const ne = item.navigationEndpoint || item.endpoint;
@@ -589,6 +711,9 @@ export function mapTwoRowItem(item: any, fallbackThumbs?: Thumb[]): Track | null
           browseEndpointContextSupportedConfigs:
             ne.browseEndpoint?.browseEndpointContextSupportedConfigs ||
             ne.payload?.browseEndpointContextSupportedConfigs,
+          watchEndpointMusicSupportedConfigs:
+            ne.watchEndpoint?.watchEndpointMusicSupportedConfigs ||
+            ne.payload?.watchEndpointMusicSupportedConfigs,
         },
       },
     };
@@ -598,6 +723,8 @@ export function mapTwoRowItem(item: any, fallbackThumbs?: Thumb[]): Track | null
   if (type === 'artist' && !artists.length) {
     artists = [{ name: title, id: String(id) }];
   }
+  const finalTitle =
+    title !== 'Sans titre' ? stripRedundantArtistSuffix(title, artists) || title : title;
 
   let thumbnails = extractThumbs(item);
   if (!thumbnails.length && fallbackThumbs?.length) thumbnails = fallbackThumbs;
@@ -610,7 +737,7 @@ export function mapTwoRowItem(item: any, fallbackThumbs?: Thumb[]): Track | null
 
   return {
     id: String(id),
-    title,
+    title: finalTitle,
     artists,
     thumbnails,
     type,
