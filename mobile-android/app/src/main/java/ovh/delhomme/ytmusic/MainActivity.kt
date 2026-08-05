@@ -29,12 +29,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -133,7 +136,28 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_ACCESS_TOKEN = "ytm_access_token"
         const val EXTRA_REFRESH_TOKEN = "ytm_refresh_token"
         const val EXTRA_USER_EMAIL = "ytm_user_email"
+
+        fun parseDeviceLogin(uri: Uri?): DeviceLoginDeepLink? {
+            if (uri == null) return null
+            val isHttps =
+                (uri.scheme == "https" || uri.scheme == "http") &&
+                    uri.host?.contains("ytmusic") == true &&
+                    (uri.path?.startsWith("/login-device") == true)
+            val isCustom = uri.scheme == "ytmusic" && uri.host == "login-device"
+            if (!isHttps && !isCustom) return null
+            val claim = uri.getQueryParameter("claim")?.trim().orEmpty()
+            if (claim.isNotEmpty()) return DeviceLoginDeepLink.Claim(claim)
+            val id = uri.getQueryParameter("id")?.trim().orEmpty()
+            val code = uri.getQueryParameter("code")?.trim().orEmpty()
+            if (id.isNotEmpty() && code.isNotEmpty()) return DeviceLoginDeepLink.Approve(id, code)
+            return null
+        }
     }
+}
+
+sealed class DeviceLoginDeepLink {
+    data class Approve(val id: String, val code: String) : DeviceLoginDeepLink()
+    data class Claim(val claim: String) : DeviceLoginDeepLink()
 }
 
 private sealed class Tab(val route: String, val label: String, val icon: ImageVector) {
@@ -155,6 +179,34 @@ fun YtMusicAppContent(
     var playerFocusToken by remember {
         mutableIntStateOf(if (openPlayerFromIntent) 1 else 0)
     }
+    var pendingApprove by remember { mutableStateOf<DeviceLoginDeepLink.Approve?>(null) }
+    var deviceLoginBusy by remember { mutableStateOf(false) }
+
+    fun handleDeviceLoginUri(uri: Uri?) {
+        when (val link = MainActivity.parseDeviceLogin(uri)) {
+            is DeviceLoginDeepLink.Claim -> {
+                scope.launch {
+                    deviceLoginBusy = true
+                    runCatching {
+                        val r = container.api.deviceLoginClaim(mapOf("claim" to link.claim))
+                        container.tokenStore.saveSession(
+                            r.token,
+                            r.refreshToken,
+                            r.user.email,
+                            r.user.name,
+                        )
+                        loggedIn = true
+                        Toast.makeText(context, "Connecté via QR", Toast.LENGTH_SHORT).show()
+                    }.onFailure {
+                        Toast.makeText(context, it.message ?: "Échec QR", Toast.LENGTH_LONG).show()
+                    }
+                    deviceLoginBusy = false
+                }
+            }
+            is DeviceLoginDeepLink.Approve -> pendingApprove = link
+            null -> Unit
+        }
+    }
 
     val player = remember(container) {
         PlayerController(
@@ -168,7 +220,7 @@ fun YtMusicAppContent(
         onDispose { player.release() }
     }
 
-    // Clic notification → ouvrir le lecteur (singleTask / onNewIntent)
+    // Clic notification → ouvrir le lecteur (singleTask / onNewIntent) + QR login
     DisposableEffect(activity) {
         if (activity == null) return@DisposableEffect onDispose { }
         val listener = androidx.core.util.Consumer<Intent> { intent ->
@@ -177,9 +229,14 @@ fun YtMusicAppContent(
                 playerFocusToken++
                 intent.removeExtra(MainActivity.EXTRA_OPEN_PLAYER)
             }
+            handleDeviceLoginUri(intent.data)
         }
         activity.addOnNewIntentListener(listener)
         onDispose { activity.removeOnNewIntentListener(listener) }
+    }
+
+    LaunchedEffect(Unit) {
+        handleDeviceLoginUri(activity?.intent?.data)
     }
 
     LaunchedEffect(openPlayerFromIntent) {
@@ -227,6 +284,50 @@ fun YtMusicAppContent(
         )
         false -> LoginScreen(container = container, onLoggedIn = { loggedIn = true })
         true -> {
+            pendingApprove?.let { pending ->
+                AlertDialog(
+                    onDismissRequest = { pendingApprove = null },
+                    title = { Text("Autoriser la connexion ?") },
+                    text = {
+                        Text(
+                            "Un autre appareil demande à se connecter avec ton compte via QR. " +
+                                "N’accepte que si c’est toi.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            enabled = !deviceLoginBusy,
+                            onClick = {
+                                scope.launch {
+                                    deviceLoginBusy = true
+                                    runCatching {
+                                        container.ensureFreshToken()
+                                        container.api.deviceLoginApprove(
+                                            mapOf("id" to pending.id, "code" to pending.code),
+                                        )
+                                        Toast.makeText(
+                                            context,
+                                            "Appareil autorisé",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                        pendingApprove = null
+                                    }.onFailure {
+                                        Toast.makeText(
+                                            context,
+                                            it.message ?: "Échec",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                    }
+                                    deviceLoginBusy = false
+                                }
+                            },
+                        ) { Text("Autoriser") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingApprove = null }) { Text("Refuser") }
+                    },
+                )
+            }
             MainTabs(
                 container = container,
                 player = player,

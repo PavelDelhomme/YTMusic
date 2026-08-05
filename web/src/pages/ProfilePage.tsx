@@ -3,7 +3,7 @@ import { startRegistration } from '@simplewebauthn/browser';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api';
 import { useAuth } from '../store/auth';
-import { Fingerprint, KeyRound, Shield, Smartphone, Sparkles, Trash2 } from 'lucide-react';
+import { Fingerprint, KeyRound, QrCode, Shield, Smartphone, Sparkles, Trash2 } from 'lucide-react';
 import type { User } from '../api';
 import { markLocalPasskeyReady } from '../lib/passkeyEnrollment';
 import { OnboardingWizard } from '../components/OnboardingWizard';
@@ -137,6 +137,8 @@ export function ProfilePage() {
   const [busy, setBusy] = useState(false);
   const [deployUrl, setDeployUrl] = useState('');
   const [editReco, setEditReco] = useState(false);
+  const [inviteUrl, setInviteUrl] = useState('');
+  const [inviteBusy, setInviteBusy] = useState(false);
 
   const isGuest = !user || user.isGuest || user.email.includes('@local.ytmusic');
 
@@ -336,6 +338,51 @@ export function ProfilePage() {
                 <li className="text-sm text-yt-muted">Aucune passkey pour l&apos;instant.</li>
               )}
             </ul>
+          </section>
+
+          <section className="mb-8 rounded-2xl border border-yt-border bg-yt-surface p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <QrCode className="h-5 w-5 text-yt-red" />
+              <h2 className="font-display text-lg font-semibold">Connecter un autre appareil</h2>
+            </div>
+            <p className="mb-4 text-sm text-yt-muted">
+              Affiche un QR temporaire : l’autre appareil le scanne (caméra) et se connecte avec ton
+              compte — pratique pour téléphone ↔ PC.
+            </p>
+            <button
+              type="button"
+              disabled={inviteBusy}
+              className="mb-4 rounded-full border border-yt-border bg-yt-elevated px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
+              onClick={() => {
+                setInviteBusy(true);
+                setErr('');
+                void api
+                  .deviceLoginInvite()
+                  .then((r) => {
+                    const claim =
+                      new URL(r.claimUrl).searchParams.get('claim') ||
+                      r.claimToken;
+                    setInviteUrl(
+                      `${window.location.origin}/login-device?claim=${encodeURIComponent(claim)}`,
+                    );
+                  })
+                  .catch((ex) => setErr(String(ex.message || ex)))
+                  .finally(() => setInviteBusy(false));
+              }}
+            >
+              {inviteBusy ? 'Génération…' : inviteUrl ? 'Régénérer le QR' : 'Afficher un QR'}
+            </button>
+            {inviteUrl && (
+              <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
+                <div className="rounded-2xl bg-white p-3">
+                  <QRCodeSVG value={inviteUrl} size={160} level="M" />
+                </div>
+                <p className="max-w-xs text-xs text-yt-muted">
+                  Valable ~2 minutes. Sur l’autre appareil : ouvre l’appareil photo → scanne → ouvre
+                  le lien (navigateur ou app).
+                </p>
+              </div>
+            )}
           </section>
         </>
       )}
