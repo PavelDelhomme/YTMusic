@@ -12,7 +12,6 @@ import {
   pinFullTrack,
   clearPinnedFull,
 } from '../lib/streamPrefetch';
-import { rewireEqualizer } from '../lib/equalizer';
 import { trackDurationSeconds, formatClock } from '../lib/time';
 import { useSession } from './session';
 import { useLibrary } from './library';
@@ -500,6 +499,52 @@ export function reportSkipIfEarly(progress: number) {
 
 /** Génération pour ignorer les play() obsolètes si l’utilisateur saute vite */
 let playGeneration = 0;
+/** Horodatage du dernier bump de génération (ignorer erreurs audio pendant un skip). */
+let lastPlayGenAt = 0;
+
+/** Coalesce skips rapides : un seul chargement audio pour la dernière demande. */
+let playCoalesceTimer: ReturnType<typeof setTimeout> | null = null;
+let playCoalesceSeq = 0;
+const playCoalesceWaiters: Array<() => void> = [];
+
+function bumpPlayGeneration() {
+  playGeneration += 1;
+  lastPlayGenAt = Date.now();
+  return playGeneration;
+}
+
+function pauseBothAudio() {
+  const { audioEl, standbyEl } = usePlayer.getState();
+  for (const el of [audioEl, standbyEl]) {
+    if (!el) continue;
+    try {
+      el.pause();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** Attend 60ms de « calme » puis exécute ; les appels précédents se résolvent sans jouer. */
+function coalescePlay(gen: number, run: () => Promise<void>): Promise<void> {
+  const seq = ++playCoalesceSeq;
+  return new Promise<void>((resolve) => {
+    playCoalesceWaiters.push(resolve);
+    if (playCoalesceTimer != null) clearTimeout(playCoalesceTimer);
+    playCoalesceTimer = setTimeout(() => {
+      playCoalesceTimer = null;
+      const waiters = playCoalesceWaiters.splice(0);
+      void (async () => {
+        try {
+          if (seq !== playCoalesceSeq || gen !== playGeneration) return;
+          await run();
+        } finally {
+          for (const w of waiters) w();
+        }
+      })();
+    }, 60);
+  });
+}
 
 async function resolveCachedUrl(trackId: string) {
   // 1) Cache offline IndexedDB
@@ -565,50 +610,25 @@ async function armStandby(trackId: string) {
     const src = await resolveCachedUrl(trackId);
     if (my !== standbyArmGen) return;
     if (!src) return;
-    if (usePlayer.getState().current?.id === trackId) return; // déjà en lecture
+    // Ne pas écraser si l’utilisateur a déjà sauté ailleurs
+    const cur = usePlayer.getState().current?.id;
+    if (cur === trackId) return;
     standby.pause();
     standby.src = src;
     standby.dataset.trackId = trackId;
     standby.preload = 'auto';
-    standby.load();
+    try {
+      standby.load();
+    } catch {
+      /* ignore */
+    }
   } catch {
     /* ignore */
   }
 }
 
-/** Si le standby a déjà bufferisé ce titre → swap A/B (skip ~instantané). */
-async function swapToStandbyIfReady(
-  trackId: string,
-  targetVol: number,
-): Promise<HTMLAudioElement | null> {
-  const { audioEl, standbyEl } = usePlayer.getState();
-  if (!audioEl || !standbyEl) return null;
-  if (standbyEl.dataset.trackId !== trackId) return null;
-  // HAVE_CURRENT_DATA (2) ou mieux
-  if (standbyEl.readyState < 2) return null;
-
-  try {
-    audioEl.pause();
-  } catch {
-    /* ignore */
-  }
-  standbyEl.muted = false;
-  standbyEl.volume = targetVol;
-  standbyEl.currentTime = 0;
-
-  usePlayer.setState({ audioEl: standbyEl, standbyEl: audioEl });
-  void rewireEqualizer(standbyEl).catch(() => undefined);
-
-  // Ancien actif devient le nouveau standby (vide pour le prochain arm)
-  try {
-    audioEl.removeAttribute('src');
-    audioEl.load();
-    delete audioEl.dataset.trackId;
-  } catch {
-    /* ignore */
-  }
-
-  return standbyEl;
+function sleep(ms: number) {
+  return new Promise<void>((r) => setTimeout(r, ms));
 }
 
 /** Un seul remplissage autoplay à la fois (évite tempête related×N au skip). */
@@ -697,62 +717,58 @@ async function ensureAutoRadio(seedId: string) {
 
 async function playLocal(track: Track, state: PlayerState, gen: number) {
   const t0 = performance.now();
-  let audio = state.audioEl;
+  // Toujours l’élément primaire (jamais de swap A/B — casse l’EQ / silence)
+  const audio = usePlayer.getState().audioEl || state.audioEl;
   if (!audio) return;
+  if (gen !== playGeneration) return;
 
   const targetVol = Math.max(0, Math.min(1, state.volume > 0 ? state.volume : 0.9));
 
-  // Chemin rapide : standby déjà bufferisé pour ce titre
-  const swapped = await swapToStandbyIfReady(track.id, targetVol);
-  if (gen !== playGeneration) return;
-  if (swapped) {
-    audio = swapped;
-    let playPromise: Promise<void>;
+  // Si le même titre est déjà chargé sur le primary → seek 0 + play (skip/loop rapide)
+  if (
+    audio.dataset.trackId === track.id &&
+    audio.src &&
+    audio.readyState >= 2 &&
+    !audio.src.endsWith(window.location.pathname)
+  ) {
     try {
-      playPromise = audio.play();
-    } catch {
-      audio.volume = targetVol;
       audio.muted = false;
+      audio.volume = targetVol;
+      audio.currentTime = 0;
+      const p = audio.play();
+      if (gen === playGeneration) {
+        usePlayer.setState({ isLoading: false, isPlaying: true, playError: null });
+      }
+      await p;
+      if (typeof console !== 'undefined') {
+        console.info(`[play] ${track.id} reuse ${(performance.now() - t0).toFixed(0)}ms`);
+      }
       return;
-    }
-    if (gen === playGeneration) {
-      usePlayer.setState({ isLoading: false, isPlaying: true, playError: null });
-    }
-    try {
-      await playPromise;
     } catch (err) {
       if (gen !== playGeneration) return;
       const name = err instanceof DOMException ? err.name : '';
       if (name === 'AbortError') return;
-      throw err;
+      // sinon recharge en cold path
     }
-    if (typeof console !== 'undefined') {
-      console.info(
-        `[play] ${track.id} standby-swap ${(performance.now() - t0).toFixed(0)}ms`,
-      );
-    }
-    // Meta / thumbs en arrière-plan
-    void api.track(track.id).then((meta) => {
-      if (gen !== playGeneration || !meta?.track) return;
-      const next = { ...track, ...meta.track, title: meta.track.title || track.title };
-      usePlayer.setState((s) => ({
-        current: { ...s.current, ...next } as Track,
-        queue: s.queue.map((t, i) =>
-          i === s.queueIndex || t.id === next.id ? { ...t, ...next } : t,
-        ),
-      }));
-      refreshMediaSession();
-    }).catch(() => undefined);
-    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-    refreshMediaSession();
-    return;
   }
 
-  // Stream d’abord (fluide), métadonnées en parallèle
-  const srcPromise = resolveCachedUrl(track.id);
+  // Si le standby a déjà ce titre bufferisé → copie l’URL sur le primary (sans swap d’élément)
+  const standby = usePlayer.getState().standbyEl;
+  let srcFromStandby: string | null = null;
+  if (
+    standby &&
+    standby.dataset.trackId === track.id &&
+    standby.src &&
+    standby.readyState >= 2
+  ) {
+    srcFromStandby = standby.currentSrc || standby.src;
+  }
+
+  const srcPromise = srcFromStandby
+    ? Promise.resolve(srcFromStandby)
+    : resolveCachedUrl(track.id);
   const metaPromise = api.track(track.id).catch(() => undefined);
 
-  // Enrichissement rapide local (thumbs) pendant le fetch stream
   let enriched = track;
   if (/^[a-zA-Z0-9_-]{11}$/.test(track.id)) {
     const ytimg = [
@@ -765,7 +781,9 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
       usePlayer.setState((s) => ({
         current: enriched,
         queue: s.queue.map((t, i) =>
-          i === s.queueIndex || t.id === track.id ? { ...t, thumbnails: t.thumbnails?.length ? t.thumbnails : ytimg } : t,
+          i === s.queueIndex || t.id === track.id
+            ? { ...t, thumbnails: t.thumbnails?.length ? t.thumbnails : ytimg }
+            : t,
         ),
       }));
       refreshMediaSession();
@@ -776,51 +794,49 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   if (gen !== playGeneration) return;
   if (!src) throw new Error('Source audio indisponible');
 
-  // Pas de fade au skip — latence perçue
+  // Re-lire l’élément actif (peut avoir changé… mais on ne swap plus)
+  const el = usePlayer.getState().audioEl || audio;
   try {
-    audio.pause();
+    el.pause();
   } catch {
     /* ignore */
   }
   if (gen !== playGeneration) return;
 
-  // Ne pas révoquer les blob: gérés par streamPrefetch (réutilisés au skip suivant).
-  audio.src = src;
-  audio.dataset.trackId = track.id;
-  audio.muted = false;
-  audio.volume = targetVol;
+  el.src = src;
+  el.dataset.trackId = track.id;
+  el.muted = false;
+  el.volume = targetVol;
 
-  // play() attend assez de données — ne pas court-circuiter sur readyState (ancien buffer)
   try {
-    audio.load();
+    el.load();
   } catch {
     /* ignore */
   }
 
   let playPromise: Promise<void>;
   try {
-    playPromise = audio.play();
+    playPromise = el.play();
   } catch {
-    audio.volume = targetVol;
-    audio.muted = false;
+    el.volume = targetVol;
+    el.muted = false;
     return;
   }
-  // UI : fin du spinner dès que play() est lancé
   if (gen === playGeneration) {
     usePlayer.setState({ isLoading: false, isPlaying: true, playError: null });
   }
   void playPromise
     .then(() => {
       const s = usePlayer.getState();
-      if (s.audioEl === audio) {
-        audio.muted = false;
-        audio.volume = s.volume > 0 ? s.volume : targetVol;
+      if (s.audioEl === el) {
+        el.muted = false;
+        el.volume = s.volume > 0 ? s.volume : targetVol;
       }
     })
     .catch(() => {
-      if (usePlayer.getState().audioEl === audio) {
-        audio.muted = false;
-        audio.volume = targetVol;
+      if (usePlayer.getState().audioEl === el) {
+        el.muted = false;
+        el.volume = targetVol;
       }
     });
 
@@ -859,8 +875,8 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
     const name = err instanceof DOMException ? err.name : '';
     if (name === 'AbortError') return;
     try {
-      audio.load();
-      await audio.play();
+      el.load();
+      await el.play();
     } catch (err2) {
       if (gen !== playGeneration) return;
       const n2 = err2 instanceof DOMException ? err2.name : '';
@@ -871,16 +887,16 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   if (gen !== playGeneration) return;
 
   if (typeof console !== 'undefined') {
-    console.info(`[play] ${track.id} cold ${(performance.now() - t0).toFixed(0)}ms`);
+    const via = srcFromStandby ? 'standby-url' : 'cold';
+    console.info(`[play] ${track.id} ${via} ${(performance.now() - t0).toFixed(0)}ms`);
   }
 
-  // Enrichit la durée si absente (affiche en biblio ensuite)
   if (
-    Number.isFinite(audio.duration) &&
-    audio.duration > 0 &&
+    Number.isFinite(el.duration) &&
+    el.duration > 0 &&
     !trackDurationSeconds(usePlayer.getState().current || track)
   ) {
-    const sec = Math.floor(audio.duration);
+    const sec = Math.floor(el.duration);
     usePlayer.setState((s) => {
       if (!s.current || s.current.id !== track.id) return s;
       const patched = {
@@ -933,9 +949,12 @@ function attachAudioRuntime(
     void (async () => {
       if (recovering) return;
       if (get().audioEl !== el) return;
+      // Skip rapide : erreurs de src aborté / clear — ignorer
+      if (Date.now() - lastPlayGenAt < 800) return;
       const track = get().current;
       if (!track?.id) return;
       if (el.dataset.trackId && el.dataset.trackId !== track.id) return;
+      if (!el.src || el.src === window.location.href) return;
       if (get().playError && isStreamDown()) {
         try {
           el.pause();
@@ -951,6 +970,7 @@ function attachAudioRuntime(
         markStreamOk();
         const fresh = await resolvePlayUrl(track.id);
         if (gen !== playGeneration || get().current?.id !== track.id) return;
+        if (Date.now() - lastPlayGenAt < 400) return;
         const bust = fresh.includes('?') ? `${fresh}&r=${Date.now()}` : `${fresh}?r=${Date.now()}`;
         el.src = bust.startsWith('blob:') ? fresh : bust;
         el.dataset.trackId = track.id;
@@ -974,6 +994,7 @@ function attachAudioRuntime(
         set({ isPlaying: true, isLoading: false, playError: null });
         refreshMediaSession();
       } catch {
+        if (gen !== playGeneration) return;
         markStreamFailure('audio-error');
         if (gen === playGeneration && get().current?.id === track.id) {
           try {
@@ -1144,27 +1165,16 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       playError: null,
     });
 
-    const gen = ++playGeneration;
-    // Ne PAS bumpPrefetchGeneration ici : ça tuait le warm/full du titre suivant
-    // juste avant de le jouer (skip lent). schedulePrefetch gère le bump après play.
-    {
-      const audio = get().audioEl;
-      if (audio) {
-        try {
-          audio.pause();
-        } catch {
-          /* ignore */
-        }
-      }
-    }
+    const gen = bumpPlayGeneration();
+    // Ne PAS bumpPrefetchGeneration ici : ça tuait le warm/full du titre suivant.
+    pauseBothAudio();
+    // Invalide les armements standby obsolètes
+    standbyArmGen += 1;
 
-    // Précharge le suivant pendant que le titre courant démarre
+    // Warm léger du suivant (pas de chargement audio concurrent pendant le coalesce)
     {
       const n = nextQueue[(idx >= 0 ? idx : 0) + 1];
-      if (n) {
-        void warmFormat(n.id);
-        void armStandby(n.id);
-      }
+      if (n) void warmFormat(n.id);
     }
 
     // Suggestions après le démarrage audio (évite contention API/CPU sur le 1er play)
@@ -1198,7 +1208,6 @@ export const usePlayer = create<PlayerState>((set, get) => ({
             : typeof err === 'string'
               ? err
               : 'Lecture impossible';
-        // 2 retries espacés (2s, 5s) — reteste si le stream revient
         if (attempt < 2) {
           set({
             isLoading: true,
@@ -1207,7 +1216,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
           });
           publish();
           const delay = attempt === 0 ? 2_000 : 5_000;
-          await new Promise((r) => window.setTimeout(r, delay));
+          await sleep(delay);
           if (gen !== playGeneration) return;
           if (get().current?.id !== playTrack.id) return;
           markStreamOk();
@@ -1218,9 +1227,9 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       }
     };
 
-    await attemptPlay(0);
-  },
-  playAt: async (index) => {
+    // Skips rapides : UI à jour tout de suite, un seul load audio (dernier gagne)
+    await coalescePlay(gen, () => attemptPlay(0));
+  },  playAt: async (index) => {
     const { queue } = get();
     const track = queue[index];
     if (!track) return;
@@ -1370,8 +1379,6 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       }
     }
     await get().playAt(nextIndex);
-    // ensureAutoRadio déjà lancé dans play() — pas de 2ᵉ tempête ici
-    schedulePrefetch(get().queue, get().queueIndex);
   },
 
   prev: async () => {
@@ -1394,7 +1401,6 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     }
     if (queueIndex > 0) {
       await get().playAt(queueIndex - 1);
-      schedulePrefetch(get().queue, get().queueIndex);
       return;
     }
     // Début de file : restart le titre courant
