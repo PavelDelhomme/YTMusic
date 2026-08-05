@@ -66,6 +66,8 @@ export function PlayerBar({
     setSleepTimer,
     playError,
     clearPlayError,
+    autoRadioLoading,
+    queueHint,
   } = usePlayer();
   const { isLiked, toggleLike } = useLibrary();
   const openActions = useItemActions((s) => s.open);
@@ -279,7 +281,7 @@ export function PlayerBar({
         </div>
       )}
 
-      {(playError || sleepLabel) && (
+      {(playError || sleepLabel || queueHint) && (
         <div
           className="flex items-center gap-2 border-b border-yt-border/60 px-3 py-1.5 text-[11px]"
           onClick={stop}
@@ -296,6 +298,8 @@ export function PlayerBar({
                 <X className="h-3.5 w-3.5" />
               </button>
             </>
+          ) : queueHint ? (
+            <span className="min-w-0 flex-1 truncate text-yt-muted">{queueHint}</span>
           ) : (
             <>
               <Moon className="h-3.5 w-3.5 shrink-0 text-amber-200" />
@@ -370,8 +374,10 @@ export function PlayerBar({
               stop(e);
               void next();
             }}
-            className="flex h-10 w-10 items-center justify-center rounded-full text-white"
+            disabled={autoRadioLoading}
+            className="flex h-10 w-10 items-center justify-center rounded-full text-white disabled:opacity-50"
             aria-label="Titre suivant"
+            title={autoRadioLoading ? 'Chargement des suggestions…' : undefined}
           >
             <SkipForward className="h-5 w-5 fill-white" />
           </button>
@@ -410,8 +416,10 @@ export function PlayerBar({
               stop(e);
               void next();
             }}
-            className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10"
+            disabled={autoRadioLoading}
+            className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10 disabled:opacity-50"
             aria-label="Titre suivant"
+            title={autoRadioLoading ? 'Chargement des suggestions…' : undefined}
           >
             <SkipForward className="h-6 w-6 fill-white" />
           </button>

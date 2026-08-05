@@ -469,6 +469,7 @@ export function AlbumPage() {
   const isPinned = usePins((s) => s.pins.some((p) => p.targetId === id));
   const openItemActions = useItemActions((s) => s.open);
   const [radioBusy, setRadioBusy] = useState(false);
+  const [radioToast, setRadioToast] = useState<string | null>(null);
   const [libBusy, setLibBusy] = useState(false);
   const [offlinePct, setOfflinePct] = useState<number | null>(null);
   const [offlineDone, setOfflineDone] = useState(false);
@@ -732,16 +733,12 @@ export function AlbumPage() {
             })
               .then((r) => {
                 const n = r?.added ?? 0;
-                // feedback léger via title change on button area — album uses hero
-                if (n > 0) {
-                  const el = document.createElement('div');
-                  el.className =
-                    'fixed bottom-24 left-1/2 z-[80] -translate-x-1/2 rounded-full bg-white/15 px-4 py-2 text-sm text-white shadow-lg backdrop-blur';
-                  el.setAttribute('role', 'status');
-                  el.textContent = `${n} titre${n > 1 ? 's' : ''} similaires ajoutés à la file`;
-                  document.body.appendChild(el);
-                  window.setTimeout(() => el.remove(), 3200);
-                }
+                setRadioToast(
+                  n > 0
+                    ? `${n} titre${n > 1 ? 's' : ''} similaires ajoutés à la file`
+                    : 'Radio album démarrée',
+                );
+                window.setTimeout(() => setRadioToast(null), 3200);
               })
               .finally(() => setRadioBusy(false));
           }}
@@ -815,6 +812,15 @@ export function AlbumPage() {
           )}
         </div>
       </div>
+
+      {radioToast && (
+        <p
+          className="mb-6 rounded-lg bg-white/10 px-3 py-2 text-center text-sm text-white"
+          role="status"
+        >
+          {radioToast}
+        </p>
+      )}
 
       {data.tracks.map((t, i) => (
         <TrackRow key={`${t.id}-${i}`} track={t} index={i} queue={data.tracks} showAlbum={false} />
