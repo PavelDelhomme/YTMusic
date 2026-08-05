@@ -790,7 +790,9 @@ async function fallbackTitleArtist(
     if (r.ok) {
       const j = (await r.json()) as { title?: string; author_name?: string };
       const title = String(j.title || '').trim();
-      const artist = String(j.author_name || '').trim();
+      let artist = String(j.author_name || '').trim();
+      // Chaînes auto « Artist - Topic »
+      artist = artist.replace(/\s*-\s*Topic\s*$/i, '').trim();
       if (title) return { title, artist: artist || undefined };
     }
   } catch {
