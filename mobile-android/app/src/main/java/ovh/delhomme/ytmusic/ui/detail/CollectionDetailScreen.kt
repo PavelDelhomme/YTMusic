@@ -21,8 +21,9 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.LibraryAdd
+import androidx.compose.material.icons.filled.LibraryAddCheck
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -31,7 +32,6 @@ import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.outlined.Album
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,8 +42,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -584,45 +588,61 @@ private fun AlbumHeroHeader(
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp),
+                .padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             RoundIconAction(
                 icon = Icons.Default.Download,
-                contentDescription = "Télécharger",
+                label = "Télécharger",
+                hint = "Télécharger l'album hors ligne",
                 onClick = onDownload,
             )
             RoundIconAction(
-                icon = if (inLibrary) Icons.Filled.Album else Icons.Outlined.Album,
-                contentDescription = if (inLibrary) "Dans la bibliothèque" else "Enregistrer l'album",
+                icon = if (inLibrary) Icons.Default.LibraryAddCheck else Icons.Default.LibraryAdd,
+                label = if (inLibrary) "Bibliothèque" else "Enregistrer",
+                hint = if (inLibrary) {
+                    "Déjà dans ta bibliothèque — appuie pour retirer"
+                } else {
+                    "Enregistrer l'album dans ta bibliothèque"
+                },
                 onClick = onToggleLibrary,
                 tint = if (inLibrary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             )
-            Box(
-                modifier = Modifier
-                    .size(68.dp)
-                    .clip(CircleShape)
-                    .background(Color.White)
-                    .clickable(onClick = onPlay),
-                contentAlignment = Alignment.Center,
+            TooltipBox(
+                positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                tooltip = {
+                    PlainTooltip { Text("Tout lire") }
+                },
+                state = rememberTooltipState(),
             ) {
-                Icon(
-                    Icons.Default.PlayArrow,
-                    contentDescription = "Lecture",
-                    tint = Color.Black,
-                    modifier = Modifier.size(40.dp),
-                )
+                Box(
+                    modifier = Modifier
+                        .size(68.dp)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                        .clickable(onClick = onPlay),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = "Tout lire",
+                        tint = Color.Black,
+                        modifier = Modifier.size(40.dp),
+                    )
+                }
             }
             RoundIconAction(
                 icon = Icons.Default.Radio,
-                contentDescription = "Mix",
+                label = "Mix",
+                hint = "Lancer un mix radio à partir de cet album",
                 onClick = onRadio,
                 enabled = !radioBusy,
             )
             RoundIconAction(
                 icon = Icons.Default.MoreVert,
-                contentDescription = "Plus d'options",
+                label = "Plus",
+                hint = "Plus d'options",
                 onClick = onMore,
             )
         }
@@ -631,25 +651,47 @@ private fun AlbumHeroHeader(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RoundIconAction(
     icon: ImageVector,
-    contentDescription: String,
+    label: String,
+    hint: String = label,
     onClick: () -> Unit,
     enabled: Boolean = true,
     tint: Color = MaterialTheme.colorScheme.onSurface,
 ) {
-    IconButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier.size(48.dp),
+    val tooltipState = rememberTooltipState()
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = {
+            PlainTooltip { Text(hint) }
+        },
+        state = tooltipState,
     ) {
-        Icon(
-            icon,
-            contentDescription = contentDescription,
-            tint = if (enabled) tint else tint.copy(alpha = 0.4f),
-            modifier = Modifier.size(26.dp),
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            IconButton(
+                onClick = onClick,
+                enabled = enabled,
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = hint,
+                    tint = if (enabled) tint else tint.copy(alpha = 0.4f),
+                    modifier = Modifier.size(26.dp),
+                )
+            }
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                    alpha = if (enabled) 0.85f else 0.4f,
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

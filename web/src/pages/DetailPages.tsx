@@ -20,7 +20,6 @@ import {
   ChevronRight,
   ArrowLeft,
   MoreVertical,
-  Disc3,
 } from 'lucide-react';
 import { BackButton } from '../components/BackButton';
 import { HomeShelfSkeleton } from '../components/HomeShelfSkeleton';
@@ -562,19 +561,22 @@ export function AlbumPage() {
         {data.album.title}
       </h1>
 
-      {/* 5 boutons ronds */}
-      <div className="mb-8 flex items-center justify-evenly gap-1 px-2 sm:justify-center sm:gap-6">
-        <button
-          type="button"
-          title="Télécharger"
+      {/* 5 boutons ronds — libellés + title (survol / appui long) */}
+      <div className="mb-8 flex items-start justify-evenly gap-1 px-1 sm:justify-center sm:gap-5">
+        <AlbumHeroAction
+          title="Télécharger l'album hors ligne"
+          label="Télécharger"
           onClick={() => void api.offlineStart('album', data.album.id)}
-          className="flex h-12 w-12 items-center justify-center rounded-full text-white/90 transition hover:bg-yt-elevated"
         >
           <Download className="h-6 w-6" />
-        </button>
-        <button
-          type="button"
-          title={inLib ? 'Dans la bibliothèque' : "Enregistrer l'album"}
+        </AlbumHeroAction>
+        <AlbumHeroAction
+          title={
+            inLib
+              ? 'Déjà dans ta bibliothèque — cliquer pour retirer'
+              : "Enregistrer l'album dans ta bibliothèque"
+          }
+          label={inLib ? 'Bibliothèque' : 'Enregistrer'}
           disabled={libBusy}
           onClick={() => {
             void (async () => {
@@ -599,21 +601,19 @@ export function AlbumPage() {
               }
             })();
           }}
-          className="flex h-12 w-12 items-center justify-center rounded-full text-white/90 transition hover:bg-yt-elevated disabled:opacity-50"
         >
-          {inLib ? <Disc3 className="h-6 w-6 fill-current text-yt-red" /> : <Disc3 className="h-6 w-6" />}
-        </button>
-        <button
-          type="button"
-          title="Lecture"
-          onClick={playAlbum}
-          className="flex h-[4.25rem] w-[4.25rem] items-center justify-center rounded-full bg-white text-black shadow-lg transition hover:scale-[1.03]"
-        >
+          {inLib ? (
+            <Library className="h-6 w-6 fill-current text-yt-red" />
+          ) : (
+            <Library className="h-6 w-6" />
+          )}
+        </AlbumHeroAction>
+        <AlbumHeroAction title="Tout lire" label="Lecture" large onClick={playAlbum}>
           <Play className="h-9 w-9 fill-black" />
-        </button>
-        <button
-          type="button"
-          title="Mix"
+        </AlbumHeroAction>
+        <AlbumHeroAction
+          title="Lancer un mix radio à partir de cet album"
+          label="Mix"
           disabled={radioBusy}
           onClick={() => {
             setRadioBusy(true);
@@ -623,19 +623,20 @@ export function AlbumPage() {
               seed: data.tracks.find((t) => t.id?.length === 11) || data.tracks[0],
             }).finally(() => setRadioBusy(false));
           }}
-          className="flex h-12 w-12 items-center justify-center rounded-full text-white/90 transition hover:bg-yt-elevated disabled:opacity-50"
         >
           <Radio className="h-6 w-6" />
-        </button>
-        <div className="relative">
+        </AlbumHeroAction>
+        <div className="relative flex flex-col items-center">
           <button
             type="button"
             title="Plus d'options"
+            aria-label="Plus d'options"
             onClick={() => setMenuOpen((v) => !v)}
             className="flex h-12 w-12 items-center justify-center rounded-full text-white/90 transition hover:bg-yt-elevated"
           >
             <MoreVertical className="h-6 w-6" />
           </button>
+          <span className="mt-1 max-w-[4.5rem] truncate text-center text-[10px] text-yt-muted">Plus</span>
           {menuOpen && (
             <>
               <button
@@ -705,6 +706,43 @@ export function AlbumPage() {
           ))}
         </section>
       )}
+    </div>
+  );
+}
+
+
+function AlbumHeroAction({
+  title,
+  label,
+  onClick,
+  disabled,
+  large,
+  children,
+}: {
+  title: string;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  large?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col items-center">
+      <button
+        type="button"
+        title={title}
+        aria-label={title}
+        disabled={disabled}
+        onClick={onClick}
+        className={
+          large
+            ? 'flex h-[4.25rem] w-[4.25rem] items-center justify-center rounded-full bg-white text-black shadow-lg transition hover:scale-[1.03] disabled:opacity-50'
+            : 'flex h-12 w-12 items-center justify-center rounded-full text-white/90 transition hover:bg-yt-elevated disabled:opacity-50'
+        }
+      >
+        {children}
+      </button>
+      <span className="mt-1 max-w-[4.75rem] truncate text-center text-[10px] text-yt-muted">{label}</span>
     </div>
   );
 }
