@@ -458,8 +458,11 @@ export function getWeights(mode = 'radio') {
       }
     | undefined;
   if (!row) {
-    if (mode === 'style') {
+    if (mode === 'style' || mode === 'album-style') {
       return { mode, w_content: 0.2, w_seq: 0.38, w_ctx: 0.14, w_bandit: 0.2, w_satisf: 0.08 };
+    }
+    if (mode === 'artist-radio') {
+      return { mode, w_content: 0.24, w_seq: 0.34, w_ctx: 0.16, w_bandit: 0.14, w_satisf: 0.12 };
     }
     return { mode, w_content: 0.28, w_seq: 0.32, w_ctx: 0.18, w_bandit: 0.14, w_satisf: 0.08 };
   }
