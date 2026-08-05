@@ -26,6 +26,20 @@ fun loadRootEnv(): Map<String, String> {
 
 val rootEnv = loadRootEnv()
 
+fun readAppVersion(): String {
+    val f = rootProject.projectDir.parentFile.resolve("VERSION")
+    if (!f.isFile) return "0.0.0"
+    return f.readText().trim().ifBlank { "0.0.0" }
+}
+
+fun versionCodeFromSemver(semver: String): Int {
+    val parts = semver.split(".").mapNotNull { it.toIntOrNull() }
+    val maj = parts.getOrElse(0) { 0 }
+    val min = parts.getOrElse(1) { 0 }
+    val pat = parts.getOrElse(2) { 0 }
+    return maj * 10_000 + min * 100 + pat
+}
+
 android {
     namespace = "ovh.delhomme.ytmusic"
     compileSdk = 35
@@ -34,9 +48,8 @@ android {
         applicationId = "ovh.delhomme.ytmusic"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "2.1.0-native"
 
+        val semver = readAppVersion()
         val rawApi = (project.findProperty("API_BASE_URL") as String?)
             ?: rootEnv["ANDROID_API_BASE_URL"]
             ?: rootEnv["API_BASE_URL"]
@@ -63,6 +76,10 @@ android {
         val isRemoteApi = apiBase.startsWith("https://") &&
             !apiBase.contains("127.0.0.1") &&
             !apiBase.contains("localhost")
+        // d+ = local/LAN · p+ = API prod distante
+        val channel = if (isRemoteApi) "p" else "d"
+        versionCode = versionCodeFromSemver(semver)
+        versionName = "$channel+$semver"
         val devEmail = if (isRemoteApi) {
             ""
         } else {
@@ -84,6 +101,9 @@ android {
         buildConfigField("String", "DEV_EMAIL", "\"${esc(devEmail)}\"")
         buildConfigField("String", "DEV_PASSWORD", "\"${esc(devPassword)}\"")
         buildConfigField("String", "ANDROID_WEBAUTHN_ORIGIN", "\"${esc(androidOrigin)}\"")
+        buildConfigField("String", "APP_VERSION", "\"${esc(semver)}\"")
+        buildConfigField("String", "APP_CHANNEL", "\"$channel\"")
+        buildConfigField("String", "APP_VERSION_LABEL", "\"${esc(versionName!!)}\"")
     }
 
     buildTypes {

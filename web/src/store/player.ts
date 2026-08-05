@@ -1,7 +1,16 @@
 import { create } from 'zustand';
 import { api, artistNames, type Track } from '../api';
 import { resolvePlayUrl } from '../lib/offlineCache';
-import { prefetchAround, resolvePrefetchedPlayUrl, warmFormat, bumpPrefetchGeneration, isPrefetchBlobUrl } from '../lib/streamPrefetch';
+import {
+  prefetchAround,
+  resolvePrefetchedPlayUrl,
+  warmFormat,
+  bumpPrefetchGeneration,
+  isPrefetchBlobUrl,
+  isStreamDown,
+  markStreamFailure,
+  markStreamOk,
+} from '../lib/streamPrefetch';
 import { useSession } from './session';
 import { useLibrary } from './library';
 
@@ -496,6 +505,7 @@ async function resolveCachedUrl(trackId: string) {
 }
 
 function schedulePrefetch(queue: Track[], queueIndex: number) {
+  if (isStreamDown()) return;
   const playable = queue.filter(isPlayable);
   const ids = playable.map((t) => t.id);
   if (!ids.length) return;
@@ -556,6 +566,7 @@ function mergeAutoTracks(seedId: string, pool: Track[], relatedUpdate?: Track[])
 
 /** Remplit la zone autoplay (après userQueueEnd) — progressive, dédupliquée. */
 async function ensureAutoRadio(seedId: string) {
+  if (isStreamDown()) return;
   const cur = usePlayer.getState();
   if (cur.autoplay === false) return;
   const userEnd = Math.max(cur.userQueueEnd || 0, cur.queueIndex + 1);
@@ -831,6 +842,15 @@ export const usePlayer = create<PlayerState>((set, get) => ({
           if (!track?.id) return;
           // Ignore si on a déjà changé de titre
           if (el.dataset.trackId && el.dataset.trackId !== track.id) return;
+          if (isStreamDown() || get().playError) {
+            try {
+              el.pause();
+            } catch {
+              /* ignore */
+            }
+            set({ isPlaying: false, isLoading: false });
+            return;
+          }
           recovering = true;
           const gen = playGeneration;
           try {
@@ -855,10 +875,12 @@ export const usePlayer = create<PlayerState>((set, get) => ({
             });
             if (gen !== playGeneration || get().current?.id !== track.id) return;
             await el.play();
+            markStreamOk();
             set({ isPlaying: true, isLoading: false, playError: null });
             refreshMediaSession();
           } catch {
-            // Ne PAS enchaîner next() : sinon skip infini quand le VPS est bloqué par YouTube
+            // Ne PAS enchaîner next() : sinon skip infini quand le serveur est injoignable
+            markStreamFailure('audio-error');
             if (gen === playGeneration && get().current?.id === track.id) {
               try {
                 el.pause();
@@ -869,7 +891,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
                 isPlaying: false,
                 isLoading: false,
                 playError:
-                  'Lecture impossible (stream). Sur le VPS : Admin → coller les cookies YouTube, ou Importer → cookies YTM.',
+                  'Connexion / lecture impossible. Vérifie le serveur, ou Admin → cookies YouTube.',
               });
               refreshMediaSession();
               persistPlayer();
@@ -905,7 +927,10 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     }, delayMs);
   },
 
-  clearPlayError: () => set({ playError: null }),
+  clearPlayError: () => {
+    markStreamOk();
+    set({ playError: null });
+  },
 
   hydrate: async () => {
     if (get().hydrated) return;
@@ -995,6 +1020,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     try {
       await playLocal(playTrack, get(), gen);
       if (gen !== playGeneration) return;
+      markStreamOk();
       recordStarted(get().current || playTrack);
       set({ isPlaying: true, isLoading: false, playError: null });
       publish();
@@ -1002,6 +1028,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       schedulePrefetch(get().queue, get().queueIndex);
     } catch (err) {
       console.error(err);
+      markStreamFailure(err instanceof Error ? err.message : 'play');
       const msg =
         err instanceof Error
           ? err.message
@@ -1090,6 +1117,10 @@ export const usePlayer = create<PlayerState>((set, get) => ({
 
   next: async (opts) => {
     claimLocalPlayer();
+    if (isStreamDown() || get().playError) {
+      // Serveur down / erreur stream : ne pas enchaîner les titres
+      return;
+    }
     const { queue, queueIndex, repeat, shuffle, current, progress } = get();
     if (!queue.length) {
       if (current?.id) {

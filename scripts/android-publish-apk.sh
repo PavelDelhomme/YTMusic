@@ -86,8 +86,19 @@ APK_DST="$OUT_DIR/ytmusic.apk"
 cp -f "$APK_SRC" "$APK_DST"
 SIZE="$(stat -c%s "$APK_DST" 2>/dev/null || wc -c <"$APK_DST")"
 BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-VERSION_NAME="$(grep -E 'versionName\s*=' "$APP/app/build.gradle.kts" | head -1 | sed -E 's/.*"([^"]+)".*/\1/' || echo unknown)"
-VERSION_CODE="$(grep -E 'versionCode\s*=' "$APP/app/build.gradle.kts" | head -1 | sed -E 's/.*=\s*([0-9]+).*/\1/' || echo 0)"
+
+# Aligné sur mobile-android/app/build.gradle.kts (VERSION + canal d+/p+)
+SEMVER="$(tr -d '[:space:]' <"$ROOT/VERSION" 2>/dev/null || echo 0.0.0)"
+IFS=. read -r MA MI PA <<<"$SEMVER"
+MA=${MA:-0}; MI=${MI:-0}; PA=${PA:-0}
+VERSION_CODE=$((MA * 10000 + MI * 100 + PA))
+API_NORM="${API_BASE_URL%/}"
+if [[ "$API_NORM" == https://* ]] && [[ "$API_NORM" != *127.0.0.1* ]] && [[ "$API_NORM" != *localhost* ]]; then
+  CHANNEL=p
+else
+  CHANNEL=d
+fi
+VERSION_NAME="${CHANNEL}+${SEMVER}"
 
 OUT_DIR="$OUT_DIR" API_BASE_URL="$API_BASE_URL" APP_ENV="${APP_ENV:-local}" \
 VERSION_NAME="$VERSION_NAME" VERSION_CODE="$VERSION_CODE" SIZE="$SIZE" BUILT_AT="$BUILT_AT" \
