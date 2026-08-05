@@ -168,12 +168,8 @@ export function TrackRow({
       </div>
 
       <div className="flex shrink-0 items-center gap-0 sm:gap-0.5">
-        <span
-          className={`mr-0.5 min-w-[2.25rem] text-right text-[11px] tabular-nums text-yt-muted sm:mr-1 sm:min-w-[2.5rem] sm:text-xs ${
-            showActions ? 'hidden lg:inline' : 'hidden sm:inline'
-          }`}
-        >
-          {formatTrackDuration(track)}
+        <span className="mr-0.5 min-w-[2.5rem] text-right text-[11px] tabular-nums text-yt-muted sm:mr-1 sm:min-w-[2.75rem] sm:text-xs">
+          {formatTrackDuration(track) || '—'}
         </span>
         <button
           type="button"
@@ -182,11 +178,13 @@ export function TrackRow({
             e.stopPropagation();
             void toggleLike(track);
           }}
-          className={`flex h-9 w-9 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white sm:h-10 sm:w-10 ${
-            liked || showActions ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-          }`}
+          className="flex h-9 w-9 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white sm:h-10 sm:w-10"
         >
-          <Heart className={`h-4 w-4 sm:h-5 sm:w-5 ${liked ? 'fill-yt-red text-yt-red' : ''}`} />
+          <Heart
+            className={`h-4 w-4 sm:h-5 sm:w-5 ${
+              liked ? 'fill-yt-red text-yt-red' : 'fill-none text-yt-muted'
+            }`}
+          />
         </button>
         {isPlayable(track) && (
           <button

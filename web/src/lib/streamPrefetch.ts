@@ -9,13 +9,15 @@ const HEAD_BYTES = 384 * 1024;
 /** Prochain titre : plus d’octets pour un skip fluide */
 const HEAD_NEXT_BYTES = 960 * 1024;
 /** Pistes complètes en Cache Storage (instant play) — rester léger sur navigateur */
-const MAX_FULL = 6;
+const MAX_FULL = 10;
+/** Au-delà : on ne full-cache pas (trop lourd) — tête seulement */
+export const FULL_PRELOAD_MAX_SEC = 10 * 60;
 /** Warm format API en parallèle */
-const WARM_CONCURRENCY = 3;
+const WARM_CONCURRENCY = 4;
 /** Prefetch tête en parallèle */
-const HEAD_CONCURRENCY = 2;
-/** Prefetch full (lourd) — 1 seul à la fois pour ne pas étouffer le titre courant */
-const FULL_CONCURRENCY = 1;
+const HEAD_CONCURRENCY = 3;
+/** Prefetch full — 2 en parallèle (suivant + suivant+1) */
+const FULL_CONCURRENCY = 2;
 
 type HeadEntry = { buf: ArrayBuffer; at: number };
 
@@ -25,14 +27,17 @@ const inflightWarm = new Set<string>();
 const inflightHead = new Set<string>();
 const inflightFull = new Set<string>();
 const blobUrls = new Map<string, string>();
+/** Pistes à ne jamais évincer (ex. titre en boucle « one »). */
+const pinnedFull = new Set<string>();
 
 let fullOrder: string[] = [];
 /** Invalide les préchargements d’arrière-plan quand on change de titre trop vite. */
 let prefetchGeneration = 0;
 
-/** Circuit-breaker : API/stream injoignable → stop prefetch / retries (évite spam). */
+/** Circuit-breaker : API/stream injoignable → pause courte, puis on réessaie. */
 let streamDownUntil = 0;
 let streamFailStreak = 0;
+let probeTimer: ReturnType<typeof setInterval> | null = null;
 
 export function isStreamDown(): boolean {
   return Date.now() < streamDownUntil;
@@ -41,16 +46,34 @@ export function isStreamDown(): boolean {
 export function markStreamOk(): void {
   streamFailStreak = 0;
   streamDownUntil = 0;
+  if (probeTimer) {
+    clearInterval(probeTimer);
+    probeTimer = null;
+  }
 }
 
-/** Signale un échec réseau / 5xx. Après 2 échecs → pause 45s. */
+function ensureStreamProbe() {
+  if (typeof window === 'undefined' || probeTimer) return;
+  probeTimer = setInterval(() => {
+    if (Date.now() < streamDownUntil) return;
+    // Fin de pause : laisse une chance (prefetch / play) sans spam infini
+    streamFailStreak = Math.max(0, streamFailStreak - 1);
+    streamDownUntil = 0;
+    if (streamFailStreak <= 0 && probeTimer) {
+      clearInterval(probeTimer);
+      probeTimer = null;
+    }
+  }, 4_000);
+}
+
+/** Signale un échec réseau / 5xx. Après 2 échecs → pause 8s (puis probe auto). */
 export function markStreamFailure(reason?: string): void {
   streamFailStreak += 1;
   if (streamFailStreak >= 2) {
-    streamDownUntil = Date.now() + 45_000;
-    bumpPrefetchGeneration();
+    streamDownUntil = Date.now() + 8_000;
+    ensureStreamProbe();
     if (typeof console !== 'undefined') {
-      console.warn('[stream] down — pause prefetch/retries', reason || '', `streak=${streamFailStreak}`);
+      console.warn('[stream] down — pause 8s puis retry', reason || '', `streak=${streamFailStreak}`);
     }
   }
 }
@@ -238,10 +261,23 @@ function bumpFull(id: string) {
   fullOrder.push(id);
 }
 
+/** Épingle une piste full-cache (boucle one) — ne sera pas évincée. */
+export function pinFullTrack(id: string) {
+  if (!isVideoId(id)) return;
+  pinnedFull.clear();
+  pinnedFull.add(id);
+  bumpFull(id);
+}
+
+export function clearPinnedFull() {
+  pinnedFull.clear();
+}
+
 async function evictFull(cache: Cache) {
   while (fullOrder.length > MAX_FULL) {
-    const old = fullOrder.shift();
+    const old = fullOrder.find((id) => !pinnedFull.has(id));
     if (!old) break;
+    fullOrder = fullOrder.filter((x) => x !== old);
     const url = apiUrl(`/api/stream/${old}`);
     await cache.delete(url);
     const blob = blobUrls.get(old);
@@ -250,6 +286,14 @@ async function evictFull(cache: Cache) {
       blobUrls.delete(old);
     }
   }
+}
+
+function shouldFullCache(durationSeconds?: number | null): boolean {
+  // Durée inconnue → on précharge quand même (la plupart des titres < 10 min)
+  if (durationSeconds == null || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return true;
+  }
+  return durationSeconds <= FULL_PRELOAD_MAX_SEC;
 }
 
 async function runPool<T>(
@@ -271,36 +315,68 @@ async function runPool<T>(
 }
 
 /**
- * Précharge autour de l’index courant — volontairement modéré pour ne pas
- * saturer le navigateur Linux (sinon le titre courant charge « dégueulasse »).
- * - warm format : fenêtre courte
- * - tête (Range) : 1 précédent + quelques suivants
- * - full cache : 1 suivant seulement, après un court délai
+ * Précharge autour de l’index courant.
+ * - warm format + tête Range
+ * - full cache pour courant + suivants si durée ≤ 10 min (skip / boucle fluides)
  */
 export function prefetchAround(
   trackIds: string[],
   currentIndex: number,
-  opts?: { ahead?: number; behind?: number; fullAhead?: number; delayFullMs?: number },
+  opts?: {
+    ahead?: number;
+    behind?: number;
+    fullAhead?: number;
+    delayFullMs?: number;
+    /** Durées en secondes alignées sur trackIds filtrés videoId. */
+    durationsSec?: (number | null | undefined)[];
+    /** Boucle sur un seul titre → full-cache + pin. */
+    loopOne?: boolean;
+  },
 ) {
   if (isStreamDown()) return;
   const ahead = opts?.ahead ?? 4;
   const behind = opts?.behind ?? 1;
-  const fullAhead = opts?.fullAhead ?? 1;
-  const delayFullMs = opts?.delayFullMs ?? 1800;
+  const fullAhead = opts?.fullAhead ?? 2;
+  const delayFullMs = opts?.delayFullMs ?? 200;
   const ids = trackIds.filter(isVideoId);
   if (!ids.length) return;
 
   const gen = bumpPrefetchGeneration();
   const idx = Math.max(0, Math.min(currentIndex, ids.length - 1));
+  const durAt = (i: number) => opts?.durationsSec?.[i] ?? null;
+
   const around: string[] = [];
   for (let i = Math.max(0, idx - behind); i < ids.length && i <= idx + ahead; i++) {
     around.push(ids[i]);
   }
   const unique = [...new Set(around)];
 
+  const currentId = ids[idx];
+  if (opts?.loopOne && currentId) {
+    pinFullTrack(currentId);
+  } else if (!opts?.loopOne) {
+    clearPinnedFull();
+  }
+
+  const priorityFull: string[] = [];
+  if (currentId && shouldFullCache(durAt(idx))) priorityFull.push(currentId);
+  const nextId = ids[idx + 1];
+  if (nextId && shouldFullCache(durAt(idx + 1))) priorityFull.push(nextId);
+
+  if (opts?.loopOne && currentId) {
+    void warmFormat(currentId).then(() => {
+      if (gen !== prefetchGeneration) return;
+      void warmFull(currentId, gen);
+    });
+  } else if (priorityFull.length) {
+    void warmFormats(priorityFull).then(() => {
+      if (gen !== prefetchGeneration) return;
+      for (const id of priorityFull) void warmFull(id, gen);
+    });
+  }
+
   void warmFormats(unique).then(() => {
     if (gen !== prefetchGeneration) return;
-    // Priorité : prochain titre d’abord
     const ordered = [
       ids[idx + 1],
       ids[idx],
@@ -310,22 +386,34 @@ export function prefetchAround(
       ids[idx - 1],
     ].filter((id): id is string => Boolean(id) && unique.includes(id));
     return runPool([...new Set(ordered)], HEAD_CONCURRENCY, (id) => {
-      const nextId = ids[idx + 1];
-      const bytes = id === nextId ? HEAD_NEXT_BYTES : HEAD_BYTES;
+      const n = ids[idx + 1];
+      const bytes = id === n || id === currentId ? HEAD_NEXT_BYTES : HEAD_BYTES;
       return warmHead(id, gen, bytes);
     }, gen);
   });
 
   const fullIds: string[] = [];
-  for (let i = 1; i <= fullAhead; i++) {
+  for (let i = 0; i <= fullAhead; i++) {
     const t = ids[idx + i];
-    if (t) fullIds.push(t);
+    if (t && shouldFullCache(durAt(idx + i))) fullIds.push(t);
   }
   if (fullIds.length) {
     globalThis.setTimeout(() => {
       if (gen !== prefetchGeneration) return;
-      void runPool(fullIds, FULL_CONCURRENCY, (id) => warmFull(id, gen), gen);
+      void runPool([...new Set(fullIds)], FULL_CONCURRENCY, (id) => warmFull(id, gen), gen);
     }, delayFullMs);
+  }
+}
+
+/** True si la piste est déjà en Cache Storage (skip quasi instantané). */
+export async function hasFullCache(trackId: string): Promise<boolean> {
+  if (!isVideoId(trackId) || typeof caches === 'undefined') return false;
+  if (blobUrls.has(trackId)) return true;
+  try {
+    const cache = await caches.open(FULL_CACHE);
+    return Boolean(await cache.match(apiUrl(`/api/stream/${trackId}`)));
+  } catch {
+    return false;
   }
 }
 
