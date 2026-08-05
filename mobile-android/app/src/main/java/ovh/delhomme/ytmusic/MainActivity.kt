@@ -71,6 +71,7 @@ import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.ListenBody
 import ovh.delhomme.ytmusic.data.TrackDto
 import ovh.delhomme.ytmusic.data.buildRadioQueue
+import ovh.delhomme.ytmusic.data.fetchAutoplayTracksFast
 import ovh.delhomme.ytmusic.data.resolveArtistId
 import ovh.delhomme.ytmusic.player.PlaybackService
 import ovh.delhomme.ytmusic.player.PlayerController
@@ -213,7 +214,11 @@ fun YtMusicAppContent(
             context.applicationContext,
             container::streamUrl,
             container::warmStreamUrl,
-        )
+        ).also { ctrl ->
+            ctrl.autoFillFetcher = { seedId ->
+                fetchAutoplayTracksFast(container.api, seedId)
+            }
+        }
     }
     DisposableEffect(player) {
         player.connect()

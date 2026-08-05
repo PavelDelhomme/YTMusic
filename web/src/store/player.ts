@@ -48,6 +48,10 @@ type PlayerState = {
   lyricsTimed: { startMs: number; text: string }[] | null;
   related: Track[];
   relatedLoading: boolean;
+  /** Remplissage « À suivre » en cours (fast/full). */
+  autoRadioLoading: boolean;
+  /** Hint court (skip sans suite, etc.). */
+  queueHint: string | null;
   relatedError: string | null;
   hydrated: boolean;
   play: (
@@ -748,6 +752,16 @@ async function enrichMissingDurations(tracks: Track[]) {
 }
 
 /** Remplit la zone autoplay (après userQueueEnd) — progressive, dédupliquée. */
+let queueHintTimer: number | null = null;
+function flashQueueHint(msg: string) {
+  if (queueHintTimer != null) window.clearTimeout(queueHintTimer);
+  usePlayer.setState({ queueHint: msg });
+  queueHintTimer = window.setTimeout(() => {
+    usePlayer.setState({ queueHint: null });
+    queueHintTimer = null;
+  }, 2800);
+}
+
 async function ensureAutoRadio(seedId: string) {
   if (isStreamDown()) return;
   const cur = usePlayer.getState();
@@ -765,6 +779,7 @@ async function ensureAutoRadio(seedId: string) {
   }
 
   const seq = ++autoRadioSeq;
+  usePlayer.setState({ autoRadioLoading: true });
   const promise = (async () => {
     // Déjà des related en mémoire pour ce titre → injecte immédiatement
     const snap = usePlayer.getState();
@@ -772,19 +787,7 @@ async function ensureAutoRadio(seedId: string) {
       mergeAutoTracks(seedId, snap.related);
     }
 
-    // 1) upNext YT (le plus rapide) + related?fast=1 en parallèle
-    const upP = api
-      .upNext(seedId)
-      .then((r) => {
-        if (seq !== autoRadioSeq) return r;
-        mergeAutoTracks(seedId, r.tracks || []);
-        return r;
-      })
-      .catch((err) => {
-        console.warn('auto-radio upnext', err);
-        return null;
-      });
-
+    // 1) related?fast=1 (= upNext côté API) — un seul appel, pas de double getUpNext
     const fastP = api
       .related(seedId, { fast: true })
       .then((r) => {
@@ -820,8 +823,8 @@ async function ensureAutoRadio(seedId: string) {
         return null;
       });
 
-    await Promise.race([upP, fastP]);
-    void Promise.all([upP, fastP, fullP]);
+    await fastP;
+    void fullP;
   })();
 
   autoRadioInflight = { seedId, promise };
@@ -829,6 +832,9 @@ async function ensureAutoRadio(seedId: string) {
     await promise;
   } finally {
     if (autoRadioInflight?.seedId === seedId) autoRadioInflight = null;
+    if (autoRadioSeq === seq) {
+      usePlayer.setState({ autoRadioLoading: false });
+    }
   }
 }
 
@@ -1195,6 +1201,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   lyricsTimed: null,
   related: [],
   relatedLoading: false,
+  autoRadioLoading: false,
+  queueHint: null,
   relatedError: null,
   hydrated: false,
   audioEl: null,
@@ -1545,6 +1553,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         const q = get().queue;
         const idx = get().queueIndex;
         if (idx + 1 < q.length) await get().playAt(idx + 1);
+        else flashQueueHint('Suggestions en cours… réessaie suivant');
       }
       return;
     }
@@ -1589,6 +1598,8 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         const idx = get().queueIndex;
         if (idx + 1 < q.length) {
           await get().playAt(idx + 1);
+        } else {
+          flashQueueHint('Suggestions en cours… réessaie suivant');
         }
         return;
       } else {
