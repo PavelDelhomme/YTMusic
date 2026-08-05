@@ -24,6 +24,7 @@ import {
 import { BackButton } from '../components/BackButton';
 import { HomeShelfSkeleton } from '../components/HomeShelfSkeleton';
 import { warmFormats } from '../lib/streamPrefetch';
+import { formatTotalDuration, sumTracksDurationSeconds } from '../lib/time';
 import { useItemActions } from '../store/itemActions';
 
 function DetailLoading() {
@@ -502,7 +503,15 @@ export function AlbumPage() {
   const releaseType =
     data.album.releaseType ||
     (data.tracks.length <= 1 ? 'Single' : data.tracks.length <= 6 ? 'EP' : 'Album');
-  const metaLine = data.album.year ? `${releaseType} - ${data.album.year}` : releaseType;
+  const totalDur = formatTotalDuration(sumTracksDurationSeconds(data.tracks));
+  const metaLine = [
+    releaseType,
+    data.album.year,
+    `${data.tracks.length} titre${data.tracks.length !== 1 ? 's' : ''}`,
+    totalDur,
+  ]
+    .filter(Boolean)
+    .join(' · ');
   const inLib = hasAlbum(data.album.id);
   const primaryArtist = artists.find((a) => a.id) || artists[0];
 
@@ -807,7 +816,17 @@ export function PlaylistPage() {
     <CollectionHeader
       kind="Playlist"
       title={data.playlist.title}
-      subtitle={[data.playlist.author, data.playlist.trackCount].filter(Boolean).join(' · ') || 'Playlist'}
+      subtitle={
+        [
+          data.playlist.author,
+          data.playlist.trackCount
+            ? `${data.playlist.trackCount} titre${Number(data.playlist.trackCount) !== 1 ? 's' : ''}`
+            : `${data.tracks.length} titre${data.tracks.length !== 1 ? 's' : ''}`,
+          formatTotalDuration(sumTracksDurationSeconds(data.tracks)),
+        ]
+          .filter(Boolean)
+          .join(' · ') || 'Playlist'
+      }
       cover={data.playlist}
       tracks={data.tracks}
       liked={isPlaylistLiked(data.playlist.id)}
@@ -955,7 +974,9 @@ function CollectionHeader({
                 onClick={() => void onLike()}
                 className="inline-flex items-center gap-2 rounded-full bg-yt-elevated px-4 py-2.5 text-sm text-yt-muted hover:text-white"
               >
-                <Heart className={`h-4 w-4 ${liked ? 'fill-yt-red text-yt-red' : ''}`} />
+                <Heart
+                  className={`h-4 w-4 ${liked ? 'fill-yt-red text-yt-red' : 'fill-none text-yt-muted'}`}
+                />
                 J'aime
               </button>
             )}
