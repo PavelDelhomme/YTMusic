@@ -99,6 +99,14 @@ import {
   listPasskeys,
 } from './passkeys.js';
 import {
+  approveDeviceLogin,
+  claimDeviceLogin,
+  getDeviceLogin,
+  inviteDeviceLogin,
+  pollDeviceLogin,
+  startDeviceLogin,
+} from './deviceLogin.js';
+import {
   accountRequired,
   authAllowGuest,
   authConfig,
@@ -691,6 +699,106 @@ app.post('/api/auth/passkeys/login/verify', async (req, res) => {
     res.json(session);
   } catch (err) {
     res.status(401).json({ error: String((err as Error).message || err) });
+  }
+});
+
+/** Login QR : appareil à connecter démarre une session (affiche le QR). */
+app.post('/api/auth/device-login/start', (req, res) => {
+  const origin = String(req.headers.origin || req.body?.origin || '').trim();
+  res.json(startDeviceLogin(origin || undefined));
+});
+
+/** Poll jusqu’à approbation — renvoie la session une fois. */
+app.post('/api/auth/device-login/poll', async (req, res) => {
+  try {
+    const id = String(req.body?.id || '').trim();
+    const pollSecret = String(req.body?.pollSecret || '').trim();
+    const r = pollDeviceLogin(id, pollSecret);
+    if (r.status === 'pending') {
+      res.json({ status: 'pending' });
+      return;
+    }
+    if (r.status === 'expired') {
+      res.json({ status: 'expired' });
+      return;
+    }
+    if (r.status === 'error') {
+      res.status(400).json({ status: 'error', error: r.error });
+      return;
+    }
+    if (r.status !== 'approved') {
+      res.status(400).json({ status: 'error', error: 'État inconnu' });
+      return;
+    }
+    const user = findUserById(r.userId);
+    if (!user) {
+      res.status(401).json({ error: 'Utilisateur introuvable' });
+      return;
+    }
+    const session = await issueSession(user, 'device-qr');
+    const opts = sessionCookieOptions();
+    res.cookie('ytm_token', session.token, opts);
+    res.cookie('ytm_refresh', session.refreshToken, { ...opts, httpOnly: true });
+    res.json({ status: 'approved', ...session });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+/** Mobile / navigateur déjà connecté approuve le QR. */
+app.post('/api/auth/device-login/approve', authRequired, (req, res) => {
+  const id = String(req.body?.id || '').trim();
+  const code = String(req.body?.code || '').trim();
+  const r = approveDeviceLogin(id, code, req.userId!);
+  if (!r.ok) {
+    res.status(400).json({ error: r.error });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+/** Statut léger (sans consommer) pour l’UI d’approbation. */
+app.get('/api/auth/device-login/peek', (req, res) => {
+  const id = String(req.query.id || '').trim();
+  const s = getDeviceLogin(id);
+  if (!s) {
+    res.status(404).json({ error: 'Introuvable' });
+    return;
+  }
+  res.json({
+    status: s.status,
+    expiresAt: s.expiresAt,
+    expired: s.expiresAt < Date.now() || s.status === 'expired',
+  });
+});
+
+/** Compte connecté → QR pour connecter un autre appareil. */
+app.post('/api/auth/device-login/invite', authRequired, (req, res) => {
+  const origin = String(req.headers.origin || req.body?.origin || '').trim();
+  res.json(inviteDeviceLogin(req.userId!, origin || undefined));
+});
+
+/** L’autre appareil ouvre le lien d’invite et récupère la session. */
+app.post('/api/auth/device-login/claim', async (req, res) => {
+  try {
+    const claim = String(req.body?.claim || req.body?.token || '').trim();
+    const r = claimDeviceLogin(claim);
+    if (!r.ok) {
+      res.status(400).json({ error: r.error });
+      return;
+    }
+    const user = findUserById(r.userId);
+    if (!user) {
+      res.status(401).json({ error: 'Utilisateur introuvable' });
+      return;
+    }
+    const session = await issueSession(user, 'device-invite');
+    const opts = sessionCookieOptions();
+    res.cookie('ytm_token', session.token, opts);
+    res.cookie('ytm_refresh', session.refreshToken, { ...opts, httpOnly: true });
+    res.json(session);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
   }
 });
 
