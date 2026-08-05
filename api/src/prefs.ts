@@ -415,6 +415,43 @@ export function addPin(
   return listPins(userId);
 }
 
+export type PinSyncItem = {
+  kind?: string;
+  targetId?: string;
+  id?: string;
+  payload?: unknown;
+  position?: number;
+};
+
+/**
+ * Fusionne une liste d’épingles (upsert par kind+target_id).
+ * Sert la sync multi-appareils : chaque client pousse son cache, le serveur
+ * conserve l’union (pas d’écrasement total).
+ */
+export function mergePins(userId: string, items: PinSyncItem[]) {
+  let upserted = 0;
+  const seen = new Set<string>();
+  for (const item of items) {
+    const payloadObj =
+      item.payload && typeof item.payload === 'object'
+        ? (item.payload as Record<string, unknown>)
+        : item && typeof item === 'object'
+          ? (item as Record<string, unknown>)
+          : {};
+    const targetId = String(
+      item.targetId || item.id || payloadObj.id || payloadObj.targetId || '',
+    ).trim();
+    if (!targetId || seen.has(targetId)) continue;
+    seen.add(targetId);
+    const kind = String(
+      item.kind || payloadObj.kind || payloadObj.type || 'song',
+    ).trim() || 'song';
+    addPin(userId, kind, targetId, payloadObj);
+    upserted += 1;
+  }
+  return { pins: listPins(userId), upserted, total: listPins(userId).length };
+}
+
 export function removePin(userId: string, pinId: string) {
   db.prepare('DELETE FROM pins WHERE id = ? AND user_id = ?').run(pinId, userId);
   return listPins(userId);

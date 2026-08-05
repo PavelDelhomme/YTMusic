@@ -66,7 +66,10 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
                 _state.value = HomeUiState(
                     loading = false,
                     refreshing = false,
-                    shelves = home.shelves.filter { it.items.isNotEmpty() },
+                    // Accès rapide = pins syncés ; on masque le rayon « Épinglé » doublon.
+                    shelves = home.shelves.filter {
+                        it.items.isNotEmpty() && !it.title.equals("Épinglé", ignoreCase = true)
+                    },
                     radios = home.radios,
                     savedMixIds = savedMixes,
                     needsOnboarding = home.needsOnboarding == true,
