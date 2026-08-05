@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,6 +21,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -27,6 +30,7 @@ import androidx.compose.material.icons.filled.LibraryAddCheck
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -47,6 +51,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -58,6 +63,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.data.TrackDto
+import ovh.delhomme.ytmusic.data.resolvePlayableTracks
 import ovh.delhomme.ytmusic.ui.components.AccountSheet
 import ovh.delhomme.ytmusic.ui.components.AppTopBar
 import ovh.delhomme.ytmusic.ui.components.HistorySheet
@@ -163,9 +169,11 @@ fun HomeScreen(
                 item {
                     QuickAccessHomeCard(
                         pins = pins,
+                        container = container,
                         onPlayItem = { playItem(it, pins.filter { p -> p.isPlayable() }) },
                         onOpenDetail = onOpenDetail,
                         onMore = onMore,
+                        onPlayNamed = onPlayNamed,
                     )
                 }
 
@@ -438,10 +446,17 @@ fun HomeScreen(
 @Composable
 private fun QuickAccessHomeCard(
     pins: List<TrackDto>,
+    container: AppContainer,
     onPlayItem: (TrackDto) -> Unit,
     onOpenDetail: (TrackDto) -> Unit,
     onMore: (TrackDto) -> Unit,
+    onPlayNamed: (List<TrackDto>, Int, String) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
+    var shuffleBusy by remember { mutableStateOf(false) }
+    val pages = remember(pins) { buildQuickAccessPages(pins) }
+    val pagerState = rememberPagerState(pageCount = { pages.size.coerceAtLeast(1) })
+
     Column(
         Modifier
             .fillMaxWidth()
@@ -470,79 +485,224 @@ private fun QuickAccessHomeCard(
                 modifier = Modifier.weight(1f),
             )
         }
-        Text(
-            if (pins.isEmpty()) {
-                "Épingle titres, playlists ou artistes depuis le menu ⋮"
-            } else {
-                "${pins.size} épinglé${if (pins.size > 1) "s" else ""}"
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
-        )
 
         if (pins.isEmpty()) {
             Text(
-                "Rien d'épinglé pour l'instant",
+                "Épingle titres, playlists ou artistes depuis le menu ⋮",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             )
         } else {
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                items(pins.take(16), key = { it.id }) { track ->
-                    Column(
-                        Modifier
-                            .width(108.dp)
-                            .combinedClickable(
-                                onClick = {
-                                    if (track.isPlaylist() || track.isAlbum() || track.isArtist()) {
-                                        onOpenDetail(track)
-                                    } else {
-                                        onPlayItem(track)
-                                    }
-                                },
-                                onLongClick = { onMore(track) },
-                            )
-                            .padding(4.dp),
-                    ) {
-                        MediaCover(track, 100.dp, circle = track.isArtist())
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            track.title.ifBlank { "Sans titre" },
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        val subtitle = when {
-                            track.isArtist() -> "Artiste"
-                            else ->
-                                track.artists
-                                    ?.mapNotNull { it.name?.trim()?.takeIf { n -> n.isNotEmpty() } }
-                                    ?.joinToString(", ")
-                                    ?.takeIf { it.isNotBlank() }
-                                    ?: when {
-                                        track.isAlbum() -> "Album"
-                                        track.isPlaylist() -> "Playlist"
-                                        else -> null
-                                    }
+            Spacer(Modifier.height(8.dp))
+            HorizontalPager(
+                state = pagerState,
+                contentPadding = PaddingValues(horizontal = 10.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) { page ->
+                val slots = pages.getOrElse(page) { emptyList() }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    slots.forEach { slot ->
+                        Box(Modifier.weight(1f)) {
+                            when (slot) {
+                                is QuickAccessSlot.Pin -> QuickAccessPinCard(
+                                    track = slot.track,
+                                    onClick = {
+                                        val t = slot.track
+                                        if (t.isPlaylist() || t.isAlbum() || t.isArtist()) {
+                                            onOpenDetail(t)
+                                        } else {
+                                            onPlayItem(t)
+                                        }
+                                    },
+                                    onLongClick = { onMore(slot.track) },
+                                )
+                                QuickAccessSlot.Shuffle -> QuickAccessShuffleCard(
+                                    busy = shuffleBusy,
+                                    onClick = {
+                                        if (shuffleBusy) return@QuickAccessShuffleCard
+                                        shuffleBusy = true
+                                        scope.launch {
+                                            try {
+                                                val pool = mutableListOf<TrackDto>()
+                                                for (p in pins) {
+                                                    val resolved = runCatching {
+                                                        resolvePlayableTracks(container.api, p)
+                                                    }.getOrDefault(emptyList())
+                                                    pool += resolved
+                                                }
+                                                val uniq = pool.distinctBy { it.id }.shuffled()
+                                                if (uniq.isNotEmpty()) {
+                                                    onPlayNamed(uniq, 0, "Accès rapide · Aléatoire")
+                                                }
+                                            } finally {
+                                                shuffleBusy = false
+                                            }
+                                        }
+                                    },
+                                )
+                            }
                         }
-                        if (!subtitle.isNullOrBlank()) {
-                            Text(
-                                subtitle,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                    }
+                    repeat((3 - slots.size).coerceAtLeast(0)) {
+                        Spacer(Modifier.weight(1f))
                     }
                 }
             }
+            if (pages.size > 1) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    repeat(pages.size) { i ->
+                        val selected = pagerState.currentPage == i
+                        Box(
+                            Modifier
+                                .padding(horizontal = 3.dp)
+                                .size(if (selected) 8.dp else 6.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(
+                                    if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.28f),
+                                )
+                                .clickable {
+                                    scope.launch { pagerState.animateScrollToPage(i) }
+                                },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private sealed class QuickAccessSlot {
+    data class Pin(val track: TrackDto) : QuickAccessSlot()
+    data object Shuffle : QuickAccessSlot()
+}
+
+private fun buildQuickAccessPages(pins: List<TrackDto>): List<List<QuickAccessSlot>> {
+    if (pins.isEmpty()) return listOf(listOf(QuickAccessSlot.Shuffle))
+    val pages = mutableListOf<List<QuickAccessSlot>>()
+    val firstPins = pins.take(2).map { QuickAccessSlot.Pin(it) }
+    pages += firstPins + QuickAccessSlot.Shuffle
+    var i = 2
+    while (i < pins.size) {
+        pages += pins.subList(i, minOf(i + 3, pins.size)).map { QuickAccessSlot.Pin(it) }
+        i += 3
+    }
+    return pages
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun QuickAccessPinCard(
+    track: TrackDto,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(12.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+    ) {
+        coil.compose.SubcomposeAsyncImage(
+            model = track.coverUrl(320),
+            contentDescription = track.title,
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+            loading = {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surface),
+                )
+            },
+            error = {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surface),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        track.title.take(1).uppercase(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            },
+        )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.5f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.8f),
+                    ),
+                ),
+        )
+        Text(
+            track.title.ifBlank { "Sans titre" },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+        )
+    }
+}
+
+@Composable
+private fun QuickAccessShuffleCard(
+    busy: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
+            .clickable(enabled = !busy, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            if (busy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(28.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            } else {
+                Icon(
+                    Icons.Default.Shuffle,
+                    contentDescription = "Aléatoire",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp),
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Aléatoire",
+                maxLines = 1,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
         }
     }
 }

@@ -351,43 +351,30 @@ export function PlayerBar({
             <MoreVertical className="h-5 w-5" />
           </button>
         </div>
-        <div className="mt-0.5 flex items-center justify-center gap-1" onClick={stop}>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={(e) => {
-                stop(e);
-                void prev();
-              }}
-              className="flex h-11 w-11 items-center justify-center rounded-full text-white"
-              aria-label="Titre précédent"
-            >
-              <SkipBack className="h-6 w-6 fill-white" />
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                stop(e);
-                toggle();
-              }}
-              disabled={isLoading}
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black disabled:opacity-60"
-              aria-label={uiPlaying ? 'Pause' : 'Lecture'}
-            >
-              {uiPlaying ? <Pause className="h-6 w-6 fill-black" /> : <Play className="h-6 w-6 fill-black" />}
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                stop(e);
-                void next();
-              }}
-              className="flex h-11 w-11 items-center justify-center rounded-full text-white"
-              aria-label="Titre suivant"
-            >
-              <SkipForward className="h-6 w-6 fill-white" />
-            </button>
-          </div>
+        <div className="mt-0.5 flex items-center justify-end gap-0.5 pr-1" onClick={stop}>
+          <button
+            type="button"
+            onClick={(e) => {
+              stop(e);
+              toggle();
+            }}
+            disabled={isLoading}
+            className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-black disabled:opacity-60"
+            aria-label={uiPlaying ? 'Pause' : 'Lecture'}
+          >
+            {uiPlaying ? <Pause className="h-5 w-5 fill-black" /> : <Play className="h-5 w-5 fill-black" />}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              stop(e);
+              void next();
+            }}
+            className="flex h-10 w-10 items-center justify-center rounded-full text-white"
+            aria-label="Titre suivant"
+          >
+            <SkipForward className="h-5 w-5 fill-white" />
+          </button>
         </div>
       </div>
 

@@ -712,19 +712,6 @@ private fun MainTabs(
                                     }
                                 }
                             },
-                            onPrev = {
-                                suppressSessionPublishUntil = 0L
-                                scope.launch {
-                                    if (container.receiveRemoteSync()) {
-                                        runCatching {
-                                            container.api.setSessionActive(
-                                                mapOf("targetId" to container.deviceId),
-                                            )
-                                        }
-                                    }
-                                    player.skipPrev()
-                                }
-                            },
                             onNext = {
                                 suppressSessionPublishUntil = 0L
                                 scope.launch {
