@@ -384,7 +384,8 @@ async function restoreAudioFromPersisted() {
     }
     audioEl.src = src;
     audioEl.dataset.trackId = current.id;
-    audioEl.volume = volume;
+    audioEl.muted = false;
+    audioEl.volume = volume > 0.02 ? volume : 0.9;
     const seekTo = progress > 0 ? progress : 0;
     const applySeek = () => {
       try {
@@ -645,9 +646,9 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   if (gen !== playGeneration) return;
   if (!src) throw new Error('Source audio indisponible');
 
-  // Soft fade out → swap → fade in (feel YTM, pas un vrai crossfade dual)
-  const targetVol = state.volume;
-  const fadeMs = 110;
+  const targetVol = Math.max(0, Math.min(1, state.volume > 0 ? state.volume : 0.9));
+  // Soft fade out seulement si déjà en lecture (évite un « trou » silencieux au 1er play)
+  const fadeMs = 90;
   const startVol = audio.volume;
   if (!audio.paused && startVol > 0.02) {
     const t0 = performance.now();
@@ -670,7 +671,9 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   // Ne pas révoquer les blob: gérés par streamPrefetch (réutilisés au skip suivant).
   audio.src = src;
   audio.dataset.trackId = track.id;
-  audio.volume = 0;
+  // Volume cible tout de suite — plus de mute permanent si le fadeIn est annulé
+  audio.muted = false;
+  audio.volume = targetVol;
 
   // Attendre un buffer minimal — loadeddata suffit pour démarrer (canplay = plus long)
   await new Promise<void>((resolve, reject) => {
@@ -717,26 +720,27 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
     playPromise = audio.play();
   } catch {
     audio.volume = targetVol;
+    audio.muted = false;
     return;
   }
   // UI : fin du spinner dès que play() est lancé (pas après meta / fade)
   if (gen === playGeneration) {
     usePlayer.setState({ isLoading: false, isPlaying: true, playError: null });
   }
-  void playPromise.then(() => {
-    if (gen !== playGeneration) return;
-    const t1 = performance.now();
-    const fadeIn = (now: number) => {
-      if (gen !== playGeneration) return;
-      const p = Math.min(1, (now - t1) / 160);
-      audio.volume = targetVol * p;
-      if (p < 1) requestAnimationFrame(fadeIn);
-      else audio.volume = targetVol;
-    };
-    requestAnimationFrame(fadeIn);
-  }).catch(() => {
-    audio.volume = targetVol;
-  });
+  void playPromise
+    .then(() => {
+      // Toujours ré-appliquer le volume (certains navigateurs reset après play())
+      if (get().audioEl === audio) {
+        audio.muted = false;
+        audio.volume = get().volume > 0 ? get().volume : targetVol;
+      }
+    })
+    .catch(() => {
+      if (get().audioEl === audio) {
+        audio.muted = false;
+        audio.volume = targetVol;
+      }
+    });
 
   // Meta en parallèle — ne pas bloquer isLoading ni pauser si gen change pendant le fetch
   void metaPromise.then((meta) => {
@@ -954,7 +958,9 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       queueIndex: queue.length ? queueIndex : 0,
       userQueueEnd,
       autoplay: saved.autoplay !== false,
-      volume: typeof saved.volume === 'number' ? saved.volume : 0.9,
+      // Volume 0 persisté = quasi toujours un mute accidentel (fade bug) → défaut audible
+      volume:
+        typeof saved.volume === 'number' && saved.volume > 0.02 ? saved.volume : 0.9,
       shuffle: Boolean(saved.shuffle),
       repeat: saved.repeat || 'off',
       progress: typeof saved.progress === 'number' ? saved.progress : 0,
@@ -1266,14 +1272,18 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   setDuration: (n) => set({ duration: n }),
 
   setVolume: (n) => {
+    const v = Math.max(0, Math.min(1, n));
     if (!isActivePlayer()) {
-      sendCmd({ action: 'volume', volume: n });
-      set({ volume: n });
+      sendCmd({ action: 'volume', volume: v });
+      set({ volume: v });
       return;
     }
     const { audioEl } = get();
-    if (audioEl) audioEl.volume = n;
-    set({ volume: n });
+    if (audioEl) {
+      audioEl.muted = false;
+      audioEl.volume = v;
+    }
+    set({ volume: v });
     publish();
   },
 
