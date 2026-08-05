@@ -261,23 +261,25 @@ fun YtMusicAppContent(
                             }
                         }
                     }
+                    // Toute la radio/mix = file utilisateur (pas seulement le seed en « À suivre »)
                     player.play(
                         tracks,
                         idx,
                         title,
-                        userQueueEnd = if (radioish) 1 else null,
+                        userQueueEnd = if (radioish) tracks.size else null,
                     )
                     showNowPlaying = false
                 },
                 onLoggedOut = { loggedIn = false },
                 onStartRadioFromNowPlaying = {
                     val t = player.state.value.track ?: return@MainTabs
-                    // Seed immédiat, mix ensuite
-                    player.play(listOf(t), 0, userQueueEnd = 1)
                     scope.launch {
                         val mix = buildRadioQueue(container.api, "track", t.id, t)
-                        val rest = mix.filter { it.id != t.id }
-                        if (rest.isNotEmpty()) player.addManyToQueue(rest)
+                        if (mix.isNotEmpty()) {
+                            player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
+                        } else {
+                            player.play(listOf(t), 0, userQueueEnd = 1)
+                        }
                     }
                 },
             )
