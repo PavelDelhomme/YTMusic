@@ -598,7 +598,7 @@ class PlayerController(
         if (userQueueEnd <= 0 || userQueueEnd > window.size) {
             userQueueEnd = window.size
         }
-        warmAround(window, idx)
+        warmAround(window, idx) // format + CacheWriter suite (pas de contention sur piste courante)
         player.setMediaItems(
             window.map { mediaItem(it) },
             idx,
