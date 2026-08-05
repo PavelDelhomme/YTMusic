@@ -14,6 +14,7 @@ import { TvPage } from './pages/TvPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { AdminPage } from './pages/AdminPage';
 import { VerifyEmailPage } from './pages/VerifyEmailPage';
+import { LoginDevicePage } from './pages/LoginDevicePage';
 
 export default function App() {
   return (
@@ -30,6 +31,7 @@ export default function App() {
           <Route path="profile" element={<ProfilePage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="verify-email" element={<VerifyEmailPage />} />
+          <Route path="login-device" element={<LoginDevicePage />} />
           <Route path="artist/:id/songs" element={<ArtistSongsPage />} />
           <Route path="artist/:id" element={<ArtistPage />} />
           <Route path="album/:id" element={<AlbumPage />} />
