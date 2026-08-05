@@ -11,6 +11,7 @@ import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -38,6 +39,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Favorite
@@ -700,13 +702,13 @@ fun NowPlayingScreen(
                                             }
                                         }
                                         PlayerChromeAction.Mix -> SecondaryChip(
-                                            Icons.Default.Radio, slot.label, PlayerFg, showLabel = true,
+                                            Icons.Default.Radio, "Mix", PlayerFg, showLabel = true,
                                         ) {
                                             scope.launch {
                                                 val mix = buildRadioQueue(container.api, "track", track.id, track)
                                                 if (mix.isNotEmpty()) {
-                                                    player.play(mix, 0, title = "Mix", userQueueEnd = 1)
-                                                    Toast.makeText(context, "Mix démarré", Toast.LENGTH_SHORT).show()
+                                                    player.play(mix, 0, title = "Mix", userQueueEnd = mix.size)
+                                                    Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         }
@@ -940,6 +942,8 @@ fun NowPlayingScreen(
                         onMove = player::moveInQueue,
                         onSave = { showSaveQueue = true },
                         onToggleAutoplay = player::toggleAutoplaySuggestions,
+                        onCollapsePull = { dy -> onQueueDrag(dy) },
+                        onCollapsePullEnd = { settleQueue(it) },
                         modifier = Modifier
                             .fillMaxSize()
                             .graphicsLayer {
@@ -1225,9 +1229,12 @@ private fun QueueExpandedBody(
     onMove: (Int, Int) -> Unit,
     onSave: () -> Unit,
     onToggleAutoplay: () -> Unit,
+    onCollapsePull: (Float) -> Unit = {},
+    onCollapsePullEnd: (Float) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var panelTab by remember { mutableIntStateOf(0) } // 0 = file, 1 = similaires
+    var tabDragX by remember { mutableFloatStateOf(0f) }
     val boundary = ui.userQueueEnd.coerceIn(0, ui.queue.size)
     val userTracks = ui.queue.take(boundary)
     val autoTracks = if (ui.autoplaySuggestions) ui.queue.drop(boundary) else emptyList()
@@ -1235,6 +1242,38 @@ private fun QueueExpandedBody(
     var similarTracks by remember { mutableStateOf<List<TrackDto>>(emptyList()) }
     var similarLoading by remember { mutableStateOf(false) }
     val seedId = ui.track?.id
+
+    val collapseWhenTop = remember(listState) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset {
+                // En haut de la file + pull bas → replie vers le lecteur
+                if (available.y > 0f &&
+                    listState.firstVisibleItemIndex == 0 &&
+                    listState.firstVisibleItemScrollOffset <= 2
+                ) {
+                    onCollapsePull(available.y)
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                if (listState.firstVisibleItemIndex == 0 &&
+                    listState.firstVisibleItemScrollOffset <= 2 &&
+                    available.y > 0f
+                ) {
+                    onCollapsePullEnd(available.y)
+                    return available
+                }
+                onCollapsePullEnd(0f)
+                return Velocity.Zero
+            }
+        }
+    }
 
     LaunchedEffect(seedId, panelTab) {
         if (panelTab != 1 || seedId.isNullOrBlank()) return@LaunchedEffect
@@ -1252,7 +1291,24 @@ private fun QueueExpandedBody(
         }
     }
 
-    Column(modifier.fillMaxWidth()) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .nestedScroll(collapseWhenTop)
+            .pointerInput(panelTab) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        when {
+                            tabDragX < -72f && panelTab == 0 -> panelTab = 1
+                            tabDragX > 72f && panelTab == 1 -> panelTab = 0
+                        }
+                        tabDragX = 0f
+                    },
+                    onDragCancel = { tabDragX = 0f },
+                    onHorizontalDrag = { _, amount -> tabDragX += amount },
+                )
+            },
+    ) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -1277,20 +1333,17 @@ private fun QueueExpandedBody(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .padding(horizontal = 4.dp, vertical = 0.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End,
             ) {
-                Text(
-                    "${userTracks.size} titre${if (userTracks.size > 1) "s" else ""}",
-                    Modifier
-                        .weight(1f)
-                        .padding(start = 8.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = PlayerMuted,
-                )
                 if (ui.queueIndex > 0) {
-                    TextButton(onClick = { player.clearPlayedFromQueue() }) {
-                        Text("Effacer déjà joués")
+                    IconButton(onClick = { player.clearPlayedFromQueue() }) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Effacer déjà joués",
+                            tint = PlayerMuted,
+                        )
                     }
                 }
                 IconButton(onClick = player::cycleRepeat) {
@@ -1311,8 +1364,12 @@ private fun QueueExpandedBody(
                         tint = if (ui.shuffle) MaterialTheme.colorScheme.primary else PlayerFg,
                     )
                 }
-                TextButton(onClick = onSave) {
-                    Text("Enregistrer")
+                IconButton(onClick = onSave) {
+                    Icon(
+                        Icons.Default.Save,
+                        contentDescription = "Enregistrer la file",
+                        tint = PlayerFg,
+                    )
                 }
             }
             LazyColumn(modifier.fillMaxSize(), state = listState) {

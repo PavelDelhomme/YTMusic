@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ListMusic, Mic2, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type TouchEvent } from 'react';
+import { ListMusic, Mic2, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles, Trash2 } from 'lucide-react';
 import { api, thumb, type Track } from '../api';
 import { usePlayer } from '../store/player';
 import { CoverImage } from './CoverImage';
@@ -178,6 +178,8 @@ export function NowPlaying({
   const videoRef = useRef<HTMLVideoElement>(null);
   const navigate = useNavigate();
   const queueScrollRef = useRef<HTMLDivElement>(null);
+  const coverRef = useRef<HTMLDivElement>(null);
+  const touchRef = useRef<{ x: number; y: number; atTop: boolean } | null>(null);
 
   useEffect(() => {
     if (open) setTab(initialTab);
@@ -325,7 +327,6 @@ export function NowPlaying({
   const canLoadMoreQueue = autoVisible.length < Math.min(autoList.length, QUEUE_MAX);
   const relatedArtists = uniqueArtists(related);
   const relatedForQueue = related.filter((t) => !queue.some((q) => q.id === t.id)).slice(0, 20);
-  const userRemaining = playingUser ? 1 + userUpcomingAll.length : 0;
   const saveTracks = queue.slice(
     0,
     Math.max(boundary, playingUser ? queueIndex + 1 : Math.max(boundary, queueIndex + 1)),
@@ -336,6 +337,38 @@ export function NowPlaying({
     if (!el || !canLoadMoreQueue) return;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
       setQueueVisible((n) => Math.min(QUEUE_MAX, n + QUEUE_PAGE, autoList.length));
+    }
+  };
+
+  const onPanelTouchStart = (e: TouchEvent) => {
+    const t = e.touches[0];
+    if (!t) return;
+    const el = queueScrollRef.current;
+    touchRef.current = {
+      x: t.clientX,
+      y: t.clientY,
+      atTop: !el || el.scrollTop <= 2,
+    };
+  };
+
+  const onPanelTouchEnd = (e: TouchEvent) => {
+    const start = touchRef.current;
+    touchRef.current = null;
+    const t = e.changedTouches[0];
+    if (!start || !t) return;
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    // Swipe horizontal → File ↔ Similaires
+    if (Math.abs(dx) > 56 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      if (dx < 0 && tab === 'queue') setTab('related');
+      else if (dx > 0 && tab === 'related') setTab('queue');
+      else if (dx < 0 && tab === 'lyrics') setTab('related');
+      else if (dx > 0 && tab === 'lyrics') setTab('queue');
+      return;
+    }
+    // En haut + pull bas → réaffiche le lecteur (cover)
+    if (tab === 'queue' && start.atTop && dy > 72 && Math.abs(dy) > Math.abs(dx)) {
+      coverRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   };
 
@@ -353,7 +386,7 @@ export function NowPlaying({
         </div>
       )}
       <div className="relative mx-auto grid min-h-0 w-full max-w-[1800px] flex-1 grid-cols-1 gap-3 overflow-hidden px-2 pb-[100px] pt-3 sm:px-4 md:grid-cols-[minmax(260px,0.85fr)_minmax(420px,1.25fr)] md:gap-8 md:px-6 lg:grid-cols-[minmax(280px,0.75fr)_minmax(520px,1.35fr)] lg:gap-10 lg:px-10 xl:px-14">
-        <div className="flex min-h-0 flex-col items-center justify-center overflow-hidden">
+        <div ref={coverRef} className="flex min-h-0 flex-col items-center justify-center overflow-hidden">
           <div className="mb-4 flex rounded-full bg-[#1d1d1d] p-1 text-xs font-medium">
             <button
               type="button"
@@ -412,10 +445,14 @@ export function NowPlaying({
           </div>
         </div>
 
-        <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden md:pt-1">
-          <div className="mb-2 flex border-b border-white/10 text-[11px] font-bold tracking-wider sm:text-xs">
+        <aside
+          className="flex min-h-0 min-w-0 flex-col overflow-hidden md:pt-1"
+          onTouchStart={onPanelTouchStart}
+          onTouchEnd={onPanelTouchEnd}
+        >
+          <div className="mb-1 flex border-b border-white/10 text-[11px] font-bold tracking-wider sm:text-xs">
             <TabBtn active={tab === 'queue'} onClick={() => setTab('queue')} icon={<ListMusic className="h-3.5 w-3.5" />}>
-              À suivre
+              File
             </TabBtn>
             <TabBtn active={tab === 'lyrics'} onClick={() => setTab('lyrics')} icon={<Mic2 className="h-3.5 w-3.5" />}>
               Paroles
@@ -427,21 +464,23 @@ export function NowPlaying({
 
           <div
             ref={queueScrollRef}
-            className="min-h-0 flex-1 overflow-y-auto"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain"
             onScroll={tab === 'queue' ? onQueueScroll : undefined}
           >
             {tab === 'queue' && (
               <div>
                 <section>
-                    <div className="mb-3 flex items-center justify-between gap-2 px-1 pt-1">
-                    <p className="min-w-0 truncate text-xs text-yt-muted">
-                      <span className="font-medium text-white">File d&apos;attente</span>
-                      <span className="ml-2 tabular-nums text-yt-muted">
-                        {playedBefore.length > 0 ? `${playedBefore.length} avant · ` : ''}
-                        {userRemaining} restant{userRemaining > 1 ? 's' : ''}
-                      </span>
-                    </p>
-                    <div className="flex shrink-0 items-center gap-0.5">
+                    <div className="mb-2 flex items-center justify-end gap-0.5 px-1 pt-0.5">
+                      {playedBefore.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => clearPlayedFromQueue()}
+                          title="Effacer déjà joués"
+                          className="flex h-8 w-8 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={cycleRepeat}
@@ -472,29 +511,18 @@ export function NowPlaying({
                         type="button"
                         disabled={saveTracks.length === 0}
                         onClick={() => setSaveOpen(true)}
-                        className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/16 disabled:opacity-40"
+                        className="flex h-8 w-8 items-center justify-center rounded-full text-yt-muted transition hover:bg-white/10 hover:text-white disabled:opacity-40"
                         title="Enregistrer la file dans une playlist"
                       >
-                        <Save className="h-3.5 w-3.5" />
-                        Enregistrer
+                        <Save className="h-4 w-4" />
                       </button>
-                    </div>
                   </div>
 
                   {playedBefore.length > 0 && (
                     <div className="mb-3">
-                      <div className="mb-1.5 flex items-center justify-between gap-2 px-1">
-                        <p className="text-[11px] font-medium uppercase tracking-wide text-yt-muted">
-                          Déjà joués
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => clearPlayedFromQueue()}
-                          className="text-[11px] font-medium text-yt-muted hover:text-white"
-                        >
-                          Effacer
-                        </button>
-                      </div>
+                      <p className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide text-yt-muted">
+                        Déjà joués
+                      </p>
                       <div className="opacity-70">
                         {playedBefore.map((t, i) => (
                           <TrackRow
@@ -511,7 +539,6 @@ export function NowPlaying({
                       </div>
                     </div>
                   )}
-
                   <p className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide text-yt-muted">
                     En cours
                   </p>

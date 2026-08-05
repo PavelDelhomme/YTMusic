@@ -1773,8 +1773,13 @@ export const usePlayer = create<PlayerState>((set, get) => ({
 
       const mix = [seedTrack, ...pool.filter((t) => t.id !== seedTrack!.id)];
       set({ related: pool });
-      await get().play(seedTrack, mix, { preserveQueue: true, noAutoRadio: false });
-    } catch (err) {
+      // Toute la radio = file utilisateur (pas « À suivre »)
+      await get().play(seedTrack, mix, { preserveQueue: true, noAutoRadio: true });
+      set({ showQueue: true, showLyrics: false, autoplay: true });
+      // Remplit « À suivre » après, sans mélanger avec le mix
+      window.setTimeout(() => {
+        if (get().current?.id === seedTrack?.id) void ensureAutoRadio(seedTrack!.id);
+      }, 2_000);    } catch (err) {
       console.error('startRadio', err);
       if (seed && isPlayable(seed)) {
         await get().play(seed, [seed], { preserveQueue: true });
