@@ -8,6 +8,27 @@ export type PinRow = {
   payload?: unknown;
 };
 
+const PINS_CACHE_KEY = 'ytm_pins_cache_v1';
+
+function readPinsCache(): PinRow[] {
+  try {
+    const raw = localStorage.getItem(PINS_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as PinRow[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePinsCache(pins: PinRow[]) {
+  try {
+    localStorage.setItem(PINS_CACHE_KEY, JSON.stringify(pins.slice(0, 64)));
+  } catch {
+    /* quota */
+  }
+}
+
 type PinsState = {
   pins: PinRow[];
   loaded: boolean;
@@ -22,15 +43,41 @@ type PinsState = {
   }) => Promise<'pinned' | 'unpinned'>;
 };
 
+function pinSyncPayload(p: PinRow) {
+  const payload =
+    p.payload && typeof p.payload === 'object'
+      ? (p.payload as Record<string, unknown>)
+      : {};
+  return {
+    kind: p.kind || String(payload.type || 'song'),
+    targetId: p.targetId || String(payload.id || p.id || ''),
+    id: p.targetId || String(payload.id || p.id || ''),
+    payload: {
+      ...payload,
+      id: String(payload.id || p.targetId || p.id || ''),
+      type: String(payload.type || p.kind || 'song'),
+      title: String(payload.title || payload.name || p.targetId || ''),
+    },
+  };
+}
+
 export const usePins = create<PinsState>((set, get) => ({
   pins: [],
   loaded: false,
   refresh: async () => {
     try {
+      // Pousse le cache local (même origine) puis tire l’union serveur.
+      const cached = readPinsCache();
+      if (cached.length) {
+        await api.syncPins(cached.map(pinSyncPayload)).catch(() => null);
+      }
       const r = await api.pins();
-      set({ pins: (r.pins || []) as PinRow[], loaded: true });
+      const pins = (r.pins || []) as PinRow[];
+      writePinsCache(pins);
+      set({ pins, loaded: true });
     } catch {
-      set({ loaded: true });
+      const cached = readPinsCache();
+      set({ pins: cached, loaded: true });
     }
   },
   isPinned: (targetId) => get().pins.some((p) => p.targetId === targetId),
@@ -39,7 +86,9 @@ export const usePins = create<PinsState>((set, get) => ({
     const existing = get().pinIdFor(item.id);
     if (existing) {
       const r = await api.removePin(existing);
-      set({ pins: (r.pins || []) as PinRow[], loaded: true });
+      const pins = (r.pins || []) as PinRow[];
+      writePinsCache(pins);
+      set({ pins, loaded: true });
       return 'unpinned';
     }
     const payload = {
@@ -56,7 +105,9 @@ export const usePins = create<PinsState>((set, get) => ({
       payload,
       id: item.id,
     });
-    set({ pins: (r.pins || []) as PinRow[], loaded: true });
+    const pins = (r.pins || []) as PinRow[];
+    writePinsCache(pins);
+    set({ pins, loaded: true });
     return 'pinned';
   },
 }));
