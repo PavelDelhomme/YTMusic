@@ -21,7 +21,8 @@ import {
   artistsFromHeader,
   extractYear,
   inferAlbumReleaseType,
-  isJunkArtistName,
+  isPlausibleArtistName,
+  cleanMusicTitle,
 } from './mappers.js';
 import { getFullLibrary, getHistory } from './library.js';
 import { listFollows, listSearchHistory } from './prefs.js';
@@ -716,11 +717,11 @@ async function fetchTrackMeta(videoId: string, light = false) {
         name: String(a.name || '').trim(),
         id: a.channel_id || a.id,
       }))
-      .filter((a: { name: string }) => a.name && !isJunkArtistName(a.name));
+      .filter((a: { name: string }) => a.name && isPlausibleArtistName(a.name));
   }
   if (!artists.length && basic.author) {
     artists = parseAuthorField(String(basic.author), basic.channel_id).filter(
-      (a) => a.name && !isJunkArtistName(a.name),
+      (a) => a.name && isPlausibleArtistName(a.name),
     );
   }
 
@@ -778,7 +779,7 @@ async function fetchTrackMeta(videoId: string, light = false) {
 
   const track: Track = {
     id: videoId,
-    title: String(basic.title || 'Sans titre'),
+    title: cleanMusicTitle(String(basic.title || '')) || String(basic.title || 'Sans titre'),
     artists,
     album,
     durationSeconds: basic.duration,
@@ -1243,7 +1244,7 @@ export async function getAlbum(albumId: string): Promise<{
         name: String(a?.name || '').trim(),
         id: a?.channel_id || a?.id,
       }))
-      .filter((a) => !isJunkArtistName(a.name));
+      .filter((a) => isPlausibleArtistName(a.name));
   }
   const year =
     extractYear(header.year) ||
@@ -1266,7 +1267,7 @@ export async function getAlbum(albumId: string): Promise<{
     const counts = new Map<string, { name: string; id?: string; n: number }>();
     for (const t of tracks) {
       for (const a of t.artists || []) {
-        if (!a.name || isJunkArtistName(a.name)) continue;
+        if (!a.name || !isPlausibleArtistName(a.name)) continue;
         const key = (a.id || a.name).toLowerCase();
         const cur = counts.get(key);
         if (cur) cur.n += 1;
@@ -1285,7 +1286,7 @@ export async function getAlbum(albumId: string): Promise<{
     if (firstId) {
       try {
         const { track } = await fetchTrackMeta(firstId, true);
-        artists = (track.artists || []).filter((a) => a.name && !isJunkArtistName(a.name));
+        artists = (track.artists || []).filter((a) => a.name && isPlausibleArtistName(a.name));
       } catch {
         /* ignore */
       }
@@ -1297,7 +1298,7 @@ export async function getAlbum(albumId: string): Promise<{
     if (firstId) {
       try {
         const { track } = await fetchTrackMeta(firstId, false);
-        artists = (track.artists || []).filter((a) => a.name && !isJunkArtistName(a.name));
+        artists = (track.artists || []).filter((a) => a.name && isPlausibleArtistName(a.name));
       } catch {
         /* ignore */
       }
@@ -1307,7 +1308,7 @@ export async function getAlbum(albumId: string): Promise<{
   // Enrichir les pistes sans artiste
   if (artists.length) {
     for (const t of tracks) {
-      const useful = (t.artists || []).filter((a) => a.name && !isJunkArtistName(a.name));
+      const useful = (t.artists || []).filter((a) => a.name && isPlausibleArtistName(a.name));
       if (!useful.length) t.artists = artists;
       else t.artists = useful;
     }
@@ -1353,6 +1354,10 @@ export async function getPlaylist(playlistId: string): Promise<{
     .filter(Boolean)
     .map((t: Track) => {
       if (!t.thumbnails?.length && cover.length) t.thumbnails = cover;
+      if (!t.artists?.length && fromHeaderArtists.length) t.artists = fromHeaderArtists;
+      else if (!t.artists?.length && meta.author) {
+        t.artists = [{ name: String(meta.author) }];
+      }
       return t;
     }) as Track[];
   return { playlist: meta, tracks };
