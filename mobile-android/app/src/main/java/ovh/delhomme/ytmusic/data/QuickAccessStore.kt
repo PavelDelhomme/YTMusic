@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.map
 
 private val Context.quickAccessStore by preferencesDataStore("ytmusic_quick_access")
 
-/** Pins locaux + sync serveur (`/api/pins`) pour le rayon Accueil « Épinglé ». */
+/** Pins locaux + sync serveur (`/api/pins`) pour le rayon Accueil « Accès rapide ». */
 class QuickAccessStore(private val context: Context) {
     private val key = stringPreferencesKey("pins_json")
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
@@ -35,16 +35,72 @@ class QuickAccessStore(private val context: Context) {
         }
     }
 
-    /** Charge les pins serveur et remplace le cache local. */
+    private fun pinToTrack(pin: PinDto): TrackDto? {
+        val payload = pin.payload
+        val id = payload?.id?.takeIf { it.isNotBlank() }
+            ?: pin.targetId?.takeIf { it.isNotBlank() }
+            ?: return null
+        val title = payload?.title?.takeIf { it.isNotBlank() } ?: id
+        return TrackDto(
+            id = id,
+            title = title,
+            artists = payload?.artists,
+            album = payload?.album,
+            duration = payload?.duration,
+            durationSeconds = payload?.durationSeconds,
+            thumbnails = payload?.thumbnails,
+            type = payload?.type ?: pin.kind ?: "song",
+        )
+    }
+
+    private fun trackToPinBody(track: TrackDto): Map<String, Any?> =
+        mapOf(
+            "kind" to (track.type ?: "song"),
+            "targetId" to track.id,
+            "id" to track.id,
+            "payload" to mapOf(
+                "id" to track.id,
+                "title" to track.title,
+                "type" to (track.type ?: "song"),
+                "artists" to (track.artists?.map { mapOf("name" to it.name, "id" to it.id) } ?: emptyList<Map<String, String?>>()),
+                "album" to track.album?.let { mapOf("name" to it.name, "id" to it.id) },
+                "duration" to track.duration,
+                "durationSeconds" to track.durationSeconds,
+                "thumbnails" to (
+                    track.thumbnails?.map {
+                        mapOf("url" to it.url, "width" to it.width, "height" to it.height)
+                    } ?: emptyList<Map<String, Any?>>()
+                    ),
+            ),
+        )
+
+    /**
+     * Sync bidirectionnelle :
+     * 1) lit le serveur
+     * 2) pousse les pins locaux absents du serveur
+     * 3) remplace le cache local par l’union serveur
+     */
     suspend fun syncFromApi(api: YtMusicApi) {
+        val local = pins.first()
         val remote = runCatching { api.pins().pins }.getOrDefault(emptyList())
-        val tracks = remote.mapNotNull { pin ->
-            pin.payload?.copy(id = pin.payload.id.ifBlank { pin.targetId.orEmpty() })
-                ?.takeIf { it.id.isNotBlank() }
+        val remoteTracks = remote.mapNotNull { pinToTrack(it) }
+        val remoteIds = remoteTracks.map { it.id }.toSet()
+        val localOnly = local.filter { it.id.isNotBlank() && it.id !in remoteIds }
+        val toSync = (remoteTracks + localOnly).distinctBy { it.id }
+
+        val synced = if (toSync.isNotEmpty()) {
+            runCatching {
+                api.syncPins(mapOf("pins" to toSync.map { trackToPinBody(it) })).pins
+            }.getOrDefault(remote)
+        } else {
+            remote
         }
-        if (tracks.isNotEmpty() || remote.isEmpty()) {
-            replaceAll(tracks)
-        }
+
+        val tracks = synced.mapNotNull { pinToTrack(it) }
+            .ifEmpty { toSync }
+            .distinctBy { it.id }
+            .take(48)
+        replaceAll(tracks)
     }
 
     suspend fun toggle(track: TrackDto, api: YtMusicApi? = null): Boolean {
@@ -67,14 +123,7 @@ class QuickAccessStore(private val context: Context) {
         if (api != null) {
             runCatching {
                 if (nowPinned) {
-                    api.addPin(
-                        mapOf(
-                            "kind" to (track.type ?: "song"),
-                            "targetId" to track.id,
-                            "payload" to track,
-                            "id" to track.id,
-                        ),
-                    )
+                    api.addPin(trackToPinBody(track))
                 } else {
                     api.removePin(track.id)
                 }

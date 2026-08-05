@@ -134,6 +134,7 @@ import {
   listPins,
   listSearchHistory,
   listWeights,
+  mergePins,
   recoAdminStats,
   recordListenEvent,
   removePin,
@@ -1327,6 +1328,16 @@ app.post('/api/pins', accountRequired, (req, res) => {
   }
   const pins = addPin(req.userId!, kind, targetId, req.body?.payload || req.body);
   res.json({ pins });
+});
+
+/** Sync multi-appareils : upsert une liste, renvoie l’union serveur. */
+app.post('/api/pins/sync', accountRequired, (req, res) => {
+  const raw = Array.isArray(req.body?.pins) ? req.body.pins : Array.isArray(req.body) ? req.body : [];
+  const items = raw
+    .map((x: unknown) => (x && typeof x === 'object' ? (x as Record<string, unknown>) : null))
+    .filter(Boolean) as { kind?: string; targetId?: string; id?: string; payload?: unknown }[];
+  const result = mergePins(req.userId!, items);
+  res.json({ ok: true, ...result });
 });
 
 app.delete('/api/pins/:id', accountRequired, (req, res) => {

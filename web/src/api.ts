@@ -517,6 +517,12 @@ export const api = {
   pins: () => req<{ pins: any[] }>('/api/pins'),
   addPin: (payload: Record<string, unknown>) =>
     req<{ pins: any[] }>('/api/pins', { method: 'POST', body: JSON.stringify(payload) }),
+  /** Upsert multi-appareils — union serveur, pas d’écrasement. */
+  syncPins: (pins: Record<string, unknown>[]) =>
+    req<{ ok: boolean; pins: any[]; upserted?: number; total?: number }>('/api/pins/sync', {
+      method: 'POST',
+      body: JSON.stringify({ pins }),
+    }),
   removePin: (id: string) => req<{ pins: any[] }>(`/api/pins/${id}`, { method: 'DELETE' }),
   publishSessionState: (state: Record<string, unknown>) =>
     req<{ devices: any[]; activePlayerId: string | null; state: any }>('/api/session/state', {
