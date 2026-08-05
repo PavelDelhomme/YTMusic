@@ -60,6 +60,7 @@ export function HomePage() {
   const [startingRadio, setStartingRadio] = useState<string | null>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const playQueue = usePlayer((s) => s.playQueue);
+  const enqueueAfterCurrent = usePlayer((s) => s.enqueueAfterCurrent);
   const isPlaying = usePlayer((s) => s.isPlaying);
   const currentId = usePlayer((s) => s.current?.id);
   const pinCount = usePins((s) => s.pins.length);
@@ -190,17 +191,26 @@ export function HomePage() {
   const startRadio = async (id: string) => {
     setStartingRadio(id);
     const end = perfStart('home.mix.play');
+    const soft = Boolean(isPlaying && currentId);
     try {
       const preview = (radioPreviews[id] || []).filter((t) =>
         /^[a-zA-Z0-9_-]{11}$/.test(t.id),
       );
       if (preview.length) {
-        void playQueue(preview, 0, { sourceId: id, sourceKind: 'mix' });
+        if (soft) {
+          enqueueAfterCurrent(preview, { replaceRest: true, cap: 36, sourceId: id, sourceKind: 'mix' });
+        } else {
+          void playQueue(preview, 0, { sourceId: id, sourceKind: 'mix' });
+        }
         void warmFormats(preview.slice(0, 2).map((t) => t.id));
       }
       const r = await api.recoRadio(id);
       if (r.tracks?.length) {
-        void playQueue(r.tracks, 0, { sourceId: id, sourceKind: 'mix' });
+        if (soft || (isPlaying && currentId)) {
+          enqueueAfterCurrent(r.tracks, { replaceRest: true, cap: 36, sourceId: id, sourceKind: 'mix' });
+        } else {
+          void playQueue(r.tracks, 0, { sourceId: id, sourceKind: 'mix' });
+        }
         void warmFormats(r.tracks.slice(0, 3).map((t) => t.id));
       }
     } catch (e) {
