@@ -578,8 +578,10 @@ export const api = {
   track: (id: string) =>
     req<{ track: Track; streamUrl: string; cached: boolean }>(`/api/track/${id}`),
   upNext: (id: string) => req<{ tracks: Track[] }>(`/api/track/${id}/upnext`),
-  related: (id: string) =>
-    req<{ related: Track[]; radio: Track[] }>(`/api/track/${id}/related`),
+  related: (id: string, opts?: { fast?: boolean }) =>
+    req<{ related: Track[]; radio: Track[]; tracks?: Track[]; fast?: boolean }>(
+      `/api/track/${id}/related${opts?.fast ? '?fast=1' : ''}`,
+    ),
   albumRadio: (id: string) => req<{ tracks: Track[] }>(`/api/album/${id}/radio`),
   artistRadio: (id: string) => req<{ tracks: Track[] }>(`/api/artist/${id}/radio`),
   artistSongs: (id: string, limit?: number) =>
