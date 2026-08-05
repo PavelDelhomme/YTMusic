@@ -466,7 +466,8 @@ export async function similarForUserFast(userId: string, trackId: string, seedTr
       /* ignore */
     }
   }
-  const up = await getUpNext(trackId);
+  // Hydrate léger (10) pour répondre vite — le full related enrichit ensuite
+  const up = await getUpNext(trackId, { hydrateLimit: 10 });
   let pool = up.filter((t) => t.id !== trackId);
   try {
     const taste = getLibraryTasteTracks(userId, 40);

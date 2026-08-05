@@ -152,6 +152,7 @@ export function NowPlaying({
   const queueIndex = usePlayer((s) => s.queueIndex);
   const userQueueEnd = usePlayer((s) => s.userQueueEnd);
   const autoplay = usePlayer((s) => s.autoplay);
+  const autoRadioLoading = usePlayer((s) => s.autoRadioLoading);
   const related = usePlayer((s) => s.related);
   const playAt = usePlayer((s) => s.playAt);
   const appendRelated = usePlayer((s) => s.appendRelated);
@@ -637,9 +638,22 @@ export function NowPlaying({
                   )}
 
                   {autoplay && autoList.length === 0 && relatedForQueue.length === 0 && (
-                    <p className="px-2 py-4 text-center text-sm text-yt-muted">
-                      Chargement des suggestions…
-                    </p>
+                    <div className="px-2 py-4 text-center">
+                      <p className="text-sm text-yt-muted">
+                        {autoRadioLoading
+                          ? 'Chargement des suggestions…'
+                          : 'Aucune suggestion pour l’instant.'}
+                      </p>
+                      {!autoRadioLoading && (
+                        <button
+                          type="button"
+                          className="mt-2 text-xs text-yt-red hover:underline"
+                          onClick={() => topUpAutoplay()}
+                        >
+                          Réessayer
+                        </button>
+                      )}
+                    </div>
                   )}
 
                   {autoplay && relatedForQueue.length > 0 && autoList.length === 0 && (
