@@ -5,15 +5,17 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.runBlocking
 import okhttp3.Authenticator
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import okhttp3.Route
 import okhttp3.logging.HttpLoggingInterceptor
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import ovh.delhomme.ytmusic.BuildConfig
+import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -73,6 +75,22 @@ class AppContainer(context: Context) {
             if (cleaned == null) remove("base_url") else putString("base_url", cleaned)
         }.apply()
     }
+
+    /** DEV = LAN / localhost ; PROD = HTTPS distant. */
+    fun apiEnvKind(base: String = resolvedApiBase()): String {
+        val u = base.trimEnd('/').lowercase()
+        return when {
+            u.startsWith("https://") &&
+                !u.contains("127.0.0.1") &&
+                !u.contains("localhost") &&
+                !u.contains("192.168.") &&
+                !u.contains("10.") -> "prod"
+            else -> "dev"
+        }
+    }
+
+    fun apiEnvLabel(base: String = resolvedApiBase()): String =
+        if (apiEnvKind(base) == "prod") "PROD" else "DEV"
 
     private val moshi: Moshi = Moshi.Builder()
         // Avant KotlinJsonAdapterFactory : duration (et autres) string|number
@@ -225,12 +243,11 @@ class AppContainer(context: Context) {
 
     /**
      * Refresh JWT via client « plain » (pas d’Authenticator).
-     * @return nouvel access token, ou null si échec (session nettoyée).
+     * Ne clear la session que sur erreur d’auth (401/403), jamais sur timeout / API down.
      */
     private suspend fun refreshAccessToken(): String? {
         val refresh = tokenStore.getRefresh()
         if (refresh.isNullOrBlank()) {
-            tokenStore.clear()
             return null
         }
         return try {
@@ -242,8 +259,10 @@ class AppContainer(context: Context) {
                 r.user.name,
             )
             r.token
-        } catch (_: Exception) {
-            tokenStore.clear()
+        } catch (e: Exception) {
+            if (isAuthFailure(e)) {
+                tokenStore.clear()
+            }
             null
         }
     }
@@ -263,16 +282,18 @@ class AppContainer(context: Context) {
         if (ttl > 60_000L) return true
 
         if (refresh.isNullOrBlank()) {
-            if (ttl > 0) return true
-            tokenStore.clear()
-            return false
+            // Pas de refresh : garder l’access tant qu’il n’est pas expiré
+            return ttl > 0
         }
-        return refreshAccessToken() != null
+        // Refresh échoué réseau → rester OK si access encore un peu valide
+        if (refreshAccessToken() != null) return true
+        return ttl > 0 || !tokenStore.getAccess().isNullOrBlank()
     }
 
     /**
-     * Validation réelle au démarrage : /api/auth/me doit renvoyer un user.
-     * Si le JWT est rejeté (401 silencieux → user null), force un refresh.
+     * Validation au démarrage.
+     * Tokens présents + API injoignable → reste connecté (mode dégradé).
+     * Clear uniquement sur rejet auth explicite.
      */
     suspend fun validateSession(): Boolean {
         tokenStore.warmCache()
@@ -280,19 +301,51 @@ class AppContainer(context: Context) {
         val refresh = tokenStore.getRefresh()
         if (access.isNullOrBlank() && refresh.isNullOrBlank()) return false
 
-        val meOk = !access.isNullOrBlank() &&
-            runCatching { api.me().user }.getOrNull() != null
-        if (meOk) return true
+        val meResult = runCatching { api.me() }
+        if (meResult.getOrNull()?.user != null) return true
+
+        val err = meResult.exceptionOrNull()
+        if (isNetworkFailure(err)) {
+            // API LAN down / Wi‑Fi pas prêt — ne pas déconnecter
+            return true
+        }
 
         if (refresh.isNullOrBlank()) {
-            tokenStore.clear()
-            return false
+            if (isAuthFailure(err)) tokenStore.clear()
+            // Autre erreur HTTP sans refresh : garder si access encore là et pas auth
+            return !isAuthFailure(err) && !access.isNullOrBlank()
         }
-        if (refreshAccessToken() == null) return false
-        return runCatching { api.me().user }.getOrNull() != null
+
+        if (refreshAccessToken() == null) {
+            // Auth wipe déjà fait dans refreshAccessToken si 401 ;
+            // réseau → tokens encore là → rester connecté
+            return !tokenStore.getRefresh().isNullOrBlank() ||
+                !tokenStore.getAccess().isNullOrBlank()
+        }
+        val me2 = runCatching { api.me() }
+        if (me2.getOrNull()?.user != null) return true
+        return isNetworkFailure(me2.exceptionOrNull())
     }
 
     companion object {
+        fun isNetworkFailure(t: Throwable?): Boolean {
+            var e = t
+            while (e != null) {
+                if (e is IOException) return true
+                e = e.cause
+            }
+            return false
+        }
+
+        fun isAuthFailure(t: Throwable?): Boolean {
+            var e = t
+            while (e != null) {
+                if (e is HttpException && (e.code() == 401 || e.code() == 403)) return true
+                e = e.cause
+            }
+            return false
+        }
+
         /** Decode JWT exp sans vérif crypto (indicatif client). */
         fun jwtExpiresInMs(jwt: String): Long {
             return try {

@@ -107,8 +107,13 @@ fun LoginScreen(
             color = MaterialTheme.colorScheme.primary,
         )
         Text(
-            "App Android native",
+            "App Android native · ${container.apiEnvLabel()}",
             style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            container.resolvedApiBase(),
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(28.dp))
