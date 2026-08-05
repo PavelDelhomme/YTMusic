@@ -151,6 +151,7 @@ import {
   radioForUser,
   RADIO_CATEGORIES,
   similarForUser,
+  similarForUserFast,
   albumSimilarForUser,
   artistSimilarForUser,
   suggestSearch,
@@ -1442,9 +1443,9 @@ app.put('/api/admin/reco/weights', requireAdmin, (req, res) => {
 
 app.get('/api/track/:id/upnext', accountRequired, async (req, res) => {
   try {
+    // Rapide : upNext YT seulement (pas de similarForUser lourd)
     const tracks = await getUpNext(p(req.params.id));
-    const ranked = await similarForUser(req.userId!, p(req.params.id));
-    res.json({ tracks: ranked.tracks.length ? ranked.tracks : tracks });
+    res.json({ tracks });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -1452,12 +1453,16 @@ app.get('/api/track/:id/upnext', accountRequired, async (req, res) => {
 
 app.get('/api/track/:id/related', accountRequired, async (req, res) => {
   try {
-    const sim = await similarForUser(req.userId!, p(req.params.id));
+    const fast = String(req.query.fast || '') === '1';
+    const sim = fast
+      ? await similarForUserFast(req.userId!, p(req.params.id))
+      : await similarForUser(req.userId!, p(req.params.id));
     res.json({
       related: sim.tracks.length ? sim.tracks : sim.related,
       radio: sim.tracks.length ? sim.tracks : sim.radio,
       rawRelated: sim.related,
       rawRadio: sim.radio,
+      fast,
     });
   } catch (err) {
     res.status(500).json({ error: String(err) });
