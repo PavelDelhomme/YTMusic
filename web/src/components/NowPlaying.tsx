@@ -164,20 +164,13 @@ export function NowPlaying({
   const toggleShuffle = usePlayer((s) => s.toggleShuffle);
   const cycleRepeat = usePlayer((s) => s.cycleRepeat);
   const topUpAutoplay = usePlayer((s) => s.topUpAutoplay);
-  const audioEl = usePlayer((s) => s.audioEl);
-  const isPlaying = usePlayer((s) => s.isPlaying);
   const openActions = useItemActions((s) => s.open);
   const [tab, setTab] = useState<NowPlayingTab>(initialTab);
-  const [mediaMode, setMediaMode] = useState<'cover' | 'video'>('cover');
   const [lyricsText, setLyricsText] = useState<string | null>(null);
   const [lyricsTimed, setLyricsTimed] = useState<{ startMs: number; text: string }[] | null>(null);
   const [lyricsLoading, setLyricsLoading] = useState(false);
   const [queueVisible, setQueueVisible] = useState(QUEUE_PAGE);
   const [saveOpen, setSaveOpen] = useState(false);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [videoError, setVideoError] = useState<string | null>(null);
-  const [videoLoading, setVideoLoading] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
   const navigate = useNavigate();
   const queueScrollRef = useRef<HTMLDivElement>(null);
   const coverRef = useRef<HTMLDivElement>(null);
@@ -238,80 +231,6 @@ export function NowPlaying({
       cancelled = true;
     };
   }, [open, tab, current?.id]);
-
-  // Charge l’URL vidéo progressive quand on bascule sur « Vidéo »
-  useEffect(() => {
-    if (!open || mediaMode !== 'video' || !current?.id) return;
-    let cancelled = false;
-    setVideoLoading(true);
-    setVideoError(null);
-    setVideoUrl(null);
-    void api
-      .streamUrl(current.id, 'video')
-      .then((r) => {
-        if (cancelled) return;
-        if (!r.url) throw new Error('URL vidéo vide');
-        setVideoUrl(r.url);
-      })
-      .catch((e) => {
-        if (!cancelled) setVideoError(String(e?.message || e || 'Vidéo indisponible'));
-      })
-      .finally(() => {
-        if (!cancelled) setVideoLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, mediaMode, current?.id]);
-
-  // Sync image+son : vidéo muette calée sur l’audio (pause / seek inclus)
-  useEffect(() => {
-    if (mediaMode !== 'video' || !videoRef.current || !audioEl) return;
-    const v = videoRef.current;
-    v.muted = true;
-    const sync = () => {
-      if (!Number.isFinite(audioEl.currentTime)) return;
-      if (Math.abs(v.currentTime - audioEl.currentTime) > 0.4) {
-        try {
-          v.currentTime = audioEl.currentTime;
-        } catch {
-          /* ignore seek race */
-        }
-      }
-      if (audioEl.paused || audioEl.ended) {
-        if (!v.paused) v.pause();
-      } else if (v.paused) {
-        void v.play().catch(() => {});
-      }
-    };
-    sync();
-    const onPlay = () => void v.play().catch(() => {});
-    const onPause = () => v.pause();
-    const onSeek = () => {
-      try {
-        v.currentTime = audioEl.currentTime;
-      } catch {
-        /* */
-      }
-    };
-    audioEl.addEventListener('play', onPlay);
-    audioEl.addEventListener('pause', onPause);
-    audioEl.addEventListener('seeked', onSeek);
-    audioEl.addEventListener('timeupdate', sync);
-    const iv = window.setInterval(sync, 500);
-    return () => {
-      audioEl.removeEventListener('play', onPlay);
-      audioEl.removeEventListener('pause', onPause);
-      audioEl.removeEventListener('seeked', onSeek);
-      audioEl.removeEventListener('timeupdate', sync);
-      window.clearInterval(iv);
-      v.pause();
-    };
-  }, [mediaMode, audioEl, videoUrl, isPlaying]);
-
-  useEffect(() => {
-    if (!open) setMediaMode('cover');
-  }, [open, current?.id]);
 
   if (!open || !current) return null;
 
@@ -389,61 +308,8 @@ export function NowPlaying({
       )}
       <div className="relative mx-auto grid min-h-0 w-full max-w-[1800px] flex-1 grid-cols-1 gap-3 overflow-hidden px-2 pb-[100px] pt-3 sm:px-4 md:grid-cols-[minmax(260px,0.85fr)_minmax(420px,1.25fr)] md:gap-8 md:px-6 lg:grid-cols-[minmax(280px,0.75fr)_minmax(520px,1.35fr)] lg:gap-10 lg:px-10 xl:px-14">
         <div ref={coverRef} className="flex min-h-0 flex-col items-center justify-center overflow-hidden">
-          <div className="mb-4 flex rounded-full bg-[#1d1d1d] p-1 text-xs font-medium">
-            <button
-              type="button"
-              onClick={() => setMediaMode('cover')}
-              className={`rounded-full px-5 py-1.5 transition ${
-                mediaMode === 'cover' ? 'bg-white/15 text-white' : 'text-yt-muted hover:text-white'
-              }`}
-            >
-              Titre
-            </button>
-            <button
-              type="button"
-              onClick={() => setMediaMode('video')}
-              className={`rounded-full px-5 py-1.5 transition ${
-                mediaMode === 'video' ? 'bg-white/15 text-white' : 'text-yt-muted hover:text-white'
-              }`}
-            >
-              Vidéo
-            </button>
-          </div>
           <div className="relative aspect-square w-full max-w-[min(88vw,520px)] overflow-hidden rounded-md bg-yt-elevated shadow-[0_20px_60px_rgba(0,0,0,0.65)] lg:max-w-[min(42vw,560px)]">
-            {mediaMode === 'cover' ? (
-              <CoverImage item={current} size={800} rounded="md" alt={current.title} />
-            ) : videoLoading ? (
-              <div className="flex h-full items-center justify-center text-sm text-yt-muted">Chargement vidéo…</div>
-            ) : videoError ? (
-              <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-sm text-yt-muted">
-                <CoverImage item={current} size={400} rounded="md" alt={current.title} />
-                <p>{videoError}</p>
-              </div>
-            ) : videoUrl ? (
-              <video
-                ref={videoRef}
-                key={videoUrl}
-                src={videoUrl}
-                className="h-full w-full object-contain bg-black"
-                playsInline
-                muted
-                preload="auto"
-                onLoadedMetadata={() => {
-                  const v = videoRef.current;
-                  const a = usePlayer.getState().audioEl;
-                  if (v && a && Number.isFinite(a.currentTime)) {
-                    try {
-                      v.currentTime = a.currentTime;
-                    } catch {
-                      /* */
-                    }
-                    if (!a.paused) void v.play().catch(() => {});
-                  }
-                }}
-              />
-            ) : (
-              <CoverImage item={current} size={800} rounded="md" alt={current.title} />
-            )}
+            <CoverImage item={current} size={800} rounded="md" alt={current.title} />
           </div>
         </div>
 
