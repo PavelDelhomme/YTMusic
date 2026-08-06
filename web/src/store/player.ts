@@ -690,6 +690,11 @@ function mergeAutoTracks(seedId: string, pool: Track[], relatedUpdate?: Track[])
   const autoLen = state.queue.length - boundary;
   if (autoLen >= 40) return;
   const existing = new Set(state.queue.map((t) => t.id));
+  // Titres déjà passés dans cette session (avant l’index courant) → ne pas les remettre en « À suivre »
+  for (let i = 0; i < state.queueIndex; i++) {
+    const id = state.queue[i]?.id;
+    if (id) existing.add(id);
+  }
   const extra: Track[] = [];
   for (const t of pool) {
     if (!t?.id || t.id === seedId || existing.has(t.id) || !isPlayable(t)) continue;
