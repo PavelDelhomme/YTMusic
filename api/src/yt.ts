@@ -578,11 +578,7 @@ export async function search(
   // La perso reste un soft-boost sur des résultats déjà pertinents (voir personalizeBoost).
 
   const songs = filterByRelevance(
-    rankByQuery(
-      mergeTracks(fromSongs.songs, main.songs, fromSongs.videos.slice(0, 5)),
-      q,
-      personalization,
-    ),
+    rankByQuery(mergeTracks(fromSongs.songs, main.songs), q, personalization),
     q,
   );
   const artists = dedupeArtists(
@@ -616,10 +612,8 @@ export async function search(
   );
 
   if (filterNorm === 'song') {
-    const only = filterByRelevance(
-      rankByQuery(mergeTracks(main.songs, main.videos), q, personalization),
-      q,
-    );
+    // Titres uniquement — ne pas mélanger les vidéos (réactions / lyrics)
+    const only = filterByRelevance(rankByQuery(main.songs, q, personalization), q);
     return {
       topResult: only[0] || topResult,
       songs: only,
