@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { db } from './db.js';
 import { isJunkArtistName } from './mappers.js';
+import { recordSearchHitClick } from './searchHits.js';
 
 export function ensureRecoSchema() {
   db.exec(`
@@ -274,6 +275,14 @@ export function addSearchHistory(
     `INSERT INTO search_history (id, user_id, query, clicked_id, clicked_kind, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
   ).run(randomUUID(), userId, q, clicked?.id || null, clicked?.kind || null, now);
+
+  if (clicked?.id) {
+    try {
+      recordSearchHitClick(q, clicked.id);
+    } catch {
+      /* non-bloquant */
+    }
+  }
 }
 
 export function listSearchHistory(userId: string, limit = 30) {

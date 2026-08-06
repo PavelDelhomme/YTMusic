@@ -39,6 +39,13 @@ import {
   tokenize,
   type SearchPersonalization,
 } from './searchRank.js';
+import {
+  applyCachedDurations,
+  cacheTrackDuration,
+  hitToTrack,
+  loadSearchHitsSeed,
+  resolveSearchHit,
+} from './searchHits.js';
 import type { AlbumMeta, ArtistMeta, PlaylistMeta, Shelf, Track } from './types.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -598,7 +605,7 @@ export async function search(
   );
   const playlists = filterByRelevance(rankByQuery(main.playlists, q, personalization), q);
 
-  const topResult = pickTopResult(
+  let topResult = pickTopResult(
     q,
     {
       topResult: main.topResult || fromSongs.topResult || fromArtists.topResult,
@@ -611,11 +618,85 @@ export async function search(
     personalization,
   );
 
+  // Index hits (seed + clics) : épingle le tube canonique sans masquer le reste
+  let songsOut = songs;
+  let topOut = topResult;
+  try {
+    loadSearchHitsSeed();
+    const hit = resolveSearchHit(q);
+    if (hit && (filterNorm === 'all' || filterNorm === 'song')) {
+      let hitTrack: Track | null = songsOut.find((t) => t.id === hit.videoId) || null;
+      if (!hitTrack) {
+        hitTrack = hitToTrack(hit);
+        // Enrichit via getTrack (titre/artistes/durée) — best effort
+        try {
+          const { track } = await getTrack(hit.videoId, { light: true });
+          if (track?.id) {
+            hitTrack = {
+              ...hitTrack,
+              ...track,
+              type: 'song',
+              artists:
+                track.artists?.length ? track.artists : hitTrack.artists?.length ? hitTrack.artists : hit.artist ? [{ name: hit.artist }] : [],
+              title: track.title && track.title !== 'Sans titre' ? track.title : hitTrack.title,
+            };
+          }
+        } catch {
+          /* seed metadata suffit */
+        }
+      } else {
+        hitTrack = { ...hitTrack, type: 'song' };
+      }
+      songsOut = mergeTracks([hitTrack], songsOut);
+      topOut = hitTrack;
+    }
+  } catch (err) {
+    console.warn('[search] hit inject failed', err);
+  }
+
+  songsOut = applyCachedDurations(songsOut);
+  const videosOut = applyCachedDurations(videos);
+
   if (filterNorm === 'song') {
     // Titres uniquement — ne pas mélanger les vidéos (réactions / lyrics)
-    const only = filterByRelevance(rankByQuery(main.songs, q, personalization), q);
+    let only = filterByRelevance(rankByQuery(main.songs, q, personalization), q);
+    try {
+      loadSearchHitsSeed();
+      const hit = resolveSearchHit(q);
+      if (hit) {
+        let hitTrack: Track | null = only.find((t) => t.id === hit.videoId) || null;
+        if (!hitTrack) {
+          hitTrack = hitToTrack(hit);
+          try {
+            const { track } = await getTrack(hit.videoId, { light: true });
+            if (track?.id) {
+              hitTrack = {
+                ...hitTrack,
+                ...track,
+                type: 'song',
+                artists:
+                  track.artists?.length
+                    ? track.artists
+                    : hitTrack.artists?.length
+                      ? hitTrack.artists
+                      : hit.artist
+                        ? [{ name: hit.artist }]
+                        : [],
+                title: track.title && track.title !== 'Sans titre' ? track.title : hitTrack.title,
+              };
+            }
+          } catch {
+            /* */
+          }
+        }
+        only = mergeTracks([hitTrack], only);
+      }
+    } catch {
+      /* */
+    }
+    only = applyCachedDurations(only);
     return {
-      topResult: only[0] || topResult,
+      topResult: only[0] || topOut,
       songs: only,
       videos: [],
       albums: [],
@@ -628,7 +709,14 @@ export async function search(
       rankByQuery(main.videos.length ? main.videos : main.songs, q, personalization),
       q,
     );
-    return { topResult: only[0] || null, songs: [], videos: only, albums: [], artists: [], playlists: [] };
+    return {
+      topResult: only[0] || null,
+      songs: [],
+      videos: applyCachedDurations(only),
+      albums: [],
+      artists: [],
+      playlists: [],
+    };
   }
   if (filterNorm === 'album') {
     const only = filterByRelevance(rankByQuery(main.albums, q, personalization), q);
@@ -658,9 +746,9 @@ export async function search(
   }
 
   return {
-    topResult,
-    songs,
-    videos,
+    topResult: topOut,
+    songs: songsOut,
+    videos: videosOut,
     albums,
     artists,
     playlists,
@@ -956,6 +1044,17 @@ async function fetchTrackMeta(videoId: string, light = false) {
     thumbnails,
     type: 'song',
   };
+  if (!(track.durationSeconds && track.durationSeconds > 0)) {
+    const cached = applyCachedDurations([track])[0];
+    Object.assign(track, cached);
+  }
+  if (track.durationSeconds && track.durationSeconds > 0) {
+    try {
+      cacheTrackDuration(videoId, track.durationSeconds, track.duration);
+    } catch {
+      /* */
+    }
+  }
 
   return light ? { track } : { track, info };
 }
