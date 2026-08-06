@@ -48,6 +48,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,6 +74,7 @@ import ovh.delhomme.ytmusic.data.buildRadioQueue
 import ovh.delhomme.ytmusic.data.resolvePlayableTracks
 import ovh.delhomme.ytmusic.player.PlayerController
 import ovh.delhomme.ytmusic.ui.components.MediaCover
+import ovh.delhomme.ytmusic.ui.components.PinnedBadge
 import ovh.delhomme.ytmusic.ui.components.TrackRow
 import ovh.delhomme.ytmusic.ui.components.DownloadStatusIcon
 import ovh.delhomme.ytmusic.ui.components.pollOfflineJob
@@ -98,6 +100,9 @@ fun CollectionDetailScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val pins by container.quickAccess.pins.collectAsState(initial = emptyList())
+    val pinIds = remember(pins) { pins.map { it.id }.toHashSet() }
+    val collectionPinned = id in pinIds
     var loading by remember { mutableStateOf(true) }
     var radioBusy by remember { mutableStateOf(false) }
     var title by remember { mutableStateOf(seed?.title ?: "") }
@@ -341,8 +346,23 @@ fun CollectionDetailScreen(
                             metaLine = subtitle,
                             cover = cover,
                             inLibrary = inLib,
+                            pinned = collectionPinned,
                             radioBusy = radioBusy,
                             onBack = onBack,
+                            onTogglePin = {
+                                scope.launch {
+                                    val pinTrack = cover ?: TrackDto(
+                                        id = id,
+                                        title = title,
+                                        type = "album",
+                                        artists = listOf(ArtistRef(artistLine, artistId)),
+                                    )
+                                    container.quickAccess.toggle(
+                                        pinTrack.copy(id = id, type = "album", title = title),
+                                        container.api,
+                                    )
+                                }
+                            },
                             onArtistClick = {
                                 val aid = artistId
                                 if (!aid.isNullOrBlank()) onOpenArtist(aid, artistLine)
@@ -502,7 +522,34 @@ fun CollectionDetailScreen(
                             Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.Bottom,
                         ) {
-                            cover?.let { MediaCover(it, 140.dp) }
+                            cover?.let {
+                                Box {
+                                    MediaCover(it, 140.dp)
+                                    if (collectionPinned) {
+                                        PinnedBadge(
+                                            modifier = Modifier
+                                                .align(Alignment.TopStart)
+                                                .padding(6.dp),
+                                            size = 28.dp,
+                                            onClick = {
+                                                scope.launch {
+                                                    val pinTrack = it.copy(
+                                                        id = id,
+                                                        type = when (kind) {
+                                                            DetailKind.Mix -> "mix"
+                                                            DetailKind.Playlist -> "playlist"
+                                                            DetailKind.Album -> "album"
+                                                            DetailKind.Artist -> "artist"
+                                                        },
+                                                        title = title.ifBlank { it.title },
+                                                    )
+                                                    container.quickAccess.toggle(pinTrack, container.api)
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
+                            }
                             Spacer(Modifier.width(16.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(
@@ -570,6 +617,10 @@ fun CollectionDetailScreen(
                     itemsIndexed(tracks, key = { i, t -> "${t.id}-$i" }) { index, track ->
                         TrackRow(
                             track = track,
+                            pinned = track.id in pinIds,
+                            onTogglePin = {
+                                scope.launch { container.quickAccess.toggle(track, container.api) }
+                            },
                             onClick = {
                                 val kindStr = if (kind == DetailKind.Mix) "mix" else "playlist"
                                 player?.play(
@@ -681,8 +732,10 @@ private fun AlbumHeroHeader(
     metaLine: String,
     cover: TrackDto?,
     inLibrary: Boolean,
+    pinned: Boolean = false,
     radioBusy: Boolean,
     onBack: () -> Unit,
+    onTogglePin: (() -> Unit)? = null,
     onArtistClick: () -> Unit,
     onShuffle: () -> Unit,
     onToggleLibrary: () -> Unit,
@@ -744,7 +797,20 @@ private fun AlbumHeroHeader(
         Spacer(Modifier.height(8.dp))
 
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            cover?.let { MediaCover(it, coverSize) }
+            cover?.let {
+                Box {
+                    MediaCover(it, coverSize)
+                    if (pinned) {
+                        PinnedBadge(
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(8.dp),
+                            size = 30.dp,
+                            onClick = onTogglePin,
+                        )
+                    }
+                }
+            }
         }
 
         Spacer(Modifier.height(12.dp))

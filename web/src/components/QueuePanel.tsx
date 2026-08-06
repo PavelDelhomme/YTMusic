@@ -5,7 +5,7 @@ import { useItemActions } from '../store/itemActions';
 import { TrackRow } from './TrackRow';
 import { SaveQueueSheet } from './SaveQueueSheet';
 import { SyncedLyrics } from './NowPlaying';
-import { ListMusic, MoreVertical, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles, X } from 'lucide-react';
+import { ListMusic, MoreVertical, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles, Trash2, X } from 'lucide-react';
 
 type PanelTab = 'queue' | 'similar';
 
@@ -35,6 +35,7 @@ export function QueuePanel() {
   const autoRadioLoading = usePlayer((s) => s.autoRadioLoading);
   const relatedError = usePlayer((s) => s.relatedError);
   const play = usePlayer((s) => s.play);
+  const clearUpcomingFromQueue = usePlayer((s) => s.clearUpcomingFromQueue);
   const openActions = useItemActions((s) => s.open);
   const [saveOpen, setSaveOpen] = useState(false);
   const [panelTab, setPanelTab] = useState<PanelTab>('queue');
@@ -137,6 +138,16 @@ export function QueuePanel() {
                 }`}
               >
                 <Shuffle className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                disabled={queue.length <= 1}
+                onClick={() => clearUpcomingFromQueue()}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-yt-muted hover:bg-yt-hover hover:text-white disabled:opacity-40"
+                title="Vider la file (garde le titre en cours)"
+                aria-label="Vider la file"
+              >
+                <Trash2 className="h-4 w-4" />
               </button>
               <button
                 type="button"

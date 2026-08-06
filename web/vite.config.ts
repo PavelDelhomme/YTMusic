@@ -41,9 +41,9 @@ export default defineConfig(({ mode }) => {
       devOptions: { enabled: false },
       includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'],
       manifest: {
-        name: 'YTMusic',
-        short_name: 'YTMusic',
-        description: 'YouTube Music — web, mobile & desktop — sans pubs',
+        name: 'Pue La Merde',
+        short_name: 'PLM',
+        description: 'PLM — Pue La Merde. Musique sans pubs, web & mobile',
         theme_color: '#030303',
         background_color: '#030303',
         display: 'standalone',

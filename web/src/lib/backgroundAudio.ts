@@ -17,7 +17,7 @@ export async function setNativePlaybackNotification(opts: {
   try {
     if (opts.playing) {
       await BackgroundAudio.enable({
-        title: opts.title || 'YTMusic',
+        title: opts.title || 'PLM',
         artist: opts.artist || 'Lecture en cours',
       });
     } else {

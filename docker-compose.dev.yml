@@ -1,5 +1,5 @@
 # =============================================================================
-# YTMusic — développement en conteneurs (API + Web Vite + Mailhog)
+# PLM — développement en conteneurs (API + Web Vite + Mailhog)
 # =============================================================================
 services:
   api:
@@ -23,7 +23,7 @@ services:
       SMTP_HOST: mailhog
       SMTP_PORT: "1025"
       SMTP_SECURE: "0"
-      SMTP_FROM: YTMusic <noreply@ytmusic.local>
+      SMTP_FROM: PLM <noreply@ytmusic.local>
     volumes:
       - ytmusic_dev_data:/app/data
     depends_on:

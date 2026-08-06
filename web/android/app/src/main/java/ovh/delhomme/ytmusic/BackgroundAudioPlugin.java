@@ -15,7 +15,7 @@ public class BackgroundAudioPlugin extends Plugin {
 
     @PluginMethod
     public void enable(PluginCall call) {
-        String title = call.getString("title", "YTMusic");
+        String title = call.getString("title", "PLM");
         String artist = call.getString("artist", "Lecture en cours");
         Intent intent = new Intent(getContext(), MusicKeepAliveService.class);
         intent.putExtra(MusicKeepAliveService.EXTRA_TITLE, title);

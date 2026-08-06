@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Batterie de tests recherche YTMusic (ranking unitaires + live Innertube).
+ * Batterie de tests recherche PLM (ranking unitaires + live Innertube).
  * Usage: node scripts/test-search.mjs
  *        LIVE=0 node scripts/test-search.mjs   # ranking only
  */
@@ -186,7 +186,7 @@ async function runLive() {
 }
 
 async function main() {
-  console.log('YTMusic search test suite');
+  console.log('PLM search test suite');
   // Run via dynamic import of TS through tsx child if needed
   let rank;
   try {

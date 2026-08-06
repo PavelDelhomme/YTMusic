@@ -18,12 +18,12 @@ export function parseFromAddress(raw: string): { name: string; address: string }
   const s = String(raw || '').trim();
   const m = s.match(/^(.*?)\s*<([^>]+)>\s*$/);
   if (m) {
-    const name = m[1].replace(/^["']|["']$/g, '').trim() || 'YTMusic';
+    const name = m[1].replace(/^["']|["']$/g, '').trim() || 'PLM';
     return { name, address: m[2].trim() };
   }
-  if (s.includes('@')) return { name: 'YTMusic', address: s };
+  if (s.includes('@')) return { name: 'PLM', address: s };
   return {
-    name: 'YTMusic',
+    name: 'PLM',
     address: process.env.SMTP_USER || 'noreply@example.com',
   };
 }
@@ -37,7 +37,7 @@ export function smtpPublicConfig() {
     process.env.SMTP_SECURE === 'true' ||
     useSsl ||
     port === 465;
-  const fromRaw = process.env.SMTP_FROM || 'YTMusic <noreply@example.com>';
+  const fromRaw = process.env.SMTP_FROM || 'PLM <noreply@example.com>';
   const from = parseFromAddress(fromRaw);
   return {
     configured: Boolean(host),
@@ -96,7 +96,7 @@ export async function sendMail(opts: {
     return { ok: true, mode: 'outbox' as const, id, from: cfg.from };
   }
 
-  // From structuré : nom affiché « YTMusic » (pas le display name OVH JobbingTrack)
+  // From structuré : nom affiché « PLM » (pas le display name OVH JobbingTrack)
   const info = await tx.sendMail({
     from: { name: from.name, address: from.address },
     sender: from.address,
@@ -106,8 +106,8 @@ export async function sendMail(opts: {
     html: opts.html,
     text: opts.text,
     headers: {
-      'X-Mailer': 'YTMusic',
-      'X-YTMusic-Env': getAppEnv(),
+      'X-Mailer': 'PLM',
+      'X-PLM-Env': getAppEnv(),
     },
   });
 
@@ -132,11 +132,11 @@ export async function sendVerificationEmail(email: string, name: string, rawToke
       : '\n';
   return sendMail({
     to: email,
-    subject: 'Confirme ton adresse — YTMusic',
-    text: `Salut ${name},\n\nConfirme ton email : ${link}${apiHint}\nLien valable 48h.\n\n— YTMusic`,
+    subject: 'Confirme ton adresse — PLM',
+    text: `Salut ${name},\n\nConfirme ton email : ${link}${apiHint}\nLien valable 48h.\n\n— PLM`,
     html: `
       <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto">
-        <h2 style="color:#111">Bienvenue sur YTMusic</h2>
+        <h2 style="color:#111">Bienvenue sur PLM</h2>
         <p>Salut <strong>${name}</strong>, confirme ton adresse email :</p>
         <p><a href="${link}" style="display:inline-block;background:#ff0033;color:#fff;padding:12px 20px;border-radius:999px;text-decoration:none">Valider mon email</a></p>
         <p style="color:#666;font-size:12px">Ou copie ce lien :<br>${link}</p>
@@ -145,7 +145,7 @@ export async function sendVerificationEmail(email: string, name: string, rawToke
             ? '<p style="color:#666;font-size:12px">Local + téléphone : <code>adb reverse tcp:8787 tcp:8787</code> puis ouvre le lien.</p>'
             : ''
         }
-        <p style="color:#666;font-size:12px">Envoyé par <strong>YTMusic</strong> via ${cfgDomain()} · ${getAppEnv()}</p>
+        <p style="color:#666;font-size:12px">Envoyé par <strong>PLM</strong> via ${cfgDomain()} · ${getAppEnv()}</p>
       </div>`,
   });
 }
@@ -174,10 +174,10 @@ export async function testSmtp(to?: string) {
     if (to) {
       sent = await sendMail({
         to,
-        subject: `[YTMusic] Test SMTP · ${getAppEnv()} · ${new Date().toISOString()}`,
-        text: `Test YTMusic OK.\nFrom configuré : ${cfg.from}\nHost : ${cfg.host}:${cfg.port}\nSi tu vois encore « JobbingTrack », vide le cache d’affichage du client mail (Gmail garde l’ancien nom pour noreply@example.com).`,
+        subject: `[PLM] Test SMTP · ${getAppEnv()} · ${new Date().toISOString()}`,
+        text: `Test PLM OK.\nFrom configuré : ${cfg.from}\nHost : ${cfg.host}:${cfg.port}\nSi tu vois encore « JobbingTrack », vide le cache d’affichage du client mail (Gmail garde l’ancien nom pour noreply@example.com).`,
         html: `<div style="font-family:system-ui,sans-serif">
-          <p><strong>Test YTMusic OK</strong></p>
+          <p><strong>Test PLM OK</strong></p>
           <p>From configuré : <code>${cfg.from}</code></p>
           <p>Host : ${cfg.host}:${cfg.port} (${getAppEnv()})</p>
           <p style="color:#666;font-size:12px">Si l’expéditeur affiche encore « JobbingTrack Security », c’est le cache du client mail / le nom d’affichage OVH du compte noreply@example.com — pas SMTP_FROM.</p>

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installe / ouvre YTMusic PWA sur appareil Android USB (ADB).
+# Installe / ouvre PLM PWA sur appareil Android USB (ADB).
 # Usage : DEVICE=R5CT7263YJL ./scripts/mobile-install-adb.sh
 set -euo pipefail
 
@@ -66,7 +66,7 @@ echo "  URL    : $URL"
 echo ""
 if [[ "$MODE" == "install" ]]; then
   echo "  Sur le téléphone :"
-  echo "  1. Attends le chargement de YTMusic"
+  echo "  1. Attends le chargement de PLM"
   echo "  2. Bannière « Installer l’app » → Installer maintenant"
   echo "     (ou Chrome ⋮ → Installer l’application)"
   echo "  3. Connecte-toi : admin@example.com ou dev@example.com"

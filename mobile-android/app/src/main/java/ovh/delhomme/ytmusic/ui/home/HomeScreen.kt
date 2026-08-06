@@ -69,6 +69,7 @@ import ovh.delhomme.ytmusic.ui.components.AppTopBar
 import ovh.delhomme.ytmusic.ui.components.HistorySheet
 import ovh.delhomme.ytmusic.ui.components.MediaCover
 import ovh.delhomme.ytmusic.ui.components.MixCollageCover
+import ovh.delhomme.ytmusic.ui.components.PinnedBadge
 import ovh.delhomme.ytmusic.ui.components.TrackRow
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
@@ -90,6 +91,7 @@ fun HomeScreen(
 ) {
     val state by vm.state.collectAsState()
     val pins by container.quickAccess.pins.collectAsState(initial = emptyList())
+    val pinIds = remember(pins) { pins.map { it.id }.toHashSet() }
     val scope = rememberCoroutineScope()
     var showAccount by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
@@ -135,7 +137,7 @@ fun HomeScreen(
 
     Column(Modifier.fillMaxSize()) {
         AppTopBar(
-            title = "Music",
+            title = "PLM",
             showBrandLogo = true,
             userPictureUrl = userPicture,
             onAccountClick = { showAccount = true },
@@ -174,6 +176,11 @@ fun HomeScreen(
                         onOpenDetail = onOpenDetail,
                         onMore = onMore,
                         onPlayNamed = onPlayNamed,
+                        onUnpin = { track ->
+                            scope.launch {
+                                container.quickAccess.toggle(track, container.api)
+                            }
+                        },
                     )
                 }
 
@@ -238,6 +245,27 @@ fun HomeScreen(
                                                 contentDescription = "Lire",
                                                 tint = Color.White,
                                                 modifier = Modifier.size(22.dp),
+                                            )
+                                        }
+                                        if (radio.id in pinIds) {
+                                            PinnedBadge(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopStart)
+                                                    .padding(6.dp),
+                                                size = 28.dp,
+                                                onClick = {
+                                                    scope.launch {
+                                                        container.quickAccess.toggle(
+                                                            TrackDto(
+                                                                id = radio.id,
+                                                                title = radio.title,
+                                                                type = "mix",
+                                                                thumbnails = preview.firstOrNull()?.thumbnails,
+                                                            ),
+                                                            container.api,
+                                                        )
+                                                    }
+                                                },
                                             )
                                         }
                                         Row(
@@ -356,6 +384,7 @@ fun HomeScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
                             items(items.take(16), key = { it.id }) { track ->
+                                val isPinned = track.id in pinIds
                                 Column(
                                     Modifier
                                         .width(140.dp)
@@ -365,11 +394,26 @@ fun HomeScreen(
                                         )
                                         .padding(4.dp),
                                 ) {
-                                    MediaCover(
-                                        track,
-                                        132.dp,
-                                        circle = track.isArtist(),
-                                    )
+                                    Box {
+                                        MediaCover(
+                                            track,
+                                            132.dp,
+                                            circle = track.isArtist(),
+                                        )
+                                        if (isPinned) {
+                                            PinnedBadge(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopStart)
+                                                    .padding(6.dp),
+                                                size = 28.dp,
+                                                onClick = {
+                                                    scope.launch {
+                                                        container.quickAccess.toggle(track, container.api)
+                                                    }
+                                                },
+                                            )
+                                        }
+                                    }
                                     Spacer(Modifier.height(8.dp))
                                     Text(
                                         track.title,
@@ -402,6 +446,12 @@ fun HomeScreen(
                                 onClick = { playItem(track, items) },
                                 onMore = { onMore(track) },
                                 onOpenArtist = onOpenArtist,
+                                pinned = track.id in pinIds,
+                                onTogglePin = {
+                                    scope.launch {
+                                        container.quickAccess.toggle(track, container.api)
+                                    }
+                                },
                             )
                         }
                         Spacer(Modifier.height(8.dp))
@@ -467,6 +517,7 @@ private fun QuickAccessHomeCard(
     onOpenDetail: (TrackDto) -> Unit,
     onMore: (TrackDto) -> Unit,
     onPlayNamed: (List<TrackDto>, Int, String) -> Unit,
+    onUnpin: (TrackDto) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var shuffleBusy by remember { mutableStateOf(false) }
@@ -535,6 +586,7 @@ private fun QuickAccessHomeCard(
                                         }
                                     },
                                     onLongClick = { onMore(slot.track) },
+                                    onUnpin = { onUnpin(slot.track) },
                                 )
                                 QuickAccessSlot.Shuffle -> QuickAccessShuffleCard(
                                     busy = shuffleBusy,
@@ -622,6 +674,7 @@ private fun QuickAccessPinCard(
     track: TrackDto,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onUnpin: () -> Unit,
 ) {
     Box(
         Modifier
@@ -667,6 +720,13 @@ private fun QuickAccessPinCard(
                         1f to Color.Black.copy(alpha = 0.8f),
                     ),
                 ),
+        )
+        PinnedBadge(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(6.dp),
+            size = 26.dp,
+            onClick = onUnpin,
         )
         Text(
             track.title.ifBlank { "Sans titre" },
