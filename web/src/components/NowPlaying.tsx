@@ -16,7 +16,8 @@ const QUEUE_MAX = 100;
 type LyricLine = { t: number; text: string };
 
 /** Avance légère : la ligne s’allume juste avant le chant (feel YTM). */
-const LYRIC_LEAD_SEC = 0.28;
+/** Avance la ligne active pour karaoke (audio un peu en retard côté percep.). */
+const LYRIC_LEAD_SEC = 0.55;
 
 /** LRC uniquement — pas de faux timings sur texte brut (ça décale / n’arrête pas). */
 function parseLrcLines(raw: string | null): LyricLine[] {

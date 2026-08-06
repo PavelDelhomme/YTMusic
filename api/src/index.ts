@@ -1965,6 +1965,20 @@ wss.on('connection', (ws, req) => {
   })();
 });
 
+/** Un setHeader tardif (stream fallback) ne doit plus tuer toute l’API → 502 Vite. */
+process.on('uncaughtException', (err) => {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === 'ERR_HTTP_HEADERS_SENT') {
+    console.error('[soft-fatal] ERR_HTTP_HEADERS_SENT — process conservé:', err.message);
+    return;
+  }
+  console.error('[fatal] uncaughtException', err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+
 server.listen(PORT, '0.0.0.0', () => {
   try {
     syncSeedCredentials();

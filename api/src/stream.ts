@@ -91,7 +91,20 @@ async function proxyStreamToHome(
   res.end();
 }
 
+/** Si des headers sont déjà partis, ne jamais retenter un autre backend (crash Node). */
+function endIfHeadersSent(res: Response): boolean {
+  if (!res.headersSent) return false;
+  try {
+    if (!res.writableEnded) res.end();
+  } catch {
+    /* ignore */
+  }
+  return true;
+}
+
 async function streamViaInnertube(videoId: string, res: Response) {
+  if (res.headersSent) throw new Error('headers already sent');
+
   const innertube = await getYT();
   const stream = await innertube.download(videoId, {
     type: 'audio',
@@ -105,6 +118,7 @@ async function streamViaInnertube(videoId: string, res: Response) {
     throw new Error('Innertube stream vide');
   }
 
+  if (res.headersSent) throw new Error('headers already sent');
   res.status(200);
   res.setHeader('Content-Type', 'audio/mp4');
   res.setHeader('Accept-Ranges', 'bytes');
@@ -126,7 +140,13 @@ async function streamViaInnertube(videoId: string, res: Response) {
     res.end();
   } catch (err) {
     if (!res.headersSent) res.status(500).json({ error: String(err) });
-    else res.end();
+    else {
+      try {
+        res.end();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 }
 
@@ -134,6 +154,10 @@ function streamViaYtDlp(videoId: string, res: Response) {
   return new Promise<void>((resolve, reject) => {
     if (!existsSync(YTDLP)) {
       reject(new Error('yt-dlp introuvable'));
+      return;
+    }
+    if (res.headersSent) {
+      reject(new Error('headers already sent'));
       return;
     }
 
@@ -168,13 +192,22 @@ function streamViaYtDlp(videoId: string, res: Response) {
 
     proc.stdout.once('data', (chunk: Buffer) => {
       if (settled) return;
-      started = true;
-      res.status(200);
-      res.setHeader('Content-Type', 'audio/mp4');
-      res.setHeader('Transfer-Encoding', 'chunked');
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-      res.write(chunk);
-      proc.stdout.pipe(res);
+      try {
+        if (res.headersSent) {
+          fail(new Error('headers already sent'));
+          return;
+        }
+        started = true;
+        res.status(200);
+        res.setHeader('Content-Type', 'audio/mp4');
+        res.setHeader('Transfer-Encoding', 'chunked');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.write(chunk);
+        proc.stdout.pipe(res);
+      } catch (err) {
+        // Ne jamais laisser une erreur event-loop tuer le process API (ERR_HTTP_HEADERS_SENT)
+        fail(err instanceof Error ? err : new Error(String(err)));
+      }
     });
 
     let errBuf = '';
@@ -244,6 +277,7 @@ export async function handleStream(req: Request, res: Response) {
       await proxyStreamToHome(req, res, homeUpstream, videoId);
       return;
     } catch (err) {
+      if (endIfHeadersSent(res)) return;
       console.warn('[stream] STREAM_UPSTREAM KO, fallback local VPS:', (err as Error).message);
       // continue → résolution VPS (cookies / souvent bloqué)
     }
@@ -277,6 +311,7 @@ export async function handleStream(req: Request, res: Response) {
       if (first.done || !first.value?.byteLength) {
         throw new Error('upstream audio vide');
       }
+      if (res.headersSent) return;
       res.status(upstream.status);
       const ct = upstream.headers.get('content-type');
       const cr = upstream.headers.get('content-range');
@@ -301,15 +336,17 @@ export async function handleStream(req: Request, res: Response) {
       res.end();
       return;
     }
-  } catch {
-    /* fallback */
+  } catch (err) {
+    if (endIfHeadersSent(res)) return;
+    console.warn('[stream] format/proxy KO:', (err as Error).message?.slice?.(0, 160) || err);
   }
 
   try {
     await streamViaInnertube(videoId, res);
     return;
-  } catch {
-    /* fallback */
+  } catch (err) {
+    if (endIfHeadersSent(res)) return;
+    console.warn('[stream] Innertube KO:', (err as Error).message?.slice?.(0, 160) || err);
   }
 
   try {
