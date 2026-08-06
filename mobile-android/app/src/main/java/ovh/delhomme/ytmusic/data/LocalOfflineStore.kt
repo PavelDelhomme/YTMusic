@@ -5,6 +5,9 @@ import android.net.Uri
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -27,6 +30,14 @@ class LocalOfflineStore(
     private val mapAdapter = moshi.adapter<Map<String, TrackDto>>(
         Types.newParameterizedType(Map::class.java, String::class.java, TrackDto::class.java),
     )
+
+    private val _revision = MutableStateFlow(0L)
+    /** Incrémente à chaque DL / suppression — la biblio s’abonne pour rafraîchir. */
+    val revision: StateFlow<Long> = _revision.asStateFlow()
+
+    private fun bump() {
+        _revision.value = _revision.value + 1L
+    }
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -74,6 +85,7 @@ class LocalOfflineStore(
             val meta = readMetaUnlocked().toMutableMap()
             meta.remove(trackId)
             writeMetaUnlocked(meta)
+            bump()
         }
     }
 
@@ -91,6 +103,7 @@ class LocalOfflineStore(
             if (dest.isFile && dest.length() > 8_000L) {
                 upsertMetaUnlocked(track)
                 onProgress?.invoke(1f)
+                bump()
                 return@withLock Result.success(dest)
             }
             val part = File(dir, "${track.id}.part")
@@ -137,6 +150,7 @@ class LocalOfflineStore(
                     }
                     upsertMetaUnlocked(track)
                     onProgress?.invoke(1f)
+                    bump()
                     dest
                 }
             }.onFailure {
