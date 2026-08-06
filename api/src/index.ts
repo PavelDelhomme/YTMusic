@@ -161,7 +161,9 @@ import {
   albumSimilarForUser,
   artistSimilarForUser,
   suggestSearch,
+  warmCategoryMixes,
 } from './reco.js';
+import { MIX_TARGET } from './mixCache.js';
 import {
   createEmailToken,
   insertTelemetry,
@@ -1076,10 +1078,13 @@ app.get('/api/home', accountRequired, async (req, res) => {
     // reco perso + home YT + similar en parallèle (gros gain cold start)
     const similarPromise =
       top[0] && /^[a-zA-Z0-9_-]{11}$/.test(top[0].id)
-        ? similarForUser(userId, top[0].id, top[0]).catch(() => null)
+        ? similarForUser(userId, top[0].id, top[0], { full: false }).catch(() => null)
         : Promise.resolve(null);
 
     const [reco, ytHome, sim] = await Promise.all([homeReco(userId), getHome(), similarPromise]);
+
+    // Préchauffe async des mixes catégorie (ne bloque pas la réponse home)
+    warmCategoryMixes(userId, 3);
 
     const personal: Awaited<ReturnType<typeof getHome>> = [
       ...(reco.shelves as Awaited<ReturnType<typeof getHome>>),
@@ -1481,7 +1486,11 @@ app.get('/api/reco/radio/:category', accountRequired, async (req, res) => {
       req.query.preview === 'true' ||
       req.query.light === '1' ||
       req.query.light === 'true';
-    res.json(await radioForUser(req.userId!, p(req.params.category), { light }));
+    const mix = await radioForUser(req.userId!, p(req.params.category), { light });
+    res.json({
+      ...mix,
+      target: mix.target ?? (light ? 12 : MIX_TARGET),
+    });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -1537,15 +1546,21 @@ app.get('/api/track/:id/upnext', accountRequired, async (req, res) => {
 app.get('/api/track/:id/related', accountRequired, async (req, res) => {
   try {
     const fast = String(req.query.fast || '') === '1';
+    // fast=1 reste léger ; full=0 force un batch court ; sinon mix précalculé ~200
+    const wantFull =
+      !fast && String(req.query.full || '') !== '0' && String(req.query.full || '') !== 'false';
     const sim = fast
       ? await similarForUserFast(req.userId!, p(req.params.id))
-      : await similarForUser(req.userId!, p(req.params.id));
+      : await similarForUser(req.userId!, p(req.params.id), undefined, { full: wantFull });
     res.json({
       related: sim.tracks.length ? sim.tracks : sim.related,
       radio: sim.tracks.length ? sim.tracks : sim.radio,
       rawRelated: sim.related,
       rawRadio: sim.radio,
       fast,
+      cached: 'cached' in sim ? sim.cached : false,
+      target: 'target' in sim ? sim.target : undefined,
+      generatedAt: 'generatedAt' in sim ? sim.generatedAt : undefined,
     });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -1570,8 +1585,18 @@ app.get('/api/artist/:id', accountRequired, async (req, res) => {
 
 app.get('/api/artist/:id/radio', accountRequired, async (req, res) => {
   try {
-    const ranked = await artistSimilarForUser(req.userId!, p(req.params.id));
-    res.json({ tracks: ranked.tracks.length ? ranked.tracks : await getArtistRadio(p(req.params.id)) });
+    const wantFull =
+      String(req.query.full || '') !== '0' && String(req.query.full || '') !== 'false';
+    const ranked = await artistSimilarForUser(req.userId!, p(req.params.id), { full: wantFull });
+    const tracks = ranked.tracks.length
+      ? ranked.tracks
+      : await getArtistRadio(p(req.params.id));
+    res.json({
+      tracks,
+      cached: ranked.cached ?? false,
+      target: ranked.target ?? MIX_TARGET,
+      generatedAt: ranked.generatedAt,
+    });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -1597,8 +1622,18 @@ app.get('/api/album/:id', accountRequired, async (req, res) => {
 
 app.get('/api/album/:id/radio', accountRequired, async (req, res) => {
   try {
-    const ranked = await albumSimilarForUser(req.userId!, p(req.params.id));
-    res.json({ tracks: ranked.tracks.length ? ranked.tracks : await getAlbumRadio(p(req.params.id)) });
+    const wantFull =
+      String(req.query.full || '') !== '0' && String(req.query.full || '') !== 'false';
+    const ranked = await albumSimilarForUser(req.userId!, p(req.params.id), { full: wantFull });
+    const tracks = ranked.tracks.length
+      ? ranked.tracks
+      : await getAlbumRadio(p(req.params.id));
+    res.json({
+      tracks,
+      cached: ranked.cached ?? false,
+      target: ranked.target ?? MIX_TARGET,
+      generatedAt: ranked.generatedAt,
+    });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

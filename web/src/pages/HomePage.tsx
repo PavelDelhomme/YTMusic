@@ -11,6 +11,7 @@ import { Pin, Play, Radio } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { warmFormats } from '../lib/streamPrefetch';
 import { perfStart } from '../lib/perf';
+import { getCachedMix, mixCacheKey, MIX_TARGET, setCachedMix } from '../lib/mixCache';
 
 const HOME_CACHE_KEY = 'ytm_home_v1';
 
@@ -192,22 +193,55 @@ export function HomePage() {
     setStartingRadio(id);
     const end = perfStart('home.mix.play');
     const soft = Boolean(isPlaying && currentId);
+    const cKey = mixCacheKey('cat', id);
     try {
       const preview = (radioPreviews[id] || []).filter((t) =>
         /^[a-zA-Z0-9_-]{11}$/.test(t.id),
       );
       if (preview.length) {
         if (soft) {
-          enqueueAfterCurrent(preview, { replaceRest: true, cap: 36, sourceId: id, sourceKind: 'mix' });
+          enqueueAfterCurrent(preview, {
+            replaceRest: true,
+            cap: MIX_TARGET,
+            sourceId: id,
+            sourceKind: 'mix',
+          });
         } else {
           void playQueue(preview, 0, { sourceId: id, sourceKind: 'mix' });
         }
         void warmFormats(preview.slice(0, 2).map((t) => t.id));
       }
+      const cached = getCachedMix(cKey);
+      if (cached?.length) {
+        if (soft || (isPlaying && currentId)) {
+          enqueueAfterCurrent(cached, {
+            replaceRest: true,
+            cap: MIX_TARGET,
+            sourceId: id,
+            sourceKind: 'mix',
+          });
+        } else {
+          void playQueue(cached, 0, { sourceId: id, sourceKind: 'mix' });
+        }
+        void warmFormats(cached.slice(0, 3).map((t) => t.id));
+        // Rafraîchit le cache en arrière-plan
+        void api.recoRadio(id).then((r) => {
+          if (r.tracks?.length) {
+            setCachedMix(cKey, r.tracks, { generatedAt: r.generatedAt, target: r.target });
+          }
+        });
+        return;
+      }
       const r = await api.recoRadio(id);
       if (r.tracks?.length) {
+        setCachedMix(cKey, r.tracks, { generatedAt: r.generatedAt, target: r.target });
         if (soft || (isPlaying && currentId)) {
-          enqueueAfterCurrent(r.tracks, { replaceRest: true, cap: 36, sourceId: id, sourceKind: 'mix' });
+          enqueueAfterCurrent(r.tracks, {
+            replaceRest: true,
+            cap: MIX_TARGET,
+            sourceId: id,
+            sourceKind: 'mix',
+          });
         } else {
           void playQueue(r.tracks, 0, { sourceId: id, sourceKind: 'mix' });
         }

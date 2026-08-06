@@ -1,28 +1,49 @@
 package ovh.delhomme.ytmusic.data
 
-/** Construit une file « radio » style YouTube Music. */
+/** Construit une file « radio » précalculée (~200 titres côté serveur). */
 suspend fun buildRadioQueue(
     api: YtMusicApi,
     kind: String,
     id: String,
     seed: TrackDto? = null,
     stayClose: Boolean = false,
+    mixCache: MixCacheStore? = null,
 ): List<TrackDto> {
+    val cacheKey = when (kind) {
+        "album" -> mixCache?.keyRadio("album", id)
+        "artist" -> mixCache?.keyRadio("artist", id)
+        else -> mixCache?.keyRadio("track", id)
+    }
+    mixCache?.let { cache ->
+        cacheKey?.let { key ->
+            cache.get(key)?.takeIf { it.isNotEmpty() }?.let { cached ->
+                val seedPlayable = seed?.takeIf { it.isPlayable() }
+                val head = seedPlayable ?: cached.firstOrNull() ?: return@let
+                return listOf(head) + cached.filter { it.id != head.id }.take(MixCacheStore.MIX_TARGET)
+            }
+        }
+    }
+
     val seedPlayable = seed?.takeIf { it.isPlayable() }
     val pool = mutableListOf<TrackDto>()
     var start: TrackDto? = seedPlayable
 
     when (kind) {
         "album" -> {
-            val radio = runCatching { api.albumRadio(id).tracks }.getOrDefault(emptyList())
+            val radioRes = runCatching { api.albumRadio(id) }.getOrNull()
+            val radio = radioRes?.tracks.orEmpty()
             val album = runCatching { api.album(id) }.getOrNull()
             val albumTracks = album?.tracks.orEmpty().filter { it.isPlayable() }
             start = start ?: albumTracks.firstOrNull()
             pool += radio.filter { it.isPlayable() && it.id != start?.id }
             pool += albumTracks.filter { it.id != start?.id }.take(6)
+            if (mixCache != null && cacheKey != null && pool.isNotEmpty()) {
+                mixCache.put(cacheKey, pool, radioRes?.generatedAt ?: System.currentTimeMillis())
+            }
         }
         "artist" -> {
-            val radio = runCatching { api.artistRadio(id).tracks }.getOrDefault(emptyList())
+            val radioRes = runCatching { api.artistRadio(id) }.getOrNull()
+            val radio = radioRes?.tracks.orEmpty()
             val artist = runCatching { api.artist(id) }.getOrNull()
             val songs = (artist?.songs.orEmpty() + artist?.tracks.orEmpty())
                 .distinctBy { it.id }
@@ -30,11 +51,13 @@ suspend fun buildRadioQueue(
             start = start ?: songs.firstOrNull() ?: radio.firstOrNull { it.isPlayable() }
             pool += songs.filter { it.id != start?.id }.take(8)
             pool += radio.filter { it.isPlayable() && it.id != start?.id }
+            if (mixCache != null && cacheKey != null && pool.isNotEmpty()) {
+                mixCache.put(cacheKey, pool, radioRes?.generatedAt ?: System.currentTimeMillis())
+            }
         }
         else -> {
             val trackId = id
-            val related = runCatching { api.related(trackId) }.getOrNull()
-            // related = ranked style côté API — pas besoin de similar + upNext en plus
+            val related = runCatching { api.related(trackId, full = 1) }.getOrNull()
             var candidates = (
                 (related?.tracks.orEmpty()) +
                     (related?.related.orEmpty()) +
@@ -57,11 +80,9 @@ suspend fun buildRadioQueue(
                         (a.id ?: a.name).lowercase() == key
                     }
                 }
-                // stayClose : un peu du même artiste, majorité voisins de style
-                candidates = close.take(10) + far
-            } else {
-                candidates = diversifyByArtist(candidates, seedPlayable)
+                candidates = close.take(20) + far
             }
+            // Ranking serveur déjà diversifié — pas de diversify client
             pool += candidates
             start = start ?: TrackDto(
                 id = trackId,
@@ -70,6 +91,9 @@ suspend fun buildRadioQueue(
                 thumbnails = seed?.thumbnails,
                 type = "song",
             ).takeIf { it.isPlayable() }
+            if (mixCache != null && cacheKey != null && pool.isNotEmpty()) {
+                mixCache.put(cacheKey, pool, related?.generatedAt ?: System.currentTimeMillis())
+            }
         }
     }
 
@@ -79,53 +103,9 @@ suspend fun buildRadioQueue(
         if (t.id in seen || !t.isPlayable()) continue
         seen += t.id
         uniq += t
-        if (uniq.size >= 90) break
+        if (uniq.size >= MixCacheStore.MIX_TARGET) break
     }
 
     val head = start?.takeIf { it.isPlayable() } ?: uniq.firstOrNull() ?: return emptyList()
     return listOf(head) + uniq.filter { it.id != head.id }
-}
-
-/** Round-robin par artiste — même style, pas une rafale du même auteur. */
-private fun diversifyByArtist(tracks: List<TrackDto>, seed: TrackDto?): List<TrackDto> {
-    val seedKey = (
-        seed?.artists?.firstOrNull()?.id
-            ?: seed?.artists?.firstOrNull()?.name
-            ?: ""
-        ).lowercase()
-    val buckets = linkedMapOf<String, ArrayDeque<TrackDto>>()
-    for (t in tracks) {
-        if (!t.isPlayable()) continue
-        val key = (t.artists?.firstOrNull()?.id ?: t.artists?.firstOrNull()?.name ?: t.id).lowercase()
-        buckets.getOrPut(key) { ArrayDeque() }.add(t)
-    }
-    val keys = buckets.keys.sortedWith { a, b ->
-        when {
-            a == seedKey -> 1
-            b == seedKey -> -1
-            else -> (buckets[b]?.size ?: 0).compareTo(buckets[a]?.size ?: 0)
-        }
-    }
-    val out = ArrayList<TrackDto>(80)
-    val seen = HashSet<String>()
-    var seedHits = 0
-    var guard = 0
-    while (out.size < 80 && guard++ < 400) {
-        var added = false
-        for (k in keys) {
-            val bucket = buckets[k] ?: continue
-            if (bucket.isEmpty()) continue
-            if (seedKey.isNotEmpty() && k == seedKey && seedHits >= maxOf(1, out.size / 4 + 1)) {
-                continue
-            }
-            val t = bucket.removeFirst()
-            if (!seen.add(t.id)) continue
-            out += t
-            if (seedKey.isNotEmpty() && k == seedKey) seedHits += 1
-            added = true
-            if (out.size >= 80) break
-        }
-        if (!added) break
-    }
-    return out
 }

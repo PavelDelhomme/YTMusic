@@ -149,6 +149,9 @@ data class RadioCategoryDto(
 data class RadioMixResponse(
     val tracks: List<TrackDto> = emptyList(),
     val seed: TrackDto? = null,
+    val cached: Boolean? = null,
+    val target: Int? = null,
+    val generatedAt: Long? = null,
 )
 
 @JsonClass(generateAdapter = false)
