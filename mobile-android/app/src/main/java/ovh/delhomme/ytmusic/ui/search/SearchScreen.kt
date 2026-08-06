@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -335,8 +336,8 @@ fun SearchScreen(
             }
             else -> {
                 LazyColumn(contentPadding = PaddingValues(bottom = 24.dp, top = 4.dp)) {
-                    state.sections.forEach { section ->
-                        item {
+                    state.sections.forEachIndexed { sectionIndex, section ->
+                        item(key = "sec-title-$sectionIndex-${section.title}") {
                             Text(
                                 section.title,
                                 style = MaterialTheme.typography.titleMedium,
@@ -344,7 +345,10 @@ fun SearchScreen(
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                             )
                         }
-                        items(section.items, key = { "${section.title}-${it.id}" }) { track ->
+                        itemsIndexed(
+                            section.items,
+                            key = { index, track -> "sec-$sectionIndex-${track.id}-$index" },
+                        ) { _, track ->
                             TrackRow(
                                 track = track,
                                 highlighted = section.title == "Meilleur résultat",
