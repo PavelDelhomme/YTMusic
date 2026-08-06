@@ -1244,27 +1244,71 @@ function parseLrcBlock(raw: string): { startMs: number; text: string }[] {
 }
 
 async function fetchLrclibTimed(artist: string, title: string, durationSec?: number) {
-  if (!artist.trim() || !title.trim()) return null;
-  const params = new URLSearchParams({
-    artist_name: artist.slice(0, 120),
-    track_name: title.slice(0, 160),
-  });
-  if (durationSec && durationSec > 0) params.set('duration', String(Math.round(durationSec)));
+  if (!title.trim()) return null;
   const ctrl = AbortSignal.timeout(4500);
-  const res = await fetch(`https://lrclib.net/api/get?${params}`, {
-    signal: ctrl,
-    headers: { 'User-Agent': 'YTMusic/1.0 (self-hosted)' },
-  });
-  if (!res.ok) return null;
-  const data = (await res.json()) as { syncedLyrics?: string | null; plainLyrics?: string | null };
-  const synced = data.syncedLyrics?.trim();
-  if (synced) {
-    const timed = parseLrcBlock(synced);
+  const headers = { 'User-Agent': 'YTMusic/1.0 (self-hosted)' };
+
+  const tryGet = async (artistName: string, trackName: string, withDuration: boolean) => {
+    if (!trackName.trim()) return null;
+    const params = new URLSearchParams({
+      artist_name: (artistName || 'Unknown').slice(0, 120),
+      track_name: trackName.slice(0, 160),
+    });
+    if (withDuration && durationSec && durationSec > 0) {
+      params.set('duration', String(Math.round(durationSec)));
+    }
+    const res = await fetch(`https://lrclib.net/api/get?${params}`, { signal: ctrl, headers });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { syncedLyrics?: string | null; plainLyrics?: string | null };
+    const synced = data.syncedLyrics?.trim();
+    if (synced) {
+      const timed = parseLrcBlock(synced);
+      if (timed.length) return { lyrics: timed.map((l) => l.text).join('\n'), timed };
+    }
+    const plain = data.plainLyrics?.trim();
+    if (plain) return { lyrics: plain, timed: null as { startMs: number; text: string }[] | null };
+    return null;
+  };
+
+  const cleanTitle = title
+    .replace(/\s*[\[(【].*?[\])】]/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  // 1) get exact (avec durée) → 2) get sans durée → 3) search
+  for (const t of [cleanTitle, title]) {
+    const hit =
+      (await tryGet(artist, t, true).catch(() => null)) ||
+      (await tryGet(artist, t, false).catch(() => null));
+    if (hit) return hit;
+  }
+
+  const q = [artist, cleanTitle || title].filter(Boolean).join(' ').slice(0, 180);
+  if (!q) return null;
+  const searchRes = await fetch(
+    `https://lrclib.net/api/search?${new URLSearchParams({ q })}`,
+    { signal: ctrl, headers },
+  ).catch(() => null);
+  if (!searchRes?.ok) return null;
+  const results = (await searchRes.json()) as Array<{
+    artistName?: string;
+    trackName?: string;
+    syncedLyrics?: string | null;
+    plainLyrics?: string | null;
+    duration?: number;
+  }>;
+  if (!Array.isArray(results) || !results.length) return null;
+  const best = results.find((r) => r.syncedLyrics?.trim()) || results.find((r) => r.plainLyrics?.trim());
+  if (!best) return null;
+  if (best.syncedLyrics?.trim()) {
+    const timed = parseLrcBlock(best.syncedLyrics);
     if (timed.length) return { lyrics: timed.map((l) => l.text).join('\n'), timed };
   }
-  const plain = data.plainLyrics?.trim();
-  if (plain) return { lyrics: plain, timed: null as { startMs: number; text: string }[] | null };
-  return null;
+  if (best.plainLyrics?.trim()) {
+    return { lyrics: best.plainLyrics.trim(), timed: null };
+  }
+  // Search hits sometimes omit lyric bodies → re-get by names
+  return tryGet(best.artistName || artist, best.trackName || cleanTitle || title, false);
 }
 
 export async function getLyrics(videoId: string): Promise<{
@@ -1272,8 +1316,11 @@ export async function getLyrics(videoId: string): Promise<{
   timed: { startMs: number; text: string }[] | null;
 }> {
   const cached = lyricsCache.get(videoId);
-  if (cached && Date.now() - cached.at < 6 * 60 * 60 * 1000) {
-    return { lyrics: cached.lyrics, timed: cached.timed };
+  if (cached) {
+    const ttl = cached.lyrics ? 6 * 60 * 60 * 1000 : 90 * 1000; // null : court TTL pour retenter
+    if (Date.now() - cached.at < ttl) {
+      return { lyrics: cached.lyrics, timed: cached.timed };
+    }
   }
 
   const innertube = await getYT();
@@ -1306,8 +1353,8 @@ export async function getLyrics(videoId: string): Promise<{
     /* fallback LRCLIB */
   }
 
-  // Pas de timed YouTube → LRCLIB (sync style YTM)
-  if (!timed?.length) {
+  // Pas de timed YouTube → LRCLIB (sync style YTM) ; aussi si texte YouTube absent
+  if (!timed?.length || !text) {
     try {
       const meta = await getTrack(videoId, { light: true }).catch(() => null);
       const title = meta?.track?.title || '';
