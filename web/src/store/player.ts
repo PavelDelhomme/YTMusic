@@ -1734,9 +1734,31 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     const { audioEl, progress, duration } = get();
     const cur =
       audioEl && Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : progress;
-    const max = duration > 0 ? duration : Math.max(cur + Math.abs(deltaSec), cur);
+    const audioDur =
+      audioEl && Number.isFinite(audioEl.duration) && audioEl.duration > 0 ? audioEl.duration : 0;
+    const max =
+      duration > 0 ? duration : audioDur > 0 ? audioDur : Math.max(cur + Math.abs(deltaSec), cur);
     const next = Math.max(0, Math.min(max, cur + deltaSec));
-    get().seek(next);
+    // Scrub rapide (appui long) : pas de publish/persist à chaque tick
+    if (!isActivePlayer()) {
+      sendCmd({ action: 'seek', time: next });
+      set({ progress: next });
+      return;
+    }
+    if (audioEl) {
+      try {
+        audioEl.currentTime = next;
+      } catch {
+        /* ignore NotSupportedError pendant chargement */
+      }
+    }
+    set({ progress: next });
+    const now = Date.now();
+    const last = (get() as PlayerState & { _lastSeekPublishAt?: number })._lastSeekPublishAt || 0;
+    if (now - last > 900) {
+      (get() as PlayerState & { _lastSeekPublishAt?: number })._lastSeekPublishAt = now;
+      publish();
+    }
   },
 
   setDuration: (n) => set({ duration: n }),

@@ -392,7 +392,21 @@ export function PlayerBar({
             <MoreVertical className="h-5 w-5" />
           </button>
         </div>
-        <div className="mt-0.5 flex items-center justify-end gap-0.5 pr-1" onClick={stop}>
+        <div className="mt-0.5 flex items-center justify-center gap-0.5" onClick={stop} onPointerDown={stop}>
+          <button
+            type="button"
+            onPointerDown={holdPrev.onPointerDown}
+            onPointerUp={holdPrev.onPointerUp}
+            onPointerCancel={holdPrev.onPointerCancel}
+            onLostPointerCapture={holdPrev.onLostPointerCapture}
+            onContextMenu={holdPrev.onContextMenu}
+            onClick={holdPrev.onClick}
+            className="flex h-10 w-10 items-center justify-center rounded-full text-white touch-none select-none"
+            aria-label="Titre précédent"
+            title="Clic : précédent · Appui long : reculer dans le titre"
+          >
+            <SkipBack className="h-5 w-5 fill-white" />
+          </button>
           <button
             type="button"
             onClick={(e) => {
@@ -410,7 +424,9 @@ export function PlayerBar({
             onPointerDown={holdNext.onPointerDown}
             onPointerUp={holdNext.onPointerUp}
             onPointerCancel={holdNext.onPointerCancel}
+            onLostPointerCapture={holdNext.onLostPointerCapture}
             onContextMenu={holdNext.onContextMenu}
+            onClick={holdNext.onClick}
             disabled={autoRadioLoading}
             className="flex h-10 w-10 items-center justify-center rounded-full text-white disabled:opacity-50 touch-none select-none"
             aria-label="Titre suivant"
@@ -433,7 +449,9 @@ export function PlayerBar({
             onPointerDown={holdPrev.onPointerDown}
             onPointerUp={holdPrev.onPointerUp}
             onPointerCancel={holdPrev.onPointerCancel}
+            onLostPointerCapture={holdPrev.onLostPointerCapture}
             onContextMenu={holdPrev.onContextMenu}
+            onClick={holdPrev.onClick}
             className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10 touch-none select-none"
             aria-label="Titre précédent"
             title="Clic : précédent · Appui long : reculer dans le titre"
@@ -457,7 +475,9 @@ export function PlayerBar({
             onPointerDown={holdNext.onPointerDown}
             onPointerUp={holdNext.onPointerUp}
             onPointerCancel={holdNext.onPointerCancel}
+            onLostPointerCapture={holdNext.onLostPointerCapture}
             onContextMenu={holdNext.onContextMenu}
+            onClick={holdNext.onClick}
             disabled={autoRadioLoading}
             className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10 disabled:opacity-50 touch-none select-none"
             aria-label="Titre suivant"
