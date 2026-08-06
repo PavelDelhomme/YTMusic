@@ -168,12 +168,17 @@ fun NowPlayingScreen(
     val queueOpen = queueProgress.value > 0.55f
     val queueInteractive = queueProgress.value > 0.02f
 
-    // Remplit la zone « À suivre » — fast puis full ; seuil = titres restants
+    // Remplit « À suivre » — ne PAS clear/rebuild à chaque ouverture du plein écran
+    // (sinon setMediaItems+prepare → coupe l’audio). Clear seulement si le seed change.
+    var lastAutoplaySeed by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(ui.track?.id, ui.autoplaySuggestions) {
         if (!ui.autoplaySuggestions) return@LaunchedEffect
         val seed = ui.track?.id ?: return@LaunchedEffect
-        // Nouveau seed → oublier l’ancienne suite (évite la même liste partout)
-        player.clearAutoTracks()
+        val seedChanged = lastAutoplaySeed != null && lastAutoplaySeed != seed
+        lastAutoplaySeed = seed
+        if (seedChanged) {
+            player.clearAutoTracks()
+        }
         val remaining = (player.state.value.queue.size - player.state.value.queueIndex - 1)
             .coerceAtLeast(0)
         if (remaining >= 8) return@LaunchedEffect
