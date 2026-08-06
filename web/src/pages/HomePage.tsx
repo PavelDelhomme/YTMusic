@@ -330,8 +330,8 @@ export function HomePage() {
       )}
       {shelves
         .filter((s) => !/^épinglé$/i.test(s.title))
-        .map((shelf) => (
-          <ShelfRow key={shelf.title} title={shelf.title} items={shelf.items} />
+        .map((shelf, i) => (
+          <ShelfRow key={`${shelf.title}-${i}`} title={shelf.title} items={shelf.items} />
         ))}
 
       <div ref={sentinel} className="py-8 text-center text-sm text-yt-muted">
