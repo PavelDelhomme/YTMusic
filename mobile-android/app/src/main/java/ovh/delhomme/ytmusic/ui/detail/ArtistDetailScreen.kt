@@ -385,7 +385,7 @@ fun ArtistDetailScreen(
                                 )
                             }
                         }
-                        itemsIndexed(libTracks.take(8), key = { _, t -> "lib-${t.id}" }) { _, track ->
+                        itemsIndexed(libTracks.take(8), key = { i, t -> "lib-${t.id}-$i" }) { _, track ->
                             TrackRow(
                                 track = track,
                                 onClick = { onPlay(libTracks, libTracks.indexOf(track).coerceAtLeast(0)) },
@@ -426,7 +426,7 @@ fun ArtistDetailScreen(
                     }
                     if (videos.isNotEmpty()) {
                         item { SectionTitle("Vidéos") }
-                        itemsIndexed(videos.take(8), key = { _, t -> "vid-${t.id}" }) { index, track ->
+                        itemsIndexed(videos.take(8), key = { i, t -> "vid-${t.id}-$i" }) { index, track ->
                             TrackRow(
                                 track = track,
                                 onClick = {
