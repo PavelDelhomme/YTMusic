@@ -203,6 +203,8 @@ fun MiniPlayerBar(
     onSeek: ((Float) -> Unit)? = null,
     onPrev: (() -> Unit)? = null,
     onNext: (() -> Unit)? = null,
+    /** Appui long next/prev : delta ms dans le titre courant. */
+    onSeekBy: ((Long) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var scrub by remember(track.id) { mutableFloatStateOf(-1f) }
@@ -350,13 +352,27 @@ fun MiniPlayerBar(
                 }
             }
             if (onPrev != null) {
-                IconButton(onClick = onPrev) {
-                    Icon(
-                        Icons.Default.SkipPrevious,
-                        contentDescription = "Précédent",
-                        tint = Color(0xFFF5F5F5),
-                        modifier = Modifier.size(26.dp),
-                    )
+                if (onSeekBy != null) {
+                    HoldSeekIconButton(
+                        onClick = onPrev,
+                        onHoldTick = { onSeekBy(-2_000L) },
+                    ) {
+                        Icon(
+                            Icons.Default.SkipPrevious,
+                            contentDescription = "Précédent · appui long : reculer",
+                            tint = Color(0xFFF5F5F5),
+                            modifier = Modifier.size(26.dp),
+                        )
+                    }
+                } else {
+                    IconButton(onClick = onPrev) {
+                        Icon(
+                            Icons.Default.SkipPrevious,
+                            contentDescription = "Précédent",
+                            tint = Color(0xFFF5F5F5),
+                            modifier = Modifier.size(26.dp),
+                        )
+                    }
                 }
             }
             IconButton(onClick = onToggle) {
@@ -368,13 +384,27 @@ fun MiniPlayerBar(
                 )
             }
             if (onNext != null) {
-                IconButton(onClick = onNext) {
-                    Icon(
-                        Icons.Default.SkipNext,
-                        contentDescription = "Suivant",
-                        tint = Color(0xFFF5F5F5),
-                        modifier = Modifier.size(26.dp),
-                    )
+                if (onSeekBy != null) {
+                    HoldSeekIconButton(
+                        onClick = onNext,
+                        onHoldTick = { onSeekBy(2_000L) },
+                    ) {
+                        Icon(
+                            Icons.Default.SkipNext,
+                            contentDescription = "Suivant · appui long : avancer",
+                            tint = Color(0xFFF5F5F5),
+                            modifier = Modifier.size(26.dp),
+                        )
+                    }
+                } else {
+                    IconButton(onClick = onNext) {
+                        Icon(
+                            Icons.Default.SkipNext,
+                            contentDescription = "Suivant",
+                            tint = Color(0xFFF5F5F5),
+                            modifier = Modifier.size(26.dp),
+                        )
+                    }
                 }
             }
         }
