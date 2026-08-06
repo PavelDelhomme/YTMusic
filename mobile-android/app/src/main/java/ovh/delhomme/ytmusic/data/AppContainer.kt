@@ -28,6 +28,7 @@ class AppContainer(context: Context) {
     val quickAccess = QuickAccessStore(appContext)
     val homeCache = HomeCacheStore(appContext)
     val offlineStore by lazy { LocalOfflineStore(appContext, moshi) }
+    val localPlayback by lazy { LocalPlaybackStore(appContext, moshi) }
     private val apiPrefs = appContext.getSharedPreferences("ytm_api", Context.MODE_PRIVATE)
 
     val deviceId: String by lazy {
@@ -213,6 +214,17 @@ class AppContainer(context: Context) {
         val token = tokenStore.peekAccess()
         return if (!token.isNullOrBlank()) {
             "$base?access_token=${java.net.URLEncoder.encode(token, Charsets.UTF_8.name())}"
+        } else {
+            base
+        }
+    }
+
+    /** Stream vidéo progressif (onglet Vidéo) — muet, syncé sur l’audio. */
+    fun videoStreamUrl(trackId: String): String {
+        val base = resolvedApiBase() + "/api/stream/$trackId?type=video"
+        val token = tokenStore.peekAccess()
+        return if (!token.isNullOrBlank()) {
+            "$base&access_token=${java.net.URLEncoder.encode(token, Charsets.UTF_8.name())}"
         } else {
             base
         }
