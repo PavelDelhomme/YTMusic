@@ -11,43 +11,24 @@ if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
 const ALLOWED =
   /^(https?:\/\/)?([a-z0-9.-]+\.)?(googleusercontent\.com|ggpht\.com|ytimg\.com|youtube\.com|yt3\.ggpht\.com)\//i;
 
-export async function handleImageProxy(req: Request, res: Response) {
+/** Tailles ytimg fiables (maxres / hq720 / sddefault 404 souvent). */
+const YTIMG_SAFE = ['hqdefault.jpg', 'mqdefault.jpg', 'default.jpg'] as const;
+
+const PLACEHOLDER_SVG = Buffer.from(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480" viewBox="0 0 480 480">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#3a3a3a"/><stop offset="100%" stop-color="#1a1a1a"/>
+  </linearGradient></defs>
+  <rect width="480" height="480" fill="url(#g)"/>
+</svg>`,
+);
+
+function ytimgChain(videoId: string): string[] {
+  return YTIMG_SAFE.map((f) => `https://i.ytimg.com/vi/${videoId}/${f}`);
+}
+
+async function fetchImage(url: string): Promise<{ buf: Buffer; type: string } | null> {
   try {
-    const raw = String(req.query.u || '');
-    if (!raw) {
-      res.status(400).json({ error: 'u requis' });
-      return;
-    }
-    let url: string;
-    try {
-      url = decodeURIComponent(raw);
-    } catch {
-      url = raw;
-    }
-    if (!/^https?:\/\//i.test(url)) {
-      res.status(400).json({ error: 'URL invalide' });
-      return;
-    }
-    if (!ALLOWED.test(url) && !/i\.ytimg\.com|yt3\.|ggpht|googleusercontent|lh3\.google/i.test(url)) {
-      res.status(403).json({ error: 'domaine non autorisé' });
-      return;
-    }
-
-    const key = createHash('sha1').update(url).digest('hex');
-    const file = join(CACHE_DIR, key);
-    const meta = join(CACHE_DIR, `${key}.meta`);
-
-    if (existsSync(file) && existsSync(meta)) {
-      const age = Date.now() - statSync(file).mtimeMs;
-      if (age < 7 * 24 * 3600 * 1000) {
-        const type = readFileSync(meta, 'utf8') || 'image/jpeg';
-        res.setHeader('Content-Type', type);
-        res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
-        res.send(readFileSync(file));
-        return;
-      }
-    }
-
     const upstream = await fetch(url, {
       headers: {
         'User-Agent':
@@ -56,19 +37,108 @@ export async function handleImageProxy(req: Request, res: Response) {
         Referer: 'https://music.youtube.com/',
       },
       redirect: 'follow',
+      signal: AbortSignal.timeout(8000),
     });
-    if (!upstream.ok) {
-      res.status(upstream.status).json({ error: 'fetch failed' });
+    if (!upstream.ok) return null;
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    // Placeholder YouTube 120×90 parfois servi en 200 — trop petit = inutile
+    if (buf.length < 2000) return null;
+    const type = upstream.headers.get('content-type') || 'image/jpeg';
+    if (!/^image\//i.test(type) && !type.includes('octet-stream')) return null;
+    return { buf, type: type.includes('octet-stream') ? 'image/jpeg' : type };
+  } catch {
+    return null;
+  }
+}
+
+function cacheGet(key: string): { buf: Buffer; type: string } | null {
+  const file = join(CACHE_DIR, key);
+  const meta = join(CACHE_DIR, `${key}.meta`);
+  if (!existsSync(file) || !existsSync(meta)) return null;
+  const age = Date.now() - statSync(file).mtimeMs;
+  if (age >= 7 * 24 * 3600 * 1000) return null;
+  return { buf: readFileSync(file), type: readFileSync(meta, 'utf8') || 'image/jpeg' };
+}
+
+function cachePut(key: string, buf: Buffer, type: string) {
+  writeFileSync(join(CACHE_DIR, key), buf);
+  writeFileSync(join(CACHE_DIR, `${key}.meta`), type);
+}
+
+function sendImage(res: Response, buf: Buffer, type: string, hit: string) {
+  res.setHeader('Content-Type', type);
+  res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+  res.setHeader('X-YTM-Img', hit);
+  res.send(buf);
+}
+
+/**
+ * Proxy image :
+ * - `?u=<url>` : une URL (ggpht / ytimg…)
+ * - `?v=<videoId>` : chaîne ytimg fiable + fallback SVG (jamais 404 navigateur)
+ * - les deux : essaie `u` puis la chaîne `v`
+ */
+export async function handleImageProxy(req: Request, res: Response) {
+  try {
+    const rawU = String(req.query.u || '');
+    const videoId = String(req.query.v || '').trim();
+    const candidates: string[] = [];
+
+    if (rawU) {
+      let url: string;
+      try {
+        url = decodeURIComponent(rawU);
+      } catch {
+        url = rawU;
+      }
+      if (!/^https?:\/\//i.test(url)) {
+        res.status(400).json({ error: 'URL invalide' });
+        return;
+      }
+      if (!ALLOWED.test(url) && !/i\.ytimg\.com|yt3\.|ggpht|googleusercontent|lh3\.google/i.test(url)) {
+        res.status(403).json({ error: 'domaine non autorisé' });
+        return;
+      }
+      // Réécrit les tailles ytimg fragiles vers hqdefault
+      const vi = url.match(/i\.ytimg\.com\/vi(?:_webp)?\/([^/]+)\//i);
+      if (vi) {
+        candidates.push(...ytimgChain(vi[1]));
+      } else {
+        candidates.push(url);
+      }
+    }
+
+    if (/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+      for (const u of ytimgChain(videoId)) {
+        if (!candidates.includes(u)) candidates.push(u);
+      }
+    }
+
+    if (!candidates.length) {
+      res.status(400).json({ error: 'u ou v requis' });
       return;
     }
-    const buf = Buffer.from(await upstream.arrayBuffer());
-    const type = upstream.headers.get('content-type') || 'image/jpeg';
-    writeFileSync(file, buf);
-    writeFileSync(meta, type);
-    res.setHeader('Content-Type', type);
-    res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
-    res.send(buf);
+
+    // Cache clé = première URL + id vidéo
+    const cacheKey = createHash('sha1').update(`v2:${videoId}|${candidates.join('|')}`).digest('hex');
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+      sendImage(res, cached.buf, cached.type, 'cache');
+      return;
+    }
+
+    for (const url of candidates) {
+      const got = await fetchImage(url);
+      if (!got) continue;
+      cachePut(cacheKey, got.buf, got.type);
+      sendImage(res, got.buf, got.type, 'ok');
+      return;
+    }
+
+    // Toujours une image (évite 404 console côté client)
+    sendImage(res, PLACEHOLDER_SVG, 'image/svg+xml', 'placeholder');
   } catch (err) {
-    res.status(500).json({ error: String((err as Error).message || err) });
+    sendImage(res, PLACEHOLDER_SVG, 'image/svg+xml', 'error');
+    void err;
   }
 }
