@@ -27,8 +27,17 @@ export type MixCachePayload = {
   target: number;
 };
 
-export function mixKeyCategory(categoryId: string) {
-  return `cat:${categoryId}`;
+export function mixKeyCategory(categoryId: string, genresKey = '') {
+  return genresKey ? `cat:${categoryId}:g:${genresKey}` : `cat:${categoryId}`;
+}
+
+export function genresCacheKey(genres: string[]) {
+  return [...genres]
+    .map((g) => g.trim().toLowerCase())
+    .filter(Boolean)
+    .sort()
+    .join(',')
+    .slice(0, 80);
 }
 
 export function mixKeyRadio(kind: 'track' | 'album' | 'artist', id: string) {

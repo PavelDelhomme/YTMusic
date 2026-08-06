@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.data.AppContainer
+import ovh.delhomme.ytmusic.data.NetworkMonitor
 import ovh.delhomme.ytmusic.debug.CrashReporter
 
 class YtMusicApp : Application(), ImageLoaderFactory {
@@ -23,6 +24,7 @@ class YtMusicApp : Application(), ImageLoaderFactory {
         instance = this
         CrashReporter.install(this)
         container = AppContainer(this)
+        NetworkMonitor.start(this)
         // Précharge les JWT en mémoire dès le boot (évite runBlocking DataStore)
         appScope.launch {
             runCatching { container.tokenStore.warmCache() }

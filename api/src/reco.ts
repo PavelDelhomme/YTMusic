@@ -22,22 +22,110 @@ import {
   MIX_PREVIEW,
   MIX_TARGET,
   getMixCache,
+  genresCacheKey,
   mixKeyCategory,
   mixKeyRadio,
   setMixCache,
 } from './mixCache.js';
 
 export const RADIO_CATEGORIES = [
-  { id: 'focus', title: 'Concentration', query: 'focus concentration playlist', mode: 'focus' },
-  { id: 'chill', title: 'Détente', query: 'chill lo-fi playlist', mode: 'radio' },
-  { id: 'workout', title: 'Sport', query: 'workout energy playlist', mode: 'radio' },
-  { id: 'party', title: 'Fête', query: 'party hits playlist', mode: 'radio' },
-  { id: 'night', title: 'Sommeil', query: 'late night jazz chill', mode: 'radio' },
-  { id: 'morning', title: 'Bonne humeur', query: 'morning acoustic pop', mode: 'radio' },
-  { id: 'discover', title: 'Nouveautés', query: 'new music friday indie', mode: 'discover' },
+  {
+    id: 'focus',
+    title: 'Concentration',
+    query: 'focus concentration playlist',
+    mode: 'focus',
+    genreTags: ['lofi', 'chill', 'classical', 'jazz'] as const,
+  },
+  {
+    id: 'chill',
+    title: 'Détente',
+    query: 'chill lo-fi playlist',
+    mode: 'radio',
+    genreTags: ['lofi', 'chill', 'jazz', 'rnb'] as const,
+  },
+  {
+    id: 'workout',
+    title: 'Sport',
+    query: 'workout energy playlist',
+    mode: 'radio',
+    genreTags: ['electronic', 'hiphop', 'dance', 'rock', 'pop'] as const,
+  },
+  {
+    id: 'party',
+    title: 'Fête',
+    query: 'party hits playlist',
+    mode: 'radio',
+    genreTags: ['dance', 'pop', 'electronic', 'latin', 'funk'] as const,
+  },
+  {
+    id: 'night',
+    title: 'Sommeil',
+    query: 'late night jazz chill',
+    mode: 'radio',
+    genreTags: ['jazz', 'chill', 'classical', 'lofi'] as const,
+  },
+  {
+    id: 'morning',
+    title: 'Bonne humeur',
+    query: 'morning acoustic pop',
+    mode: 'radio',
+    genreTags: ['pop', 'indie', 'folk', 'rnb', 'chanson'] as const,
+  },
+  {
+    id: 'discover',
+    title: 'Nouveautés',
+    query: 'new music friday indie',
+    mode: 'discover',
+    genreTags: ['indie', 'pop', 'electronic', 'hiphop'] as const,
+  },
   /** Radio seedée sur les tops écoutés — distinct du rayon Accueil « Favoris à redécouvrir ». */
-  { id: 'liked-radio', title: 'Radio J’aime', query: '', mode: 'radio' },
+  {
+    id: 'liked-radio',
+    title: 'Radio J’aime',
+    query: '',
+    mode: 'radio',
+    genreTags: [] as const,
+  },
 ] as const;
+
+/** Prefs UI (Pop, Hip-Hop…) → tags internes STYLE_TAGS. */
+const PREF_GENRE_TO_TAGS: Record<string, string[]> = {
+  pop: ['pop'],
+  rock: ['rock'],
+  'hip-hop': ['hiphop'],
+  hiphop: ['hiphop'],
+  'r&b': ['rnb'],
+  rnb: ['rnb'],
+  électro: ['electronic', 'dance'],
+  electro: ['electronic', 'dance'],
+  jazz: ['jazz'],
+  classique: ['classical'],
+  classical: ['classical'],
+  metal: ['rock'],
+  indie: ['indie'],
+  latin: ['latin'],
+  afrobeats: ['afro'],
+  afro: ['afro'],
+  'k-pop': ['kpop'],
+  kpop: ['kpop'],
+  country: ['country'],
+  soul: ['rnb', 'soul'],
+  'lo-fi': ['lofi', 'chill'],
+  lofi: ['lofi', 'chill'],
+  'rap fr': ['hiphop', 'chanson'],
+  rap: ['hiphop'],
+};
+
+export function prefGenresToTags(prefsGenres: string[]): string[] {
+  const out = new Set<string>();
+  for (const g of prefsGenres) {
+    const key = g.trim().toLowerCase();
+    const mapped = PREF_GENRE_TO_TAGS[key];
+    if (mapped) mapped.forEach((t) => out.add(t));
+    else if (key) out.add(key.replace(/\s+/g, ''));
+  }
+  return [...out];
+}
 
 function hourBucket(h: number) {
   if (h < 6) return 'night';
@@ -128,7 +216,12 @@ function artistKey(t: Track) {
   return (t.artists?.[0]?.id || t.artists?.[0]?.name || '').toLowerCase();
 }
 
-function scoreContent(candidate: Track, seed: Track | null, prefsGenres: string[]) {
+function scoreContent(
+  candidate: Track,
+  seed: Track | null,
+  prefsGenres: string[],
+  targetTags: string[] = [],
+) {
   let s = 0.28;
   if (seed) {
     const sameArtist = artistKey(candidate) && artistKey(candidate) === artistKey(seed);
@@ -159,9 +252,18 @@ function scoreContent(candidate: Track, seed: Track | null, prefsGenres: string[
     s += Math.min(0.04, titleOverlap * 0.015);
   }
   }
-  const blob = trackBlob(candidate);
-  for (const g of prefsGenres) {
-    if (g && blob.includes(g.toLowerCase())) s += 0.1;
+  const candTags = styleTags(candidate);
+  const prefTags = prefGenresToTags(prefsGenres);
+  const wanted = [...new Set([...targetTags, ...prefTags])];
+  if (wanted.length) {
+    const hit = wanted.filter((t) => candTags.includes(t)).length;
+    if (hit) s += Math.min(0.35, hit * 0.14);
+    else if (candTags.length) s -= 0.08;
+  } else {
+    const blob = trackBlob(candidate);
+    for (const g of prefsGenres) {
+      if (g && blob.includes(g.toLowerCase())) s += 0.1;
+    }
   }
   return Math.max(0, Math.min(1, s));
 }
@@ -348,8 +450,15 @@ export async function hybridRank(opts: {
   mode?: string;
   /** Pour mixes longs : pénalise sans exclure (permet d’atteindre ~200). */
   softExcludePlayed?: boolean;
+  /** Tags genre cibles (prefs + catégorie mix). */
+  targetTags?: string[];
 }): Promise<Track[]> {
   const prefs = getPrefs(opts.userId);
+  const targetTags = [
+    ...(opts.targetTags || []),
+    ...prefGenresToTags(prefs.genres || []),
+  ];
+  const uniqueTargetTags = [...new Set(targetTags)];
   const mode =
     opts.mode ||
     (prefs.discoveryBias > 0.25 ? 'discover' : 'radio');
@@ -423,7 +532,7 @@ export async function hybridRank(opts: {
     .filter((t) => !seed || !isRemixSpamOfSeed(t, seed))
     .filter((t) => !(excludePlayed && recentlyPlayedHard.has(t.id)))
     .map((track) => {
-      const s1 = scoreContent(track, seed, prefs.genres);
+      const s1 = scoreContent(track, seed, prefs.genres, uniqueTargetTags);
       const s2 = scoreSeq(track, seed);
       const s3 = scoreCtx(track, prefs.moments, hour, weekend);
       const s4 = scoreBandit(track.id, listenCounts, prefs.discoveryBias);
@@ -1032,7 +1141,11 @@ export async function radioForUser(
 ) {
   const light = opts?.light === true;
   const cat = RADIO_CATEGORIES.find((c) => c.id === categoryId) || RADIO_CATEGORIES[0];
-  const cacheKey = mixKeyCategory(cat.id);
+  const prefs = getPrefs(userId);
+  const prefTags = prefGenresToTags(prefs.genres || []);
+  const catTags = [...(cat.genreTags || [])];
+  const targetTags = [...new Set([...catTags, ...prefTags])];
+  const cacheKey = mixKeyCategory(cat.id, genresCacheKey(prefs.genres || []));
 
   if (!light) {
     const hit = getMixCache(userId, cacheKey);
@@ -1060,12 +1173,19 @@ export async function radioForUser(
     } else {
       candidates = [...top];
     }
+    // Peu d’historique → amorcer via genres prefs
+    if (!candidates.length && prefs.genres?.length) {
+      const g = prefs.genres[0];
+      const res = await search(`${g} playlist`, 'song');
+      candidates = [...(res.songs || []), ...(res.videos || [])];
+      seedTrack = candidates[0] || null;
+    }
   }
 
   if (!candidates.length) {
     const q =
       cat.query ||
-      getPrefs(userId).genres[0] ||
+      prefs.genres[0] ||
       'pop hits playlist';
     const res = await search(q, 'song');
     candidates = [...(res.songs || []), ...(res.videos || [])];
@@ -1084,8 +1204,18 @@ export async function radioForUser(
   if (!light) {
     const baseQ =
       cat.query ||
-      getPrefs(userId).genres[0] ||
+      prefs.genres[0] ||
       'pop hits playlist';
+    const genreQueries: string[] = [];
+    for (const g of (prefs.genres || []).slice(0, 3)) {
+      genreQueries.push(`${g} playlist`);
+      genreQueries.push(`${g} ${cat.title} mix`);
+      if (catTags[0]) genreQueries.push(`${g} ${catTags[0]} songs`);
+    }
+    for (const tag of catTags.slice(0, 3)) {
+      genreQueries.push(`${tag} playlist`);
+      genreQueries.push(`best ${tag} tracks`);
+    }
     const variants = [
       baseQ,
       `${baseQ} mix`,
@@ -1093,6 +1223,7 @@ export async function radioForUser(
       `${cat.title} songs`,
       `best ${cat.title.toLowerCase()} tracks`,
       seedTrack ? styleSearchQuery(seedTrack) : '',
+      ...genreQueries,
     ].filter(Boolean);
     const hopSeeds = dedupeTracks(
       [seedTrack, ...candidates].filter(Boolean) as Track[],
@@ -1114,6 +1245,7 @@ export async function radioForUser(
     seed: seedTrack,
     mode: cat.mode === 'radio' ? 'style' : cat.mode,
     softExcludePlayed: !light,
+    targetTags,
   });
   const out = tracks.slice(0, light ? MIX_PREVIEW : MIX_TARGET);
   if (!light && out.length) {

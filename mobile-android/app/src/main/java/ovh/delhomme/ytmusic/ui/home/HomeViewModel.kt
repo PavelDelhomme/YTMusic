@@ -91,10 +91,15 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
                     _state.value = _state.value.copy(radioPreviews = previews)
                 }
             } catch (e: Exception) {
+                val offline = !ovh.delhomme.ytmusic.data.NetworkMonitor.isOnline()
                 _state.value = _state.value.copy(
                     loading = false,
                     refreshing = false,
-                    error = if (hadContent) null else (e.message ?: "Erreur accueil"),
+                    error = when {
+                        hadContent -> null
+                        offline -> "Hors ligne — ouvre Bibliothèque → Téléchargés"
+                        else -> (e.message ?: "Erreur accueil")
+                    },
                 )
             }
         }

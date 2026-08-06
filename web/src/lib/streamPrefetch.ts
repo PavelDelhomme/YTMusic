@@ -78,6 +78,17 @@ export function markStreamFailure(reason?: string): void {
   }
 }
 
+/** Force une pause prefetch (ex. navigateur offline). */
+export function markStreamDown(pauseMs = 60_000): void {
+  streamDownUntil = Date.now() + pauseMs;
+  ensureStreamProbe();
+}
+
+/** Annule les préchargements en cours (économie batterie / hors ligne). */
+export function cancelPrefetchIdle(): void {
+  bumpPrefetchGeneration();
+}
+
 /** Prefetch arrière-plan : ne déclenche PAS le circuit-breaker (évite spam 502). */
 function notePrefetchResult(res: Response | null, _err?: unknown): void {
   if (!res) return;
@@ -120,6 +131,11 @@ export function bumpPrefetchGeneration() {
 /** Chauffe le déchiffrement googlevideo côté API (latence principale). */
 export async function warmFormat(id: string): Promise<void> {
   if (!isVideoId(id) || isStreamDown()) return;
+  try {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+  } catch {
+    /* ignore */
+  }
   const last = warmDone.get(id);
   if (last && Date.now() - last < 4 * 60_000) return;
   if (inflightWarm.has(id)) return;

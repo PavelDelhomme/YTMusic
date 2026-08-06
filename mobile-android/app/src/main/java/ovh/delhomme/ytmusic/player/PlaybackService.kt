@@ -125,7 +125,20 @@ class PlaybackService : MediaSessionService() {
                 exo.playWhenReady = false
                 runCatching { exo.stop() }
                 streamFailStreak.set(0)
+                val offline = !ovh.delhomme.ytmusic.data.NetworkMonitor.isOnline()
+                if (offline) {
+                    ovh.delhomme.ytmusic.data.NetworkMonitor.markPausedForNetwork()
+                }
                 android.os.Handler(mainLooper).post {
+                    // Hors ligne : toast discret (pas d’alarme « serveur » / cookies)
+                    if (offline) {
+                        android.widget.Toast.makeText(
+                            this@PlaybackService,
+                            "Hors ligne — titres téléchargés disponibles",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                        return@post
+                    }
                     val localApi = BuildConfig.API_BASE_URL.contains("127.0.0.1") ||
                         BuildConfig.API_BASE_URL.contains("192.168.") ||
                         BuildConfig.API_BASE_URL.contains("10.") ||
