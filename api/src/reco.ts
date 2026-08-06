@@ -188,7 +188,8 @@ function scoreSatisf(
 ) {
   if (skips.has(trackId)) return 0.15;
   if (likes.has(trackId)) return 0.95;
-  if (completes.has(trackId)) return 0.8;
+  // Completé récemment = déjà entendu : ne pas booster (évite de remettre les « déjà joués »)
+  if (completes.has(trackId)) return 0.32;
   return 0.5;
 }
 
@@ -371,6 +372,21 @@ export async function hybridRank(opts: {
       .filter((e) => Date.now() - e.created_at < 6 * 3600 * 1000)
       .map((e) => e.track_id),
   );
+  // Déjà assez écoutés (24h) / historique récent → exclus de la radio / À suivre
+  const recentlyPlayedHard = new Set<string>();
+  for (const e of events) {
+    if (Date.now() - e.created_at > 24 * 3600 * 1000) continue;
+    if (e.event === 'complete' || e.event === 'start' || e.event === 'skip') {
+      recentlyPlayedHard.add(e.track_id);
+    }
+  }
+  try {
+    for (const t of getHistory(opts.userId, 50)) {
+      if (t?.id) recentlyPlayedHard.add(t.id);
+    }
+  } catch {
+    /* ignore */
+  }
 
   const seed = opts.seed || null;
   const seedTags = seed ? styleTags(seed) : [];
@@ -386,10 +402,14 @@ export async function hybridRank(opts: {
         }
       : baseW;
 
+  const excludePlayed =
+    mode === 'style' || mode === 'radio' || mode === 'album-style' || mode === 'artist-radio';
+
   const scored = opts.candidates
     .filter((t) => t?.id && /^[a-zA-Z0-9_-]{11}$/.test(t.id))
     .filter((t) => !seed || t.id !== seed.id)
     .filter((t) => !seed || !isRemixSpamOfSeed(t, seed))
+    .filter((t) => !(excludePlayed && recentlyPlayedHard.has(t.id)))
     .map((track) => {
       const s1 = scoreContent(track, seed, prefs.genres);
       const s2 = scoreSeq(track, seed);
@@ -531,8 +551,16 @@ export async function similarForUserFast(userId: string, trackId: string, seedTr
   }
   // Hydrate léger (10) pour répondre vite — le full related enrichit ensuite
   const up = await getUpNext(trackId, { hydrateLimit: 10 });
-  // Fast path : upNext seedé seulement — PAS de dump biblio (hors registre)
-  const tracks = dedupeTracks(up.filter((t) => t.id !== trackId)).slice(0, 40);
+  // Fast path : upNext seedé — exclure l’historique récent (pas de « déjà joués »)
+  let histIds = new Set<string>();
+  try {
+    histIds = new Set(getHistory(userId, 50).map((t) => t.id).filter(Boolean));
+  } catch {
+    histIds = new Set();
+  }
+  const tracks = dedupeTracks(
+    up.filter((t) => t.id !== trackId && !histIds.has(t.id)),
+  ).slice(0, 40);
   return { tracks, related: [] as Track[], radio: tracks };
 }
 
