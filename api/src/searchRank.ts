@@ -1,4 +1,5 @@
 import type { Track } from './types.js';
+import { isPlausibleArtistEntity } from './mappers.js';
 
 /** Normalise pour comparaison : minuscules, sans accents, ponctuation allégée. */
 export function foldText(s: string): string {
@@ -108,7 +109,9 @@ export function scoreSearchItem(track: Track, query: string): number {
   // Bonus type selon l’intention probable
   if (type === 'song') score += 50;
   else if (type === 'artist') {
-    if (artists === q || title === q) score += 80;
+    // Chaîne perso (@handle / Profile) nommée comme un titre → pas un artiste
+    if (!isPlausibleArtistEntity(track)) score -= 900;
+    else if (artists === q || title === q) score += 80;
     else score += 10;
   } else if (type === 'album') score += 20;
   else if (type === 'video') score -= 40;
@@ -219,6 +222,8 @@ export function dedupeArtists(items: Track[], query?: string): Track[] {
 
   for (const raw of items) {
     if (!raw?.id) continue;
+    // Rejette les fausses fiches (chaîne @handle nommée comme un titre)
+    if (!isPlausibleArtistEntity(raw)) continue;
     const name = foldText(raw.title || raw.artists?.[0]?.name || '');
     const idx = slots.findIndex(
       (s) => s.track.id === raw.id || (name.length >= 2 && s.name === name),
@@ -281,10 +286,17 @@ export function pickTopResult(
   },
   personalization?: SearchPersonalization,
 ): Track | null {
+  // Top YT artiste bidon (chaîne @handle = titre de chanson) → ignorer
+  const ytTop =
+    buckets.topResult &&
+    (buckets.topResult.type !== 'artist' || isPlausibleArtistEntity(buckets.topResult))
+      ? buckets.topResult
+      : null;
+
   const candidates: Track[] = [];
-  if (buckets.topResult) candidates.push(buckets.topResult);
+  if (ytTop) candidates.push(ytTop);
   candidates.push(...buckets.songs.slice(0, 8));
-  candidates.push(...buckets.artists.slice(0, 4));
+  candidates.push(...buckets.artists.filter(isPlausibleArtistEntity).slice(0, 4));
   candidates.push(...buckets.albums.slice(0, 3));
   candidates.push(...buckets.videos.slice(0, 3));
 
@@ -292,9 +304,12 @@ export function pickTopResult(
 
   const q = foldText(query);
   const exactSongs = buckets.songs.filter((t) => foldText(t.title) === q);
-  // Requête courte = intention « titre » : le morceau exact gagne toujours le top
-  if (tokenize(query).length <= 2 && exactSongs.length >= 1) {
-    return rankByQuery(exactSongs, query, personalization)[0] || null;
+  // Titre exact trouvé → prioriser le morceau (pas une fausse fiche artiste homonyme)
+  if (exactSongs.length >= 1) {
+    const bestSong = rankByQuery(exactSongs, query, personalization)[0];
+    if (bestSong && scoreSearchItem(bestSong, query) >= 200) {
+      return bestSong;
+    }
   }
 
   const ranked = rankByQuery(uniqById(candidates), query, personalization);
@@ -304,15 +319,15 @@ export function pickTopResult(
   const bestScore = bestRel + personalizeBoost(best, personalization, query);
 
   // Top YT n’est accepté que s’il matche aussi lexicalement la requête
-  if (buckets.topResult) {
-    const ytRel = scoreSearchItem(buckets.topResult, query);
-    const ytScore = ytRel + personalizeBoost(buckets.topResult, personalization, query);
+  if (ytTop) {
+    const ytRel = scoreSearchItem(ytTop, query);
+    const ytScore = ytRel + personalizeBoost(ytTop, personalization, query);
     // Ne jamais renvoyer un top YT hors-sujet (ex. Keny) si un autre candidat matche mieux
     if (ytRel < 180) {
       return bestRel >= 120 ? best : null;
     }
     if (bestScore >= ytScore + 40) return best;
-    if (ytRel >= 400 && ytRel >= bestRel - 20) return buckets.topResult;
+    if (ytRel >= 400 && ytRel >= bestRel - 20) return ytTop;
   }
 
   return bestRel >= 120 ? best : null;
