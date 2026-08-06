@@ -839,6 +839,20 @@ private fun MainTabs(
                                     player.skipNext()
                                 }
                             },
+                            onPrev = {
+                                suppressSessionPublishUntil = 0L
+                                scope.launch {
+                                    if (container.receiveRemoteSync()) {
+                                        runCatching {
+                                            container.api.setSessionActive(
+                                                mapOf("targetId" to container.deviceId),
+                                            )
+                                        }
+                                    }
+                                    player.skipPrevOrRestart(forcePrevious = false)
+                                }
+                            },
+                            onSeekBy = { delta -> player.seekBy(delta) },
                             onOpen = onOpenPlayer,
                             onSeek = { ratio ->
                                 val dur = playerUi.durationMs
