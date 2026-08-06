@@ -13,6 +13,7 @@ else loadEnv();
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 import type { Request, Response, NextFunction } from 'express';
 import { createServer } from 'node:http';
 import { createHash, randomBytes, scryptSync } from 'node:crypto';
@@ -200,6 +201,31 @@ function p(v: string | string[] | undefined): string {
 
 const app = express();
 app.set('trust proxy', 1);
+
+const appEnv = process.env.APP_ENV || 'local';
+const isProdLike = appEnv === 'production' || appEnv === 'preprod';
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        "default-src": ["'self'"],
+        "script-src": ["'self'", "'unsafe-inline'", 'https://accounts.google.com'],
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "img-src": ["'self'", 'data:', 'blob:', 'https:'],
+        "media-src": ["'self'", 'blob:', 'https:'],
+        "connect-src": ["'self'", 'https:', 'wss:', 'ws:'],
+        "frame-src": ["'self'", 'https://accounts.google.com'],
+        "object-src": ["'none'"],
+        "base-uri": ["'self'"],
+        "form-action": ["'self'"],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    hsts: isProdLike ? { maxAge: 15552000, includeSubDomains: true } : false,
+  }),
+);
 
 /** CORS : allowlist (APP_URL + CORS_ORIGINS) ; en local, LAN privée OK. */
 function isAllowedOrigin(origin: string | undefined): boolean {
@@ -450,7 +476,7 @@ app.get('/verify-email', (req, res) => {
   function show(ok, t, m) {
     title.className = ok ? 'ok' : 'err';
     title.textContent = t;
-    msg.innerHTML = m;
+    msg.textContent = m;
   }
   async function verify() {
     if (once) return;
@@ -474,7 +500,7 @@ app.get('/verify-email', (req, res) => {
       }
       var email = (j.user && j.user.email) ? j.user.email : '';
       show(true, j.already ? 'Déjà validé' : 'Email validé',
-        email ? ('Compte <strong style="color:#fff">' + email + '</strong> confirmé. Tu peux revenir dans l’app.') : 'Tu peux revenir dans l’app web ou Android.');
+        email ? ('Compte ' + email + ' confirmé. Tu peux revenir dans l’app.') : 'Tu peux revenir dans l’app web ou Android.');
       btn.style.display = 'none';
       hint.textContent = '';
     } catch (e) {
@@ -548,20 +574,35 @@ app.post('/api/auth/2fa/disable', authRequired, (req, res) => {
   }
 });
 
-app.post('/api/telemetry', authOptional, (req, res) => {
+app.post(
+  '/api/telemetry',
+  rateLimit({ windowMs: 60_000, max: 40 }),
+  authOptional,
+  (req, res) => {
   try {
     const b = req.body || {};
+    const trunc = (v: unknown, n: number) => {
+      const s = v == null ? '' : String(v);
+      return s.length > n ? s.slice(0, n) : s;
+    };
+    let meta = b.meta;
+    try {
+      const raw = JSON.stringify(meta ?? null);
+      if (raw && raw.length > 8_000) meta = { truncated: true, preview: raw.slice(0, 500) };
+    } catch {
+      meta = undefined;
+    }
     const id = insertTelemetry({
       env: b.env || getAppEnv(),
-      level: String(b.level || 'info'),
-      kind: String(b.kind || 'client'),
-      message: b.message ? String(b.message) : undefined,
-      stack: b.stack ? String(b.stack) : undefined,
-      url: b.url ? String(b.url) : undefined,
-      userAgent: String(req.headers['user-agent'] || b.userAgent || ''),
+      level: trunc(b.level || 'info', 32),
+      kind: trunc(b.kind || 'client', 64),
+      message: b.message ? trunc(b.message, 4_000) : undefined,
+      stack: b.stack ? trunc(b.stack, 8_000) : undefined,
+      url: b.url ? trunc(b.url, 500) : undefined,
+      userAgent: trunc(String(req.headers['user-agent'] || b.userAgent || ''), 400),
       userId: req.user && !req.user.isGuest ? req.userId : undefined,
-      deviceId: String(req.headers['x-device-id'] || b.deviceId || ''),
-      meta: b.meta,
+      deviceId: trunc(String(req.headers['x-device-id'] || b.deviceId || ''), 120),
+      meta,
       batteryLevel: typeof b.batteryLevel === 'number' ? b.batteryLevel : null,
       batteryCharging: typeof b.batteryCharging === 'boolean' ? b.batteryCharging : null,
       perf: b.perf,
@@ -572,7 +613,7 @@ app.post('/api/telemetry', authOptional, (req, res) => {
   }
 });
 
-app.get('/api/img', (req, res) => void handleImageProxy(req, res));
+app.get('/api/img', rateLimit({ windowMs: 60_000, max: 120 }), (req, res) => void handleImageProxy(req, res));
 
 app.patch('/api/auth/profile', authRequired, (req, res) => {
   try {
@@ -939,7 +980,9 @@ app.delete('/api/admin/youtube-cookies', requireAdmin, (_req, res) => {
 
 function apkDownloadAuthorized(req: import('express').Request) {
   const secret = (process.env.APK_DOWNLOAD_TOKEN || '').trim();
-  if (!secret) return true; // pas de secret = lien public (QR Admin)
+  const env = process.env.APP_ENV || 'local';
+  // Production : secret obligatoire
+  if (!secret) return env !== 'production' && env !== 'preprod';
   const q = typeof req.query?.key === 'string' ? req.query.key : '';
   const header = String(req.headers['x-apk-token'] || '');
   return q === secret || header === secret;
@@ -951,8 +994,8 @@ function isHomeStreamRelay(req: Request): boolean {
   const env = process.env.APP_ENV || 'local';
   if (env === 'local' || env === 'development') return true;
   const secret = (process.env.STREAM_RELAY_TOKEN || '').trim();
-  if (secret && String(req.headers['x-ytm-stream-relay-token'] || '') === secret) return true;
-  return false;
+  if (!secret) return false;
+  return String(req.headers['x-ytm-stream-relay-token'] || '') === secret;
 }
 
 /** Téléchargement APK (QR). Optionnel : APK_DOWNLOAD_TOKEN → ?key=… */

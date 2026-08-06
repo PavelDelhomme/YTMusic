@@ -76,7 +76,12 @@ export async function issueSession(user: UserRow, deviceLabel?: string) {
 }
 
 export function sessionCookieOptions() {
-  const secure = process.env.NODE_ENV === 'production' || process.env.COOKIE_SECURE === '1';
+  const env = process.env.APP_ENV || 'local';
+  const secure =
+    process.env.NODE_ENV === 'production' ||
+    process.env.COOKIE_SECURE === '1' ||
+    env === 'production' ||
+    env === 'preprod';
   return {
     httpOnly: true,
     sameSite: 'lax' as const,
@@ -223,6 +228,9 @@ export async function registerLocal(email: string, password: string, name: strin
     throw new Error('Inscription désactivée — instance privée');
   }
   assertEmailAllowed(email);
+  if (!password || String(password).length < 10) {
+    throw new Error('Mot de passe trop court (10 caractères minimum)');
+  }
   if (findUserByEmail(email)) throw new Error('Email déjà utilisé');
   const user = createUser({
     email,

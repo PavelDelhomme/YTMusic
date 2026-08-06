@@ -38,9 +38,9 @@ object StreamPrefetcher {
     private const val HEAD_METERED = 480 * 1024L
     private const val HEAD_NEXT_METERED = 1_600 * 1024L
 
-    private const val MAX_WARM = 14
-    private const val AHEAD_WIFI = 8
-    private const val AHEAD_METERED = 3
+    private const val MAX_WARM = 10
+    private const val AHEAD_WIFI = 4
+    private const val AHEAD_METERED = 2
     private const val DISK_CACHE_MB = 24L
     private val JSON = "application/json; charset=utf-8".toMediaType()
 

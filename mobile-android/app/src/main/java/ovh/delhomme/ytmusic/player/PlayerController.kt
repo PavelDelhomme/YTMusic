@@ -881,10 +881,10 @@ class PlayerController(
             base,
             playable.map { it.id },
             idx,
-            ahead = 8,
+            ahead = 4,
             behind = 1,
         )
-        CoverPrefetcher.warmCovers(playable, idx, ahead = 6, behind = 1)
+        CoverPrefetcher.warmCovers(playable, idx, ahead = 3, behind = 1)
     }
 
     private fun applyRepeatShuffle(player: Player) {

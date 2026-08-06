@@ -1167,6 +1167,7 @@ private fun MainTabs(
                 onOpenAddToPlaylist = { addToPlaylistTrack = it },
                 onOpenArtist = ::openArtist,
                 focusPlayerToken = playerFocusToken,
+                sheetVisible = expanded,
             )
         }
     }
