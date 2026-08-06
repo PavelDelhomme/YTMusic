@@ -206,10 +206,10 @@ class PlaybackService : MediaSessionService() {
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs */ 8_000,
-                /* maxBufferMs */ 40_000,
-                /* bufferForPlaybackMs */ 350,
-                /* bufferForPlaybackAfterRebufferMs */ 1_000,
+                /* minBufferMs */ 15_000,
+                /* maxBufferMs */ 70_000,
+                /* bufferForPlaybackMs */ 750,
+                /* bufferForPlaybackAfterRebufferMs */ 2_000,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -412,10 +412,10 @@ class PlaybackService : MediaSessionService() {
             base,
             queue.map { it.id },
             fromIndex,
-            ahead = 3,
+            ahead = 8,
             behind = 1,
         )
-        CoverPrefetcher.warmCovers(queue, fromIndex, ahead = 3, behind = 1)
+        CoverPrefetcher.warmCovers(queue, fromIndex, ahead = 6, behind = 1)
     }
 
     private fun resolvedApiBase(): String = Holder.resolvedApiBase()
@@ -518,8 +518,8 @@ private class YtmForwardingPlayer(
         val queue = PlaybackService.Holder.queue
         if (queue.isEmpty()) return
         val api = PlaybackService.Holder.resolvedApiBase()
-        StreamPrefetcher.warmAround(api, queue.map { it.id }, index, ahead = 3, behind = 0)
-        CoverPrefetcher.warmCovers(queue, index, ahead = 2, behind = 0)
+        StreamPrefetcher.warmAround(api, queue.map { it.id }, index, ahead = 8, behind = 0)
+        CoverPrefetcher.warmCovers(queue, index, ahead = 5, behind = 0)
     }
 
     override fun seekToPrevious() = seekToPreviousMediaItem()
