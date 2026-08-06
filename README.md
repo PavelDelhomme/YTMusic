@@ -17,7 +17,7 @@ scripts/          seed, android, ops
 ```bash
 cp .env.example .env   # comptes de test : SEED_EMAIL / SEED_PASSWORD
 make install           # ou npm install
-make seed-users        # crée/maj dev@ + paul@
+make seed-users        # crée/maj comptes SEED_* du .env
 make help
 make dev               # API :8787 + Vite :5173
 make android           # APK Kotlin sur device ADB

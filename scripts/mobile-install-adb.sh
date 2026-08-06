@@ -69,7 +69,7 @@ if [[ "$MODE" == "install" ]]; then
   echo "  1. Attends le chargement de PLM"
   echo "  2. Bannière « Installer l’app » → Installer maintenant"
   echo "     (ou Chrome ⋮ → Installer l’application)"
-  echo "  3. Connecte-toi : admin@example.com ou dev@example.com"
+  echo "  3. Connecte-toi avec ton compte (SEED_EMAIL / .env)"
   echo ""
   echo "  Astuce : si la bannière n’apparaît pas, ⋮ → « Installer l’application »."
 else

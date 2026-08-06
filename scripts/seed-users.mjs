@@ -24,10 +24,14 @@ if (!password) {
   process.exit(1);
 }
 
-const primaryEmail = (process.env.SEED_EMAIL || 'dev@example.com').trim().toLowerCase();
+const primaryEmail = (process.env.SEED_EMAIL || '').trim().toLowerCase();
+if (!primaryEmail) {
+  console.error('SEED_EMAIL manquant (dans .env ou l’environnement)');
+  process.exit(1);
+}
 const primaryName = (process.env.SEED_NAME || 'Dev').trim() || 'Dev';
 const secondaryEmail = (process.env.SEED_EMAIL_SECONDARY || '').trim().toLowerCase();
-const secondaryName = (process.env.SEED_NAME_SECONDARY || 'Paul').trim() || 'Paul';
+const secondaryName = (process.env.SEED_NAME_SECONDARY || 'User').trim() || 'User';
 
 const users = [{ email: primaryEmail, name: primaryName }];
 if (secondaryEmail && secondaryEmail !== primaryEmail) {
