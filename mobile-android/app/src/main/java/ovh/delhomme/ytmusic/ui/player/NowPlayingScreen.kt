@@ -1861,8 +1861,8 @@ private fun InlineSyncedLyrics(
         loading = false
     }
 
-    // Lead ~550 ms : ligne allumée un peu avant le chant (karaoke)
-    val leadMs = 550L
+    // Lead ~250 ms : ligne allumée juste avant le chant (karaoke)
+    val leadMs = 250L
     val active = if (timed.isEmpty()) -1
     else timed.indexOfLast { it.startMs <= positionMs + leadMs }.coerceAtLeast(0)
     val listState = rememberLazyListState()
