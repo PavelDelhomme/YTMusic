@@ -19,8 +19,7 @@ let sessionMediaMode: 'cover' | 'video' = 'cover';
 type LyricLine = { t: number; text: string };
 
 /** Avance légère : la ligne s’allume juste avant le chant (feel YTM). */
-/** Avance la ligne active pour karaoke (audio un peu en retard côté percep.). */
-const LYRIC_LEAD_SEC = 0.55;
+const LYRIC_LEAD_SEC = 0.25;
 
 /** LRC uniquement — pas de faux timings sur texte brut (ça décale / n’arrête pas). */
 function parseLrcLines(raw: string | null): LyricLine[] {
