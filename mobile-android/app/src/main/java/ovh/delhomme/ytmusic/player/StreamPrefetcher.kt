@@ -266,6 +266,10 @@ object StreamPrefetcher {
         behind: Int = 1,
     ) {
         if (queueIds.isEmpty() || isStreamDown()) return
+        if (!ovh.delhomme.ytmusic.data.NetworkMonitor.isOnline()) {
+            cancelIdle()
+            return
+        }
         val unmetered = isUnmetered()
         val aheadN = if (unmetered) ahead.coerceAtLeast(AHEAD_WIFI) else AHEAD_METERED
         val behindN = if (unmetered) behind else 0
