@@ -985,14 +985,26 @@ export function suggestSearch(userId: string, q: string, ytSuggestions: string[]
     return hl.startsWith(ql) || hl.includes(` ${ql}`) || (ql.length >= 4 && hl.includes(ql));
   };
 
+  // Focus vide → UNIQUEMENT l’historique (pas de suggestions YouTube / boost)
+  if (!ql) {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const h of hist) {
+      const k = h.toLowerCase();
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      out.push(h);
+      if (out.length >= 12) break;
+    }
+    return out;
+  }
+
   // YouTube d’abord dès qu’on tape : l’historique ne doit plus écraser la requête courante
-  const merged = ql
-    ? [
-        ...ytSuggestions,
-        ...hist.filter(histMatch),
-        ...boost.filter((b) => b.toLowerCase().includes(ql)),
-      ]
-    : [...hist.slice(0, 8), ...ytSuggestions, ...boost];
+  const merged = [
+    ...ytSuggestions,
+    ...hist.filter(histMatch),
+    ...boost.filter((b) => b.toLowerCase().includes(ql)),
+  ];
 
   const seen = new Set<string>();
   const out: string[] = [];
