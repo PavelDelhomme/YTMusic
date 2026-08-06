@@ -732,6 +732,11 @@ export function Layout() {
             usePlayer.setState({ isPlaying: false });
             return;
           }
+          if (s.sleepUntilQueueEnd && s.queueIndex >= s.queue.length - 1) {
+            s.setSleepTimer(null, null);
+            usePlayer.setState({ isPlaying: false });
+            return;
+          }
           if (s.playError) {
             usePlayer.setState({ isPlaying: false });
             return;
@@ -788,6 +793,11 @@ export function Layout() {
           if (e.currentTarget !== usePlayer.getState().audioEl) return;
           const s = usePlayer.getState();
           if (s.sleepUntilEnd) {
+            s.setSleepTimer(null, null);
+            usePlayer.setState({ isPlaying: false });
+            return;
+          }
+          if (s.sleepUntilQueueEnd && s.queueIndex >= s.queue.length - 1) {
             s.setSleepTimer(null, null);
             usePlayer.setState({ isPlaying: false });
             return;
