@@ -33,6 +33,7 @@ type Handlers = {
   onBecomePlayer?: (state: PlaybackState, autoplay?: boolean) => void;
   onActiveChanged?: (activePlayerId: string | null, state: PlaybackState) => void;
   onRegistered?: (deviceId: string) => void;
+  onDisconnected?: () => void;
 };
 
 const DEVICE_KEY = 'ytm_device';
@@ -168,6 +169,7 @@ export class SessionSocket {
 
     ws.onclose = () => {
       this.ws = null;
+      this.handlers.onDisconnected?.();
       if (!this.intentionalClose) {
         // Backoff pendant un redeploy (502) : 1.5s → ~30s max
         const delay = Math.min(30_000, 1500 * 2 ** Math.min(this.reconnectAttempt, 4));
