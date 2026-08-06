@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import type { Request, Response } from 'express';
-import { getAudioFormat, getVideoFormat, getYT } from './yt.js';
+import { getAudioFormat, getVideoFormat, getYT, invalidateAudioFormat } from './yt.js';
 import { ytDlpCookieArgs } from './youtubeCookies.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -304,6 +304,7 @@ export async function handleStream(req: Request, res: Response) {
       });
       // Ne pas propager 403/502 googlevideo brut → fallbacks Innertube / yt-dlp
       if (upstream.status >= 400) {
+        invalidateAudioFormat(videoId);
         throw new Error(`upstream ${wantVideo ? 'video' : 'audio'} ${upstream.status}`);
       }
       if (!upstream.body) {
@@ -347,7 +348,7 @@ export async function handleStream(req: Request, res: Response) {
     console.warn('[stream] format/proxy KO:', (err as Error).message?.slice?.(0, 160) || err);
   }
 
-  // Fallbacks audio-only (Innertube download / yt-dlp) — pas adaptés à la vidéo
+  // Fallbacks audio-only — yt-dlp avant Innertube download (souvent « No valid URL to decipher »)
   if (wantVideo) {
     if (!res.headersSent) {
       res.status(502).json({
@@ -359,15 +360,15 @@ export async function handleStream(req: Request, res: Response) {
   }
 
   try {
-    await streamViaInnertube(videoId, res);
+    await streamViaYtDlp(videoId, res);
     return;
   } catch (err) {
     if (endIfHeadersSent(res)) return;
-    console.warn('[stream] Innertube KO:', (err as Error).message?.slice?.(0, 160) || err);
+    console.warn('[stream] yt-dlp KO:', (err as Error).message?.slice?.(0, 160) || err);
   }
 
   try {
-    await streamViaYtDlp(videoId, res);
+    await streamViaInnertube(videoId, res);
   } catch (err) {
     if (!res.headersSent) {
       res.status(502).json({
