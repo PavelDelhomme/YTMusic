@@ -25,6 +25,7 @@ import { useItemActions } from '../store/itemActions';
 import { CoverImage } from './CoverImage';
 import { formatRemaining } from '../lib/time';
 import { useHoldSeek } from '../lib/holdSeek';
+import { applySleepPick, SLEEP_TIMER_OPTIONS } from '../lib/sleepTimer';
 import type { NowPlayingTab } from './NowPlaying';
 
 /** Empêche le clic de remonter jusqu’au footer (qui ouvre le Now Playing). */
@@ -83,6 +84,7 @@ export function PlayerBar({
   const [uiPlaying, setUiPlaying] = useState(isPlaying);
   const [liveProgress, setLiveProgress] = useState(progress);
   const [bufferedPct, setBufferedPct] = useState(0);
+  const [sleepOpen, setSleepOpen] = useState(false);
   const prevVol = useRef(volume);
   const footerRef = useRef<HTMLElement | null>(null);
   const volumeWrapRef = useRef<HTMLDivElement | null>(null);
@@ -194,6 +196,24 @@ export function PlayerBar({
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   }, [setVolume]);
+
+  useEffect(() => {
+    if (!sleepOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target;
+      if (t instanceof Element && t.closest('[data-sleep-menu]')) return;
+      setSleepOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSleepOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [sleepOpen]);
 
   if (!current) {
     if (compactEmpty) {
@@ -439,6 +459,40 @@ export function PlayerBar({
           >
             <SkipForward className="h-5 w-5 fill-white" />
           </button>
+          <div className="relative" data-sleep-menu onClick={stop} onPointerDown={stop}>
+            <button
+              type="button"
+              onClick={(e) => {
+                stop(e);
+                setSleepOpen((v) => !v);
+              }}
+              title={sleepLabel ? `Minuteur : ${sleepLabel}` : 'Mise en veille'}
+              aria-label="Mise en veille"
+              className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                sleepLabel ? 'text-amber-200' : 'text-white/70'
+              }`}
+            >
+              <Moon className="h-5 w-5" />
+            </button>
+            {sleepOpen && (
+              <div className="absolute bottom-full right-0 z-[60] mb-2 w-56 overflow-hidden rounded-xl border border-yt-border bg-[#161616] py-1 shadow-2xl">
+                {SLEEP_TIMER_OPTIONS.map((pick) => (
+                  <button
+                    key={pick.label}
+                    type="button"
+                    className="flex w-full px-3 py-2.5 text-left text-sm text-white hover:bg-white/10"
+                    onClick={(e) => {
+                      stop(e);
+                      applySleepPick(pick, setSleepTimer);
+                      setSleepOpen(false);
+                    }}
+                  >
+                    {pick.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -591,6 +645,44 @@ export function PlayerBar({
                 {Math.round((muted ? 0 : volume) * 100)}
               </span>
             </div>
+          </div>
+          <div className="relative" data-sleep-menu onClick={stop} onPointerDown={stop}>
+            <button
+              type="button"
+              onClick={(e) => {
+                stop(e);
+                setSleepOpen((v) => !v);
+              }}
+              title={sleepLabel ? `Minuteur : ${sleepLabel}` : 'Mise en veille'}
+              aria-label="Mise en veille"
+              aria-expanded={sleepOpen}
+              className={`flex h-11 w-11 items-center justify-center rounded-full ${
+                sleepLabel ? 'text-amber-200' : 'text-yt-muted/50 hover:bg-white/10 hover:text-yt-muted'
+              }`}
+            >
+              <Moon className="h-5 w-5" />
+            </button>
+            {sleepOpen && (
+              <div className="absolute bottom-full right-0 z-[60] mb-2 w-56 overflow-hidden rounded-xl border border-yt-border bg-[#161616] py-1 shadow-2xl">
+                <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-yt-muted">
+                  Mise en veille
+                </p>
+                {SLEEP_TIMER_OPTIONS.map((pick) => (
+                  <button
+                    key={pick.label}
+                    type="button"
+                    className="flex w-full px-3 py-2.5 text-left text-sm text-white hover:bg-white/10"
+                    onClick={(e) => {
+                      stop(e);
+                      applySleepPick(pick, setSleepTimer);
+                      setSleepOpen(false);
+                    }}
+                  >
+                    {pick.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <button
             type="button"

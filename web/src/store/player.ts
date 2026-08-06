@@ -120,9 +120,14 @@ type PlayerState = {
   loadRelated: (trackId: string) => Promise<void>;
   sleepLabel: string | null;
   sleepUntilEnd: boolean;
+  /** Pause après le dernier titre de la file (pas de radio auto). */
+  sleepUntilQueueEnd: boolean;
   playError: string | null;
-  /** Timer actif : pause auto après délai, ou à la fin de la piste. */
-  setSleepTimer: (delayMs: number | 'end' | null, label: string | null) => void;
+  /** Timer : délai ms, fin de piste, fin de file, ou null pour annuler. */
+  setSleepTimer: (
+    delayMs: number | 'end' | 'queue' | null,
+    label: string | null,
+  ) => void;
   clearPlayError: () => void;
   audioEl: HTMLAudioElement | null;
   /** Second <audio> : précharge le titre suivant (skip A/B). */
@@ -910,7 +915,7 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   if (/^[a-zA-Z0-9_-]{11}$/.test(track.id)) {
     const ytimg = [
       { url: `https://i.ytimg.com/vi/${track.id}/maxresdefault.jpg`, width: 1280, height: 720 },
-      { url: `https://i.ytimg.com/vi/${track.id}/hq720.jpg`, width: 1280, height: 720 },
+      { url: `https://i.ytimg.com/vi/${track.id}/sddefault.jpg`, width: 640, height: 480 },
       ...(track.thumbnails || []),
     ];
     enriched = { ...track, thumbnails: ytimg };
@@ -1107,7 +1112,13 @@ function attachAudioRuntime(
     if (s.sleepUntilEnd) {
       clearSleepTimerInternal();
       el.pause();
-      set({ isPlaying: false });
+      set({ isPlaying: false, sleepLabel: null, sleepUntilEnd: false, sleepUntilQueueEnd: false });
+      return;
+    }
+    if (s.sleepUntilQueueEnd && s.queueIndex >= s.queue.length - 1) {
+      clearSleepTimerInternal();
+      el.pause();
+      set({ isPlaying: false, sleepLabel: null, sleepUntilEnd: false, sleepUntilQueueEnd: false });
     }
   });
   let recovering = false;
@@ -1224,6 +1235,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   standbyEl: null,
   sleepLabel: null,
   sleepUntilEnd: false,
+  sleepUntilQueueEnd: false,
   playError: null,
 
   bindAudio: (el) => {
@@ -1242,19 +1254,23 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   setSleepTimer: (delayMs, label) => {
     clearSleepTimerInternal();
     if (delayMs == null || label == null) {
-      set({ sleepLabel: null, sleepUntilEnd: false });
+      set({ sleepLabel: null, sleepUntilEnd: false, sleepUntilQueueEnd: false });
       return;
     }
     if (delayMs === 'end') {
-      set({ sleepLabel: label, sleepUntilEnd: true });
+      set({ sleepLabel: label, sleepUntilEnd: true, sleepUntilQueueEnd: false });
       return;
     }
-    set({ sleepLabel: label, sleepUntilEnd: false });
+    if (delayMs === 'queue') {
+      set({ sleepLabel: label, sleepUntilEnd: false, sleepUntilQueueEnd: true });
+      return;
+    }
+    set({ sleepLabel: label, sleepUntilEnd: false, sleepUntilQueueEnd: false });
     sleepTimerHandle = window.setTimeout(() => {
       const audio = get().audioEl;
       audio?.pause();
       clearSleepTimerInternal();
-      set({ isPlaying: false, sleepLabel: null, sleepUntilEnd: false });
+      set({ isPlaying: false, sleepLabel: null, sleepUntilEnd: false, sleepUntilQueueEnd: false });
     }, delayMs);
   },
 
@@ -1611,6 +1627,21 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       return;
     }
     if (nextIndex >= queue.length) {
+      if (get().sleepUntilQueueEnd) {
+        const audio = get().audioEl;
+        if (audio) audio.pause();
+        clearSleepTimerInternal();
+        set({
+          isPlaying: false,
+          sleepLabel: null,
+          sleepUntilEnd: false,
+          sleepUntilQueueEnd: false,
+        });
+        refreshMediaSession();
+        persistPlayer();
+        publish();
+        return;
+      }
       if (repeat === 'all' || repeat === 'one') {
         nextIndex = 0;
       } else if (current?.id) {
