@@ -63,6 +63,8 @@ data class SearchUiState(
     val error: String? = null,
     val sections: List<SearchSection> = emptyList(),
     val recent: List<String> = emptyList(),
+    /** Suggestions API tant que l’utilisateur tape (vide = mode historique). */
+    val suggestions: List<String> = emptyList(),
 )
 
 private val FILTERS = listOf(
@@ -78,6 +80,7 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
     private val _state = MutableStateFlow(SearchUiState())
     val state: StateFlow<SearchUiState> = _state.asStateFlow()
     private var job: Job? = null
+    private var sugJob: Job? = null
     private val recentPrefs by lazy {
         container.sharedPrefs("ytm_search_recent")
     }
@@ -131,6 +134,7 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
 
     fun onQuery(q: String) {
         _state.value = _state.value.copy(query = q, error = null)
+        scheduleSuggestions()
         scheduleSearch()
     }
 
@@ -140,7 +144,7 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
         scheduleSearch()
     }
 
-    /** Recherche confirmée (tap historique / soumission) → enregistre l’historique serveur. */
+    /** Recherche confirmée (tap historique / suggestion / soumission) → enregistre l’historique serveur. */
     fun commitSearch(q: String) {
         val query = q.trim()
         if (query.length < 2) return
@@ -148,7 +152,12 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
             !it.equals(query, ignoreCase = true)
         }
         writeLocalRecent(nextRecent)
-        _state.value = _state.value.copy(query = query, error = null, recent = nextRecent.take(12))
+        _state.value = _state.value.copy(
+            query = query,
+            error = null,
+            recent = nextRecent.take(12),
+            suggestions = emptyList(),
+        )
         viewModelScope.launch {
             runCatching {
                 container.api.recordSearchHistory(mapOf("query" to query))
@@ -160,6 +169,33 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
 
     fun retrySearch() {
         scheduleSearch(recordLive = false)
+    }
+
+    private fun scheduleSuggestions() {
+        sugJob?.cancel()
+        val draft = _state.value.query.trim()
+        if (draft.isEmpty()) {
+            _state.value = _state.value.copy(suggestions = emptyList())
+            return
+        }
+        sugJob = viewModelScope.launch {
+            delay(180)
+            val q = _state.value.query.trim()
+            if (q.isEmpty()) {
+                _state.value = _state.value.copy(suggestions = emptyList())
+                return@launch
+            }
+            val list = runCatching {
+                container.ensureFreshToken()
+                val raw = container.api.searchSuggestions(q)["suggestions"]
+                (raw as? List<*>)?.mapNotNull { it?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
+                    ?.distinct()
+                    ?.take(10)
+                    .orEmpty()
+            }.getOrDefault(emptyList())
+            if (_state.value.query.trim() != q) return@launch
+            _state.value = _state.value.copy(suggestions = list)
+        }
     }
 
     private fun scheduleSearch(recordLive: Boolean = true) {
@@ -268,8 +304,15 @@ fun SearchScreen(
             }
         }
         when {
-            state.loading -> {
-                SearchLoadingSkeleton()
+            state.loading && state.query.trim().length >= 2 && state.sections.isEmpty() -> {
+                Column(Modifier.fillMaxSize()) {
+                    SearchSuggestionsBlock(
+                        draft = state.query.trim(),
+                        suggestions = state.suggestions,
+                        onPick = vm::commitSearch,
+                    )
+                    SearchLoadingSkeleton()
+                }
             }
             state.error != null -> {
                 Column(
@@ -290,7 +333,7 @@ fun SearchScreen(
                     }
                 }
             }
-            state.query.length < 2 -> {
+            state.query.isBlank() -> {
                 if (state.recent.isEmpty()) {
                     Text(
                         "Cherche un titre ou un artiste — ex. « Poto Demi Portion ».",
@@ -327,15 +370,41 @@ fun SearchScreen(
                     }
                 }
             }
-            !state.loading && state.sections.isEmpty() -> {
-                Text(
-                    "Aucun résultat pour « ${state.query} ». Essaie un autre filtre.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(24.dp),
+            state.query.trim().length < 2 ||
+                (!state.loading && state.sections.isEmpty() && state.suggestions.isNotEmpty()) -> {
+                // Texte tapé : suggestions seulement (pas l’historique mélangé)
+                SearchSuggestionsBlock(
+                    draft = state.query.trim(),
+                    suggestions = state.suggestions,
+                    onPick = vm::commitSearch,
+                    fill = true,
                 )
+            }
+            !state.loading && state.sections.isEmpty() -> {
+                Column(Modifier.fillMaxSize()) {
+                    SearchSuggestionsBlock(
+                        draft = state.query.trim(),
+                        suggestions = state.suggestions,
+                        onPick = vm::commitSearch,
+                    )
+                    Text(
+                        "Aucun résultat pour « ${state.query} ». Essaie un autre filtre.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(24.dp),
+                    )
+                }
             }
             else -> {
                 LazyColumn(contentPadding = PaddingValues(bottom = 24.dp, top = 4.dp)) {
+                    if (state.suggestions.isNotEmpty()) {
+                        item(key = "sug-header") {
+                            SearchSuggestionsBlock(
+                                draft = state.query.trim(),
+                                suggestions = state.suggestions,
+                                onPick = vm::commitSearch,
+                            )
+                        }
+                    }
                     state.sections.forEachIndexed { sectionIndex, section ->
                         item(key = "sec-title-$sectionIndex-${section.title}") {
                             Text(
@@ -388,6 +457,61 @@ fun SearchScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchSuggestionsBlock(
+    draft: String,
+    suggestions: List<String>,
+    onPick: (String) -> Unit,
+    fill: Boolean = false,
+) {
+    val draftNorm = draft.trim()
+    if (draftNorm.isEmpty() && suggestions.isEmpty()) return
+    val opts = buildList {
+        if (draftNorm.isNotEmpty()) add(draftNorm to true)
+        suggestions
+            .filter { it.trim().lowercase() != draftNorm.lowercase() }
+            .forEach { add(it to false) }
+    }
+    if (opts.isEmpty()) return
+    Column(
+        modifier = if (fill) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            "Suggestions",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+        )
+        opts.forEach { (label, typed) ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { onPick(label) }
+                    .padding(horizontal = 16.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(
+                    Icons.Default.Search,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    if (typed) "Rechercher « $label »" else label,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (typed) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    fontWeight = if (typed) FontWeight.Normal else FontWeight.Medium,
+                )
             }
         }
     }

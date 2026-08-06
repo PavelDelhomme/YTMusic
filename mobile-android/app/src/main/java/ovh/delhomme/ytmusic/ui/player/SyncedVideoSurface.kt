@@ -1,5 +1,6 @@
 package ovh.delhomme.ytmusic.ui.player
 
+import android.util.Log
 import android.view.ViewGroup
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
@@ -27,10 +28,12 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import ovh.delhomme.ytmusic.player.PlayerCache
 
 /** Mode média session (reset au kill process, pas persisté). */
 object SessionMediaMode {
@@ -56,11 +59,15 @@ fun SyncedVideoSurface(
     val latestPlaying by rememberUpdatedState(playing)
 
     val exo = remember {
-        ExoPlayer.Builder(context).build().apply {
-            volume = 0f
-            playWhenReady = false
-            repeatMode = Player.REPEAT_MODE_OFF
-        }
+        val factory = PlayerCache.dataSourceFactory(context)
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(factory))
+            .build()
+            .apply {
+                volume = 0f
+                playWhenReady = false
+                repeatMode = Player.REPEAT_MODE_OFF
+            }
     }
 
     DisposableEffect(Unit) {
@@ -75,14 +82,23 @@ fun SyncedVideoSurface(
         error = null
         ready = false
         exo.volume = 0f
-        exo.setMediaItem(MediaItem.fromUri(streamUrl))
+        val item = MediaItem.Builder()
+            .setUri(streamUrl)
+            .setMediaId("video:${streamUrl.hashCode()}")
+            .build()
+        exo.setMediaItem(item)
         exo.prepare()
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_READY) ready = true
+                if (playbackState == Player.STATE_READY) {
+                    ready = true
+                    Log.i(TAG, "video ready url=${streamUrl.take(80)}")
+                }
             }
             override fun onPlayerError(e: PlaybackException) {
-                error = e.message ?: "Vidéo indisponible"
+                val msg = e.message ?: "Vidéo indisponible"
+                error = msg
+                Log.e(TAG, "video error code=${e.errorCode} $msg url=${streamUrl.take(120)}", e)
             }
         }
         exo.addListener(listener)
@@ -111,7 +127,7 @@ fun SyncedVideoSurface(
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     player = exo
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -133,3 +149,4 @@ fun SyncedVideoSurface(
     }
 }
 
+private const val TAG = "YTMVideo"
