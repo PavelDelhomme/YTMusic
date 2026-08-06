@@ -72,6 +72,7 @@ class PlayerController(
     private val sleepHandler = Handler(Looper.getMainLooper())
     private var sleepRunnable: Runnable? = null
     private var pauseAtEndOfTrack = false
+    private var pauseAtEndOfQueue = false
     private var sleepLabel: String? = null
     private var queueTitle: String = "File d'attente"
     private var shuffleEnabled: Boolean = false
@@ -366,6 +367,12 @@ class PlayerController(
 
     /** Appelé quand il n’y a plus de suivant (UI ou notif système). */
     private fun fillThenSkipFromEnd() {
+        if (pauseAtEndOfQueue || pauseAtEndOfTrack) {
+            player()?.pause()
+            clearSleepTimer()
+            Toast.makeText(context, "Mise en veille", Toast.LENGTH_SHORT).show()
+            return
+        }
         if (!autoplaySuggestions) {
             Toast.makeText(context, "Fin de la file", Toast.LENGTH_SHORT).show()
             return
@@ -638,6 +645,14 @@ class PlayerController(
                 p.pause()
                 clearSleepTimer()
             }
+        } else if (pauseAtEndOfQueue) {
+            val dur = p.duration
+            val pos = p.currentPosition
+            val last = p.currentMediaItemIndex >= p.mediaItemCount - 1
+            if (last && dur > 0 && pos >= dur - 900) {
+                p.pause()
+                clearSleepTimer()
+            }
         }
         syncFrom(p)
     }
@@ -646,30 +661,43 @@ class PlayerController(
         sleepRunnable?.let { sleepHandler.removeCallbacks(it) }
         sleepRunnable = null
         pauseAtEndOfTrack = false
+        pauseAtEndOfQueue = false
         sleepLabel = null
         player()?.let { syncFrom(it) } ?: run {
             _state.value = _state.value.copy(sleepLabel = null)
         }
     }
 
+    /**
+     * @param delayMs null = fin de chanson ; -2 = fin de file ; sinon délai en ms.
+     */
     fun setSleepTimer(delayMs: Long?, label: String) {
         clearSleepTimer()
         sleepLabel = label
-        if (delayMs == null) {
-            pauseAtEndOfTrack = true
-            player()?.let { syncFrom(it) } ?: run {
-                _state.value = _state.value.copy(sleepLabel = label)
+        when {
+            delayMs == null -> {
+                pauseAtEndOfTrack = true
+                player()?.let { syncFrom(it) } ?: run {
+                    _state.value = _state.value.copy(sleepLabel = label)
+                }
             }
-            return
-        }
-        val r = Runnable {
-            player()?.pause()
-            clearSleepTimer()
-        }
-        sleepRunnable = r
-        sleepHandler.postDelayed(r, delayMs)
-        player()?.let { syncFrom(it) } ?: run {
-            _state.value = _state.value.copy(sleepLabel = label)
+            delayMs == -2L -> {
+                pauseAtEndOfQueue = true
+                player()?.let { syncFrom(it) } ?: run {
+                    _state.value = _state.value.copy(sleepLabel = label)
+                }
+            }
+            else -> {
+                val r = Runnable {
+                    player()?.pause()
+                    clearSleepTimer()
+                }
+                sleepRunnable = r
+                sleepHandler.postDelayed(r, delayMs)
+                player()?.let { syncFrom(it) } ?: run {
+                    _state.value = _state.value.copy(sleepLabel = label)
+                }
+            }
         }
     }
 

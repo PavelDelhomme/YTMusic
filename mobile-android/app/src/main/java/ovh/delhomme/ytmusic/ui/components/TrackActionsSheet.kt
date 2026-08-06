@@ -730,9 +730,9 @@ private fun SleepTimerDialog(
         5L * 60_000 to "5 minutes",
         15L * 60_000 to "15 minutes",
         30L * 60_000 to "30 minutes",
-        45L * 60_000 to "45 minutes",
         60L * 60_000 to "1 heure",
         null to "Fin de la chanson",
+        -2L to "Fin de la file d'attente",
     )
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -759,7 +759,7 @@ private fun SleepTimerDialog(
                 }
                 if (currentLabel != null) {
                     Text(
-                        "Annuler la veille",
+                        "Annuler / manuel",
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onPick(-1L, "") }
