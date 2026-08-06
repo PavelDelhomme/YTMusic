@@ -221,6 +221,16 @@ fun NowPlayingScreen(
         }
     }
 
+    // Pré-chauffe le resolve vidéo (évite erreur Exo au premier frame)
+    LaunchedEffect(ui.track?.id, SessionMediaMode.video) {
+        val id = ui.track?.id ?: return@LaunchedEffect
+        if (!SessionMediaMode.video) return@LaunchedEffect
+        runCatching {
+            container.ensureFreshToken()
+            container.api.streamResolveUrl(id, "video")
+        }
+    }
+
     fun settleOrClose() {
         scope.launch {
             // File encore visible → ne jamais fermer le lecteur, juste replier la file
@@ -626,8 +636,7 @@ fun NowPlayingScreen(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .height(260.dp)
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .clickable { showLyrics = true },
+                                                .clip(RoundedCornerShape(12.dp)),
                                         )
                                     } else {
                                         AsyncImage(
@@ -637,8 +646,7 @@ fun NowPlayingScreen(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .height(260.dp)
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .clickable { showLyrics = true },
+                                                .clip(RoundedCornerShape(12.dp)),
                                         )
                                     }
                                     Spacer(Modifier.height(18.dp))
