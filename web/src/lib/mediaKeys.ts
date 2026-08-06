@@ -247,10 +247,25 @@ export function installMediaKeys(): () => void {
     if (e.type === 'keyup') return;
     if (isTypingTarget(e.target)) return;
     if (e.metaKey) return;
-    if (!usePlayer.getState().current) return;
 
     const key = e.key;
     const code = e.code;
+
+    // —— Volume (↑ / ↓) — même hors lecture ——
+    if (!e.ctrlKey && !e.altKey && !e.shiftKey && (key === 'ArrowUp' || code === 'ArrowUp' || key === 'ArrowDown' || code === 'ArrowDown')) {
+      e.preventDefault();
+      e.stopPropagation();
+      const p = usePlayer.getState();
+      const step = 0.05;
+      const next = Math.max(
+        0,
+        Math.min(1, Math.round((p.volume + (key === 'ArrowUp' || code === 'ArrowUp' ? step : -step)) * 100) / 100),
+      );
+      p.setVolume(next);
+      return;
+    }
+
+    if (!usePlayer.getState().current) return;
 
     // —— Play / Pause ——
     // Espace, K, P (sans modificateur)
@@ -298,16 +313,18 @@ export function installMediaKeys(): () => void {
       return;
     }
 
-    // Seek J / L (sans flèches seules — flèches seules = seek aussi style YT)
+    // Seek J / L / ← / → (flèches seules = ±5 s)
     if (!e.ctrlKey && !e.altKey && !e.shiftKey) {
       if (key === 'j' || key === 'J') {
         e.preventDefault();
+        e.stopPropagation();
         const p = usePlayer.getState();
         p.seek(Math.max(0, p.progress - 10));
         return;
       }
       if (key === 'l' || key === 'L') {
         e.preventDefault();
+        e.stopPropagation();
         const p = usePlayer.getState();
         const max = p.duration > 0 ? p.duration : p.progress + 10;
         p.seek(Math.min(max, p.progress + 10));
@@ -315,15 +332,18 @@ export function installMediaKeys(): () => void {
       }
       if (key === 'ArrowLeft' || code === 'ArrowLeft') {
         e.preventDefault();
+        e.stopPropagation();
         const p = usePlayer.getState();
         p.seek(Math.max(0, p.progress - 5));
         return;
       }
       if (key === 'ArrowRight' || code === 'ArrowRight') {
         e.preventDefault();
+        e.stopPropagation();
         const p = usePlayer.getState();
         const max = p.duration > 0 ? p.duration : p.progress + 5;
         p.seek(Math.min(max, p.progress + 5));
+        return;
       }
     }
   };
