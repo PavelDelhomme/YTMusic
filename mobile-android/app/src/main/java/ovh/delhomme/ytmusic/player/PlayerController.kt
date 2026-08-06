@@ -332,11 +332,11 @@ class PlayerController(
         fillJob?.cancel()
         clearSleepTimer()
         StreamPrefetcher.cancelIdle()
-        connect()
+        runCatching { connect() }
         val p = player() ?: PlaybackService.Holder.player
-        p?.let {
-            it.pause()
-            it.clearMediaItems()
+        runCatching {
+            p?.pause()
+            p?.clearMediaItems()
         }
         PlaybackService.Holder.queue = emptyList()
         PlaybackService.Holder.index = 0
@@ -364,7 +364,7 @@ class PlayerController(
             sourceId = null,
             sourceKind = null,
         )
-        onClearLocal?.invoke()
+        runCatching { onClearLocal?.invoke() }
     }
 
     /** Branché depuis MainActivity → efface le snapshot local. */

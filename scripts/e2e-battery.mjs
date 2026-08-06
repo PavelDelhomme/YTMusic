@@ -93,7 +93,13 @@ async function runTarget({ name, base }) {
   }
   {
     const g = await req(base, '/api/deploy/apk/info');
-    rec(name, 'deploy.apk.info', g.status === 200 || g.status === 404, `status=${g.status}`);
+    // 200 = dispo, 404 = pas d’APK, 401 = protégé par token (prod OK)
+    rec(
+      name,
+      'deploy.apk.info',
+      g.status === 200 || g.status === 404 || g.status === 401,
+      `status=${g.status}`,
+    );
   }
 
   // --- login ---
