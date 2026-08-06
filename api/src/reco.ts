@@ -303,16 +303,17 @@ function pickTasteArtists(seed: Track, library: Track[], max: number): string[] 
 function rerank(
   scored: { track: Track; score: number }[],
   recentArtist: string[],
-  opts?: { window?: number; seedArtist?: string; seedArtistEvery?: number },
+  opts?: { window?: number; seedArtist?: string; seedArtistEvery?: number; maxOut?: number },
 ) {
   const window = opts?.window ?? 5;
   const seedArtist = opts?.seedArtist || '';
   const every = Math.max(2, opts?.seedArtistEvery ?? 4);
+  const maxOut = opts?.maxOut ?? MIX_TARGET;
   const out: { track: Track; score: number }[] = [];
   const usedArtists: string[] = [...recentArtist];
   const pool = [...scored].sort((a, b) => b.score - a.score);
   let seedArtistHits = 0;
-  while (pool.length && out.length < 48) {
+  while (pool.length && out.length < maxOut) {
     let idx = 0;
     for (let i = 0; i < pool.length; i++) {
       const a = artistKey(pool[i].track);
@@ -345,6 +346,8 @@ export async function hybridRank(opts: {
   candidates: Track[];
   seed?: Track | null;
   mode?: string;
+  /** Pour mixes longs : pénalise sans exclure (permet d’atteindre ~200). */
+  softExcludePlayed?: boolean;
 }): Promise<Track[]> {
   const prefs = getPrefs(opts.userId);
   const mode =
@@ -411,7 +414,8 @@ export async function hybridRank(opts: {
       : baseW;
 
   const excludePlayed =
-    mode === 'style' || mode === 'radio' || mode === 'album-style' || mode === 'artist-radio';
+    !opts.softExcludePlayed &&
+    (mode === 'style' || mode === 'radio' || mode === 'album-style' || mode === 'artist-radio');
 
   const scored = opts.candidates
     .filter((t) => t?.id && /^[a-zA-Z0-9_-]{11}$/.test(t.id))
@@ -430,6 +434,7 @@ export async function hybridRank(opts: {
         w.w_ctx * s3 +
         w.w_bandit * s4 +
         w.w_satisf * s5;
+      if (opts.softExcludePlayed && recentlyPlayedHard.has(track.id)) s *= 0.25;
       const a = artistKey(track);
       const candTags = styleTags(track);
       const tagOverlap = seedTags.filter((tag) => candTags.includes(tag)).length;
@@ -479,15 +484,16 @@ export async function hybridRank(opts: {
     window: artistCapWindow,
     seedArtist: seedA,
     seedArtistEvery: mode === 'artist-radio' ? 3 : 4,
+    maxOut: opts.softExcludePlayed ? MIX_TARGET : 48,
   });
 }
 
-/** Élargit un pool via getRelated sur plusieurs seeds (budget YT borné). */
+/** Élargit un pool via getRelated + getUpNext sur plusieurs seeds (budget YT borné). */
 async function expandPoolMultiSeed(
   seeds: Track[],
   basePool: Track[],
   excludeId?: string,
-  maxSeeds = 7,
+  maxSeeds = 12,
 ) {
   let pool = [...basePool];
   const seen = new Set(pool.map((t) => t.id).filter(Boolean));
@@ -495,7 +501,7 @@ async function expandPoolMultiSeed(
     .filter((t) => t?.id && /^[a-zA-Z0-9_-]{11}$/.test(t.id))
     .slice(0, maxSeeds);
   for (const anchor of anchors) {
-    if (pool.length >= MIX_TARGET * 2) break;
+    if (pool.length >= MIX_TARGET * 3) break;
     try {
       const { related, radio } = await getRelated(anchor.id);
       for (const t of [...radio, ...related]) {
@@ -507,8 +513,73 @@ async function expandPoolMultiSeed(
     } catch {
       /* ignore */
     }
+    if (pool.length >= MIX_TARGET * 3) break;
+    try {
+      const up = await getUpNext(anchor.id, { hydrateLimit: 20 });
+      for (const t of up) {
+        if (!t?.id || seen.has(t.id) || t.id === excludeId) continue;
+        if (!/^[a-zA-Z0-9_-]{11}$/.test(t.id)) continue;
+        seen.add(t.id);
+        pool.push(t);
+      }
+    } catch {
+      /* ignore */
+    }
   }
   return dedupeTracks(pool);
+}
+
+/** Remplit le pool jusqu’à ~target via recherches supplémentaires + 2ᵉ vague de seeds. */
+async function growPoolToTarget(
+  userId: string,
+  seed: Track | null,
+  pool: Track[],
+  queries: string[],
+  excludeId?: string,
+  target = MIX_TARGET,
+) {
+  let candidates = dedupeTracks(pool);
+  // Vague search
+  for (const q of queries.filter(Boolean).slice(0, 8)) {
+    if (candidates.length >= target * 2) break;
+    try {
+      const res = await search(q, 'song');
+      const extra = [...(res.songs || []), ...(res.videos || [])].filter(
+        (t) => t?.id && t.id !== excludeId,
+      );
+      candidates = dedupeTracks([...candidates, ...extra.slice(0, 30)]);
+    } catch {
+      /* ignore */
+    }
+  }
+  if (seed) {
+    try {
+      candidates = await expandWithTasteAndSearch({
+        userId,
+        seed,
+        pool: candidates,
+        excludeId: excludeId || seed.id,
+        searchQueries: queries.slice(0, 4),
+        libraryMax: 40,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+  // 2ᵉ vague related/upNext sur le milieu du pool (artistes différents)
+  if (candidates.length < target * 1.5) {
+    const hop = candidates
+      .filter((t) => t.id !== excludeId)
+      .filter((_, i) => i % 3 === 0)
+      .slice(0, 10);
+    candidates = await expandPoolMultiSeed(
+      [seed, ...hop].filter(Boolean) as Track[],
+      candidates,
+      excludeId,
+      10,
+    );
+  }
+  return dedupeTracks(candidates);
 }
 
 export async function similarForUser(
@@ -583,8 +654,25 @@ export async function similarForUser(
   }
 
   if (full) {
-    const hopSeeds = dedupeTracks([seed, ...radio, ...related, ...fromLibrary]).slice(0, 8);
-    pool = await expandPoolMultiSeed(hopSeeds, pool, trackId, 7);
+    const hopSeeds = dedupeTracks([seed, ...radio, ...related, ...fromLibrary]).slice(0, 12);
+    pool = await expandPoolMultiSeed(hopSeeds, pool, trackId, 12);
+    pool = await growPoolToTarget(
+      userId,
+      seed,
+      pool,
+      [
+        styleSearchQuery(seed),
+        ...(seed.artists?.[0]?.name
+          ? [
+              `${seed.artists[0].name} similar artists mix`,
+              `${seed.artists[0].name} playlist`,
+            ]
+          : []),
+        ...styleTags(seed).map((t) => `${t} playlist`),
+      ],
+      trackId,
+      MIX_TARGET,
+    );
   }
 
   const ranked = await hybridRank({
@@ -592,6 +680,7 @@ export async function similarForUser(
     candidates: pool,
     seed,
     mode: 'style',
+    softExcludePlayed: full,
   });
   const tracks = ranked.slice(0, full ? MIX_TARGET : 40);
   if (full && tracks.length) {
@@ -785,9 +874,17 @@ export async function albumSimilarForUser(
   if (full) {
     const hopSeeds = dedupeTracks([seed, mid, ...playable, ...radio].filter(Boolean) as Track[]).slice(
       0,
-      8,
+      12,
     );
-    pool = await expandPoolMultiSeed(hopSeeds, pool, seed.id, 7);
+    pool = await expandPoolMultiSeed(hopSeeds, pool, seed.id, 12);
+    pool = await growPoolToTarget(
+      userId,
+      seed,
+      pool,
+      queries,
+      seed.id,
+      MIX_TARGET,
+    );
   }
 
   const ranked = await hybridRank({
@@ -795,6 +892,7 @@ export async function albumSimilarForUser(
     candidates: pool,
     seed,
     mode: 'album-style',
+    softExcludePlayed: full,
   });
   const out = ranked.slice(0, full ? MIX_TARGET : 40);
   if (full && out.length) {
@@ -887,8 +985,16 @@ export async function artistSimilarForUser(
   });
 
   if (full) {
-    const hopSeeds = dedupeTracks([seed, ...playable, ...radio]).slice(0, 8);
-    pool = await expandPoolMultiSeed(hopSeeds, pool, seed.id, 7);
+    const hopSeeds = dedupeTracks([seed, ...playable, ...radio]).slice(0, 12);
+    pool = await expandPoolMultiSeed(hopSeeds, pool, seed.id, 12);
+    pool = await growPoolToTarget(
+      userId,
+      seed,
+      pool,
+      queries,
+      seed.id,
+      MIX_TARGET,
+    );
   }
 
   const ranked = await hybridRank({
@@ -896,6 +1002,7 @@ export async function artistSimilarForUser(
     candidates: pool,
     seed,
     mode: 'artist-radio',
+    softExcludePlayed: full,
   });
   const out = ranked.slice(0, full ? MIX_TARGET : 40);
   if (full && out.length) {
@@ -975,23 +1082,30 @@ export async function radioForUser(
   }
 
   if (!light) {
+    const baseQ =
+      cat.query ||
+      getPrefs(userId).genres[0] ||
+      'pop hits playlist';
+    const variants = [
+      baseQ,
+      `${baseQ} mix`,
+      `${cat.title} music playlist`,
+      `${cat.title} songs`,
+      `best ${cat.title.toLowerCase()} tracks`,
+      seedTrack ? styleSearchQuery(seedTrack) : '',
+    ].filter(Boolean);
     const hopSeeds = dedupeTracks(
       [seedTrack, ...candidates].filter(Boolean) as Track[],
-    ).slice(0, 8);
-    candidates = await expandPoolMultiSeed(hopSeeds, candidates, seedTrack?.id, 7);
-    try {
-      if (seedTrack) {
-        candidates = await expandWithTasteAndSearch({
-          userId,
-          seed: seedTrack,
-          pool: candidates,
-          excludeId: seedTrack.id,
-          libraryMax: 24,
-        });
-      }
-    } catch {
-      /* ignore */
-    }
+    ).slice(0, 12);
+    candidates = await expandPoolMultiSeed(hopSeeds, candidates, seedTrack?.id, 12);
+    candidates = await growPoolToTarget(
+      userId,
+      seedTrack,
+      candidates,
+      variants,
+      seedTrack?.id,
+      MIX_TARGET,
+    );
   }
 
   const tracks = await hybridRank({
@@ -999,6 +1113,7 @@ export async function radioForUser(
     candidates,
     seed: seedTrack,
     mode: cat.mode === 'radio' ? 'style' : cat.mode,
+    softExcludePlayed: !light,
   });
   const out = tracks.slice(0, light ? MIX_PREVIEW : MIX_TARGET);
   if (!light && out.length) {
