@@ -2074,18 +2074,22 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
 
   stopAndClear: () => {
-    const el = get().audioEl;
-    if (el) {
-      el.pause();
-      el.removeAttribute('src');
-      el.load();
-      delete el.dataset.trackId;
-    }
-    const standby = get().standbyEl;
-    if (standby) {
-      standby.pause();
-      standby.removeAttribute('src');
-      standby.load();
+    try {
+      const el = get().audioEl;
+      if (el) {
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+        delete el.dataset.trackId;
+      }
+      const standby = get().standbyEl;
+      if (standby) {
+        standby.pause();
+        standby.removeAttribute('src');
+        standby.load();
+      }
+    } catch {
+      /* ignore DOM / media errors */
     }
     set({
       current: null,
@@ -2102,7 +2106,11 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       queueHint: null,
       autoplay: false,
     });
-    publish();
+    try {
+      publish();
+    } catch {
+      /* ignore */
+    }
   },
 
   appendRelated: (tracks) => {
