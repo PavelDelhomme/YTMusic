@@ -248,6 +248,7 @@ fun ArtistDetailScreen(
                                                 "artist",
                                                 artistId,
                                                 songs.firstOrNull(),
+                                                mixCache = container.mixCache,
                                             )
                                             radioBusy = false
                                             if (mix.isEmpty()) {

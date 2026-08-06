@@ -460,7 +460,7 @@ fun TrackActionsSheet(
             SheetAction(Icons.Default.AutoAwesome, "En rapport", "Mix · similaires + découverte") {
                 scope.launch {
                     runCatching {
-                        val mix = buildRadioQueue(container.api, "track", enriched.id, enriched)
+                        val mix = buildRadioQueue(container.api, "track", enriched.id, enriched, mixCache = container.mixCache)
                         if (mix.isNotEmpty()) {
                             player.playRadioOrEnqueue(mix, "En rapport")
                             Toast.makeText(context, "Mix démarré", Toast.LENGTH_SHORT).show()
@@ -475,6 +475,7 @@ fun TrackActionsSheet(
                         runCatching {
                             val mix = buildRadioQueue(
                                 container.api, "track", enriched.id, enriched, stayClose = true,
+                                mixCache = container.mixCache,
                             )
                             if (mix.isNotEmpty()) {
                                 player.playRadioOrEnqueue(mix, "Radio")
@@ -497,7 +498,7 @@ fun TrackActionsSheet(
                 SheetAction(Icons.Default.Album, "Radio de l'album") {
                     scope.launch {
                         runCatching {
-                            val mix = buildRadioQueue(container.api, "album", albumId, enriched)
+                            val mix = buildRadioQueue(container.api, "album", albumId, enriched, mixCache = container.mixCache)
                             if (mix.isNotEmpty()) {
                                 player.playRadioOrEnqueue(mix, "Radio album")
                                 val added = (mix.size - 1).coerceAtLeast(0)
@@ -521,7 +522,7 @@ fun TrackActionsSheet(
                         runCatching {
                             val artistId = resolveArtistId(container.api, artist.id, artist.name)
                                 ?: return@runCatching
-                            val mix = buildRadioQueue(container.api, "artist", artistId, enriched)
+                            val mix = buildRadioQueue(container.api, "artist", artistId, enriched, mixCache = container.mixCache)
                             if (mix.isNotEmpty()) {
                                 player.playRadioOrEnqueue(mix, "Radio · ${artist.name}")
                                 val added = (mix.size - 1).coerceAtLeast(0)

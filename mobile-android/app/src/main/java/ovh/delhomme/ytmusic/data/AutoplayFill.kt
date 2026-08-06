@@ -18,7 +18,8 @@ suspend fun fetchAutoplayTracksFast(api: YtMusicApi, seedId: String): List<Track
 
 suspend fun fetchAutoplayTracksFull(api: YtMusicApi, seedId: String): List<TrackDto> {
     if (seedId.length != 11) return emptyList()
-    val related = runCatching { api.related(seedId) }.getOrNull() ?: return emptyList()
+    // Batch court pour l’autoplay hors mix (pas le full 200)
+    val related = runCatching { api.related(seedId, full = 0) }.getOrNull() ?: return emptyList()
     return (
         related.tracks.orEmpty() +
             related.related.orEmpty() +

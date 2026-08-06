@@ -17,6 +17,13 @@ import { trackDurationSeconds, formatClock } from '../lib/time';
 import { perfStart } from '../lib/perf';
 import { useSession } from './session';
 import { useLibrary } from './library';
+import {
+  getCachedMix,
+  isPrecomputedMixSource,
+  mixCacheKey,
+  MIX_TARGET,
+  setCachedMix,
+} from '../lib/mixCache';
 
 type RepeatMode = 'off' | 'all' | 'one';
 
@@ -786,6 +793,12 @@ async function ensureAutoRadio(seedId: string) {
   const cur = usePlayer.getState();
   if (cur.autoplay === false) return;
   const userEnd = Math.max(cur.userQueueEnd || 0, cur.queueIndex + 1);
+  const remainingUser = Math.max(0, userEnd - cur.queueIndex - 1);
+  // Mix / radio déjà précalculé (~200) : pas d’extension incrémentale
+  if (isPrecomputedMixSource(cur.sourceKind, remainingUser)) {
+    schedulePrefetch(cur.queue, cur.queueIndex);
+    return;
+  }
   const autoUpcoming = cur.queue.slice(userEnd).filter(isPlayable);
   if (autoUpcoming.length >= 40) {
     schedulePrefetch(cur.queue, cur.queueIndex);
@@ -828,9 +841,9 @@ async function ensureAutoRadio(seedId: string) {
         return null;
       });
 
-    // 2) Enrichissement complet en arrière-plan (search + biblio)
+    // 2) Enrichissement complet en arrière-plan (search + biblio) — batch court pour autoplay
     const fullP = api
-      .related(seedId)
+      .related(seedId, { full: false })
       .then((r) => {
         if (seq !== autoRadioSeq) return r;
         const pool = [
@@ -1391,11 +1404,20 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       return;
     }
     const idx = Math.min(Math.max(0, startIndex), playable.length - 1);
+    const precomputed =
+      opts?.sourceKind === 'mix' ||
+      opts?.sourceKind === 'radio' ||
+      opts?.sourceKind === 'album' ||
+      opts?.sourceKind === 'artist';
     await get().play(playable[idx], playable, {
       preserveQueue: true,
       sourceId: opts?.sourceId,
       sourceKind: opts?.sourceKind,
+      noAutoRadio: precomputed && playable.length >= 20,
     });
+    if (precomputed && playable.length >= 20) {
+      set({ autoplay: false });
+    }
     end(`${playable.length} tracks`);
   },
 
@@ -2155,7 +2177,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       const kept = replaceRest
         ? []
         : s.queue.slice(qi + 1).filter((t) => !extras.some((e) => e.id === t.id));
-      const q = [...head, ...extras, ...kept].slice(0, qi + 1 + 90);
+      const q = [...head, ...extras, ...kept].slice(0, qi + 1 + MIX_TARGET);
       return {
         queue: q,
         userQueueEnd: Math.max(q.length, qi + 1),
@@ -2178,69 +2200,86 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     try {
       let seedTrack: Track | null = seed && isPlayable(seed) ? seed : null;
       let pool: Track[] = [];
+      const cacheKind = kind === 'track' ? 'track' : kind === 'album' ? 'album' : 'artist';
+      const cKey = mixCacheKey(cacheKind, id);
+      const cached = getCachedMix(cKey);
+      if (cached?.length) {
+        pool = cached.filter((t) => isPlayable(t) && t.id !== seedTrack?.id);
+        if (!seedTrack) seedTrack = cached.find(isPlayable) || null;
+      }
 
-      if (kind === 'track') {
-        const trackId = id;
-        // related API = déjà similarForUser ranked (style) — 1 round-trip
-        const rel = await api
-          .related(trackId)
-          .catch(() => ({ related: [] as Track[], radio: [] as Track[], tracks: [] as Track[] }));
-        const raw = [...(rel.related || []), ...(rel.radio || []), ...((rel as { tracks?: Track[] }).tracks || [])];
-        pool = raw.filter((t) => t.id !== trackId && isPlayable(t));
-        if (stayClose && seedTrack?.artists?.[0]) {
-          const artistKey = (
-            seedTrack.artists[0].id ||
-            seedTrack.artists[0].name ||
-            ''
-          ).toLowerCase();
-          const close = pool.filter((t) =>
-            (t.artists || []).some(
-              (a) => (a.id || a.name || '').toLowerCase() === artistKey,
-            ),
-          );
-          const far = pool.filter(
-            (t) =>
-              !(t.artists || []).some(
+      if (!pool.length) {
+        if (kind === 'track') {
+          const trackId = id;
+          // related API = mix précalculé ~200 (cache serveur)
+          const rel = await api
+            .related(trackId, { full: true })
+            .catch(() => ({ related: [] as Track[], radio: [] as Track[], tracks: [] as Track[] }));
+          const raw = [
+            ...(rel.related || []),
+            ...(rel.radio || []),
+            ...((rel as { tracks?: Track[] }).tracks || []),
+          ];
+          pool = raw.filter((t) => t.id !== trackId && isPlayable(t));
+          if (stayClose && seedTrack?.artists?.[0]) {
+            const artistKey = (
+              seedTrack.artists[0].id ||
+              seedTrack.artists[0].name ||
+              ''
+            ).toLowerCase();
+            const close = pool.filter((t) =>
+              (t.artists || []).some(
                 (a) => (a.id || a.name || '').toLowerCase() === artistKey,
               ),
+            );
+            const far = pool.filter(
+              (t) =>
+                !(t.artists || []).some(
+                  (a) => (a.id || a.name || '').toLowerCase() === artistKey,
+                ),
+            );
+            pool = [...close.slice(0, 20), ...far].slice(0, MIX_TARGET);
+          }
+          // Pas de diversify client : ranking serveur déjà diversifié
+          if (!seedTrack) {
+            seedTrack = { id: trackId, title: 'Radio', artists: [], thumbnails: [], type: 'song' };
+          }
+          setCachedMix(cKey, pool, {
+            generatedAt: (rel as { generatedAt?: number }).generatedAt,
+            target: (rel as { target?: number }).target,
+          });
+        } else if (kind === 'album') {
+          const [radioRes, albumRes] = await Promise.all([
+            api.albumRadio(id).catch(() => ({ tracks: [] as Track[] })),
+            api.album(id).catch(() => null),
+          ]);
+          const albumTracks = (albumRes?.tracks || []).filter(isPlayable);
+          seedTrack = seedTrack || albumTracks[0] || null;
+          const radio = (radioRes.tracks || []).filter(
+            (t) => isPlayable(t) && t.id !== seedTrack?.id,
           );
-          // stayClose = un peu du même artiste, majorité style voisin
-          pool = [...close.slice(0, 10), ...far].slice(0, 80);
+          const albumRest = albumTracks.filter((t) => t.id !== seedTrack?.id).slice(0, 6);
+          pool = [...radio, ...albumRest];
+          setCachedMix(cKey, pool, {
+            generatedAt: (radioRes as { generatedAt?: number }).generatedAt,
+            target: (radioRes as { target?: number }).target,
+          });
         } else {
-          // Radio / mix : même style, artistes variés (pas une discographie)
-          pool = diversifyByArtist(pool, seedTrack?.artists?.[0]);
+          const [radioRes, artistRes] = await Promise.all([
+            api.artistRadio(id).catch(() => ({ tracks: [] as Track[] })),
+            api.artist(id).catch(() => null),
+          ]);
+          const songs = (artistRes?.songs || []).filter(isPlayable);
+          seedTrack = seedTrack || songs[0] || (radioRes.tracks || []).find(isPlayable) || null;
+          const radio = (radioRes.tracks || []).filter(
+            (t) => isPlayable(t) && t.id !== seedTrack?.id,
+          );
+          pool = [...songs.filter((t) => t.id !== seedTrack?.id).slice(0, 8), ...radio];
+          setCachedMix(cKey, pool, {
+            generatedAt: (radioRes as { generatedAt?: number }).generatedAt,
+            target: (radioRes as { target?: number }).target,
+          });
         }
-        if (!seedTrack) {
-          seedTrack = { id: trackId, title: 'Radio', artists: [], thumbnails: [], type: 'song' };
-        }
-      } else if (kind === 'album') {
-        const [radioRes, albumRes] = await Promise.all([
-          api.albumRadio(id).catch(() => ({ tracks: [] as Track[] })),
-          api.album(id).catch(() => null),
-        ]);
-        const albumTracks = (albumRes?.tracks || []).filter(isPlayable);
-        seedTrack = seedTrack || albumTracks[0] || null;
-        // Radio album = similaires (souvent hors album) + un peu de l’album en amorçage
-        const radio = (radioRes.tracks || []).filter(
-          (t) => isPlayable(t) && t.id !== seedTrack?.id,
-        );
-        const albumRest = albumTracks.filter((t) => t.id !== seedTrack?.id).slice(0, 6);
-        pool = diversifyByArtist([...radio, ...albumRest], seedTrack?.artists?.[0]);
-      } else {
-        const [radioRes, artistRes] = await Promise.all([
-          api.artistRadio(id).catch(() => ({ tracks: [] as Track[] })),
-          api.artist(id).catch(() => null),
-        ]);
-        const songs = (artistRes?.songs || []).filter(isPlayable);
-        seedTrack = seedTrack || songs[0] || (radioRes.tracks || []).find(isPlayable) || null;
-        const radio = (radioRes.tracks || []).filter(
-          (t) => isPlayable(t) && t.id !== seedTrack?.id,
-        );
-        // Tops artiste en amorçage, puis radio perso (déjà ranked côté API)
-        pool = diversifyByArtist(
-          [...songs.filter((t) => t.id !== seedTrack?.id).slice(0, 8), ...radio],
-          seedTrack?.artists?.[0],
-        );
       }
 
       // Dédup
@@ -2250,7 +2289,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         if (!t.id || seen.has(t.id)) continue;
         seen.add(t.id);
         uniq.push(t);
-        if (uniq.length >= 90) break;
+        if (uniq.length >= MIX_TARGET) break;
       }
       pool = uniq;
 
@@ -2260,8 +2299,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       }
       if (!seedTrack) return { added: 0, soft: false as const };
 
-      const RADIO_CAP = 36;
-      const upcoming = pool.filter((t) => t.id !== seedTrack!.id).slice(0, RADIO_CAP);
+      const upcoming = pool.filter((t) => t.id !== seedTrack!.id).slice(0, MIX_TARGET);
       const mix = [seedTrack, ...upcoming];
       set({ related: pool, relatedSeedId: seedTrack.id });
 
@@ -2273,24 +2311,29 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         Boolean(audio) &&
         !audio!.paused;
 
+      const nextKind =
+        kind === 'track' ? ('radio' as const) : kind === 'album' ? ('album' as const) : ('artist' as const);
+
       if (soft) {
         // Titre en cours intact — on remplace / alimente seulement la suite
         get().enqueueAfterCurrent(upcoming, {
           replaceRest: true,
-          cap: RADIO_CAP,
+          cap: MIX_TARGET,
           sourceId: kind === 'track' ? seedTrack.id : id,
-          sourceKind: kind === 'track' ? 'radio' : kind === 'album' ? 'album' : 'artist',
+          sourceKind: nextKind,
         });
-        set({ showQueue: true, showLyrics: false, autoplay: true, isLoading: false });
+        set({ showQueue: true, showLyrics: false, autoplay: false, isLoading: false });
         return { added: upcoming.length, soft: true as const };
       }
 
-      await get().play(seedTrack, mix, { preserveQueue: true, noAutoRadio: true });
-      set({ showQueue: true, showLyrics: false, autoplay: true });
-      // Remplit « À suivre » après, sans mélanger avec le mix
-      window.setTimeout(() => {
-        if (get().current?.id === seedTrack?.id) void ensureAutoRadio(seedTrack!.id);
-      }, 400);
+      await get().play(seedTrack, mix, {
+        preserveQueue: true,
+        noAutoRadio: true,
+        sourceId: kind === 'track' ? seedTrack.id : id,
+        sourceKind: nextKind,
+      });
+      // File déjà précalculée — pas de top-up autoplay
+      set({ showQueue: true, showLyrics: false, autoplay: false });
       return { added: upcoming.length, soft: false as const };
     } catch (err) {
       console.error('startRadio', err);

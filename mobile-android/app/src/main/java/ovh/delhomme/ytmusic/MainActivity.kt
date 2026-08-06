@@ -413,7 +413,7 @@ fun YtMusicAppContent(
                 onStartRadioFromNowPlaying = {
                     val t = player.state.value.track ?: return@MainTabs
                     scope.launch {
-                        val mix = buildRadioQueue(container.api, "track", t.id, t)
+                        val mix = buildRadioQueue(container.api, "track", t.id, t, mixCache = container.mixCache)
                         if (mix.isNotEmpty()) {
                             player.playRadioOrEnqueue(mix, "Mix")
                         }

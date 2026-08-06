@@ -18,6 +18,14 @@ import {
 } from './library.js';
 import { upsertTrack } from './db.js';
 import { isWeakTitle } from './mappers.js';
+import {
+  MIX_PREVIEW,
+  MIX_TARGET,
+  getMixCache,
+  mixKeyCategory,
+  mixKeyRadio,
+  setMixCache,
+} from './mixCache.js';
 
 export const RADIO_CATEGORIES = [
   { id: 'focus', title: 'Concentration', query: 'focus concentration playlist', mode: 'focus' },
@@ -474,7 +482,57 @@ export async function hybridRank(opts: {
   });
 }
 
-export async function similarForUser(userId: string, trackId: string, seedTrack?: Track) {
+/** Élargit un pool via getRelated sur plusieurs seeds (budget YT borné). */
+async function expandPoolMultiSeed(
+  seeds: Track[],
+  basePool: Track[],
+  excludeId?: string,
+  maxSeeds = 7,
+) {
+  let pool = [...basePool];
+  const seen = new Set(pool.map((t) => t.id).filter(Boolean));
+  const anchors = seeds
+    .filter((t) => t?.id && /^[a-zA-Z0-9_-]{11}$/.test(t.id))
+    .slice(0, maxSeeds);
+  for (const anchor of anchors) {
+    if (pool.length >= MIX_TARGET * 2) break;
+    try {
+      const { related, radio } = await getRelated(anchor.id);
+      for (const t of [...radio, ...related]) {
+        if (!t?.id || seen.has(t.id) || t.id === excludeId) continue;
+        if (!/^[a-zA-Z0-9_-]{11}$/.test(t.id)) continue;
+        seen.add(t.id);
+        pool.push(t);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return dedupeTracks(pool);
+}
+
+export async function similarForUser(
+  userId: string,
+  trackId: string,
+  seedTrack?: Track,
+  opts?: { full?: boolean },
+) {
+  const full = opts?.full !== false;
+  const cacheKey = mixKeyRadio('track', trackId);
+  if (full) {
+    const hit = getMixCache(userId, cacheKey);
+    if (hit?.tracks?.length) {
+      return {
+        tracks: hit.tracks.slice(0, MIX_TARGET),
+        related: hit.tracks,
+        radio: hit.tracks,
+        cached: true as const,
+        generatedAt: hit.generatedAt,
+        target: MIX_TARGET,
+      };
+    }
+  }
+
   let seed =
     seedTrack ||
     ({ id: trackId, title: '', artists: [], thumbnails: [], type: 'song' } as Track);
@@ -524,13 +582,34 @@ export async function similarForUser(userId: string, trackId: string, seedTrack?
     /* ignore */
   }
 
+  if (full) {
+    const hopSeeds = dedupeTracks([seed, ...radio, ...related, ...fromLibrary]).slice(0, 8);
+    pool = await expandPoolMultiSeed(hopSeeds, pool, trackId, 7);
+  }
+
   const ranked = await hybridRank({
     userId,
     candidates: pool,
     seed,
     mode: 'style',
   });
-  return { tracks: ranked, related, radio };
+  const tracks = ranked.slice(0, full ? MIX_TARGET : 40);
+  if (full && tracks.length) {
+    setMixCache(userId, cacheKey, {
+      tracks,
+      seed,
+      generatedAt: Date.now(),
+      target: MIX_TARGET,
+    });
+  }
+  return {
+    tracks,
+    related,
+    radio,
+    cached: false as const,
+    generatedAt: Date.now(),
+    target: full ? MIX_TARGET : tracks.length,
+  };
 }
 
 /**
@@ -627,7 +706,29 @@ async function expandWithTasteAndSearch(opts: {
  * Radio / similaires album : vibe de l’album (pas juste le 1er titre),
  * + related/radio YT, + goûts biblio, + search « songs like ».
  */
-export async function albumSimilarForUser(userId: string, albumId: string) {
+export async function albumSimilarForUser(
+  userId: string,
+  albumId: string,
+  opts?: { full?: boolean },
+) {
+  const full = opts?.full !== false;
+  const cacheKey = mixKeyRadio('album', albumId);
+  if (full) {
+    const hit = getMixCache(userId, cacheKey);
+    if (hit?.tracks?.length) {
+      return {
+        tracks: hit.tracks.slice(0, MIX_TARGET),
+        seed: hit.seed || null,
+        album: null as Awaited<ReturnType<typeof getAlbum>>['album'] | null,
+        related: hit.tracks,
+        radio: hit.tracks,
+        cached: true as const,
+        generatedAt: hit.generatedAt,
+        target: MIX_TARGET,
+      };
+    }
+  }
+
   const { album, tracks } = await getAlbum(albumId);
   const playable = tracks.filter((t) => t?.id && /^[a-zA-Z0-9_-]{11}$/.test(t.id));
   // Évite d’ancrer uniquement sur la piste 1 (related YT = souvent covers de ce titre)
@@ -681,19 +782,67 @@ export async function albumSimilarForUser(userId: string, albumId: string) {
     libraryMax: 22,
   });
 
+  if (full) {
+    const hopSeeds = dedupeTracks([seed, mid, ...playable, ...radio].filter(Boolean) as Track[]).slice(
+      0,
+      8,
+    );
+    pool = await expandPoolMultiSeed(hopSeeds, pool, seed.id, 7);
+  }
+
   const ranked = await hybridRank({
     userId,
     candidates: pool,
     seed,
     mode: 'album-style',
   });
-  return { tracks: ranked, seed, album, related, radio };
+  const out = ranked.slice(0, full ? MIX_TARGET : 40);
+  if (full && out.length) {
+    setMixCache(userId, cacheKey, {
+      tracks: out,
+      seed,
+      generatedAt: Date.now(),
+      target: MIX_TARGET,
+    });
+  }
+  return {
+    tracks: out,
+    seed,
+    album,
+    related,
+    radio,
+    cached: false as const,
+    generatedAt: Date.now(),
+    target: full ? MIX_TARGET : out.length,
+  };
 }
 
 /**
  * Radio / similaires artiste : tops + related + artistes similaires + biblio.
  */
-export async function artistSimilarForUser(userId: string, artistId: string) {
+export async function artistSimilarForUser(
+  userId: string,
+  artistId: string,
+  opts?: { full?: boolean },
+) {
+  const full = opts?.full !== false;
+  const cacheKey = mixKeyRadio('artist', artistId);
+  if (full) {
+    const hit = getMixCache(userId, cacheKey);
+    if (hit?.tracks?.length) {
+      return {
+        tracks: hit.tracks.slice(0, MIX_TARGET),
+        seed: hit.seed || null,
+        artist: null as Awaited<ReturnType<typeof getArtist>>['artist'] | null,
+        related: hit.tracks,
+        radio: hit.tracks,
+        cached: true as const,
+        generatedAt: hit.generatedAt,
+        target: MIX_TARGET,
+      };
+    }
+  }
+
   const { artist, songs, similar } = await getArtist(artistId);
   const playable = songs.filter((t) => t?.id && /^[a-zA-Z0-9_-]{11}$/.test(t.id));
   let seed = playable[0] || null;
@@ -737,13 +886,36 @@ export async function artistSimilarForUser(userId: string, artistId: string) {
     libraryMax: 20,
   });
 
+  if (full) {
+    const hopSeeds = dedupeTracks([seed, ...playable, ...radio]).slice(0, 8);
+    pool = await expandPoolMultiSeed(hopSeeds, pool, seed.id, 7);
+  }
+
   const ranked = await hybridRank({
     userId,
     candidates: pool,
     seed,
     mode: 'artist-radio',
   });
-  return { tracks: ranked, seed, artist, related, radio };
+  const out = ranked.slice(0, full ? MIX_TARGET : 40);
+  if (full && out.length) {
+    setMixCache(userId, cacheKey, {
+      tracks: out,
+      seed,
+      generatedAt: Date.now(),
+      target: MIX_TARGET,
+    });
+  }
+  return {
+    tracks: out,
+    seed,
+    artist,
+    related,
+    radio,
+    cached: false as const,
+    generatedAt: Date.now(),
+    target: full ? MIX_TARGET : out.length,
+  };
 }
 
 export async function radioForUser(
@@ -753,11 +925,27 @@ export async function radioForUser(
 ) {
   const light = opts?.light === true;
   const cat = RADIO_CATEGORIES.find((c) => c.id === categoryId) || RADIO_CATEGORIES[0];
+  const cacheKey = mixKeyCategory(cat.id);
+
+  if (!light) {
+    const hit = getMixCache(userId, cacheKey);
+    if (hit?.tracks?.length) {
+      return {
+        category: cat,
+        tracks: hit.tracks.slice(0, MIX_TARGET),
+        seed: hit.seed || null,
+        cached: true as const,
+        generatedAt: hit.generatedAt,
+        target: MIX_TARGET,
+      };
+    }
+  }
+
   let seedTrack: Track | null = null;
   let candidates: Track[] = [];
 
   if (cat.id === 'liked-radio') {
-    const top = getTopListened(userId, light ? 12 : 15);
+    const top = getTopListened(userId, light ? 12 : 24);
     seedTrack = top[0] || null;
     if (seedTrack && !light) {
       const { radio, related } = await getRelated(seedTrack.id);
@@ -786,17 +974,62 @@ export async function radioForUser(
     }
   }
 
+  if (!light) {
+    const hopSeeds = dedupeTracks(
+      [seedTrack, ...candidates].filter(Boolean) as Track[],
+    ).slice(0, 8);
+    candidates = await expandPoolMultiSeed(hopSeeds, candidates, seedTrack?.id, 7);
+    try {
+      if (seedTrack) {
+        candidates = await expandWithTasteAndSearch({
+          userId,
+          seed: seedTrack,
+          pool: candidates,
+          excludeId: seedTrack.id,
+          libraryMax: 24,
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   const tracks = await hybridRank({
     userId,
     candidates,
     seed: seedTrack,
     mode: cat.mode === 'radio' ? 'style' : cat.mode,
   });
+  const out = tracks.slice(0, light ? MIX_PREVIEW : MIX_TARGET);
+  if (!light && out.length) {
+    setMixCache(userId, cacheKey, {
+      tracks: out,
+      seed: seedTrack,
+      category: { id: cat.id, title: cat.title, query: cat.query, mode: cat.mode },
+      generatedAt: Date.now(),
+      target: MIX_TARGET,
+    });
+  }
   return {
     category: cat,
-    tracks: tracks.slice(0, light ? 12 : 40),
+    tracks: out,
     seed: seedTrack,
+    cached: false as const,
+    generatedAt: Date.now(),
+    target: light ? MIX_PREVIEW : MIX_TARGET,
   };
+}
+
+/** Préchauffe async les N premières catégories (ne bloque pas la home). */
+export function warmCategoryMixes(userId: string, count = 3) {
+  const cats = RADIO_CATEGORIES.slice(0, count);
+  for (const cat of cats) {
+    const key = mixKeyCategory(cat.id);
+    if (getMixCache(userId, key)) continue;
+    void radioForUser(userId, cat.id, { light: false }).catch(() => {
+      /* ignore warm errors */
+    });
+  }
 }
 
 export async function homeReco(userId: string) {
