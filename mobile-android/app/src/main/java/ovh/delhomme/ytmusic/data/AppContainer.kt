@@ -27,6 +27,7 @@ class AppContainer(context: Context) {
     val tokenStore = TokenStore(appContext)
     val quickAccess = QuickAccessStore(appContext)
     val homeCache = HomeCacheStore(appContext)
+    val offlineStore by lazy { LocalOfflineStore(appContext, moshi) }
     private val apiPrefs = appContext.getSharedPreferences("ytm_api", Context.MODE_PRIVATE)
 
     val deviceId: String by lazy {
@@ -205,8 +206,20 @@ class AppContainer(context: Context) {
         .create(YtMusicApi::class.java)
 
     fun streamUrl(trackId: String): String {
+        offlineStore.playUri(trackId)?.let { return it.toString() }
         // Toujours via proxy API : les URLs googlevideo sont liées à l’IP du serveur
         // (?redirect=1 → 403 depuis le téléphone / autre réseau).
+        val base = resolvedApiBase() + "/api/stream/$trackId"
+        val token = tokenStore.peekAccess()
+        return if (!token.isNullOrBlank()) {
+            "$base?access_token=${java.net.URLEncoder.encode(token, Charsets.UTF_8.name())}"
+        } else {
+            base
+        }
+    }
+
+    /** URL HTTP stream uniquement (pour télécharger en local). */
+    fun remoteStreamUrl(trackId: String): String {
         val base = resolvedApiBase() + "/api/stream/$trackId"
         val token = tokenStore.peekAccess()
         return if (!token.isNullOrBlank()) {

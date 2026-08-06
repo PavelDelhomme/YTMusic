@@ -96,12 +96,26 @@ class PlaybackService : MediaSessionService() {
             val id = item.mediaId
             if (id.isBlank()) return
 
-            val networkish = isNetworkOrServerError(error)
+            val localFile = item.localConfiguration?.uri?.scheme == "file"
+            val networkish = !localFile && isNetworkOrServerError(error)
             val streak = streamFailStreak.incrementAndGet()
             AppLog.w(
                 "PlaybackService",
-                "onPlayerError code=${error.errorCode} network=$networkish streak=$streak id=$id",
+                "onPlayerError code=${error.errorCode} network=$networkish local=$localFile streak=$streak id=$id",
             )
+
+            // Fichier local : un échec n’est pas un « serveur KO »
+            if (localFile) {
+                streamFailStreak.set(0)
+                android.os.Handler(mainLooper).post {
+                    android.widget.Toast.makeText(
+                        this@PlaybackService,
+                        "Lecture locale impossible",
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                }
+                return
+            }
 
             // Serveur / réseau KO : stop immédiat, pas de reprepare ni skip cascade
             if (networkish || streak >= 2) {
