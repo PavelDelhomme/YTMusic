@@ -519,6 +519,11 @@ export const api = {
   suggestions: (q: string) =>
     req<{ suggestions: string[] }>(`/api/search/suggestions?q=${encodeURIComponent(q)}`),
   searchHistory: () => req<{ history: any[] }>('/api/search/history'),
+  recordSearch: (q: string) =>
+    req<{ ok: boolean }>('/api/search/history', {
+      method: 'POST',
+      body: JSON.stringify({ query: q }),
+    }).catch(() => ({ ok: false })),
   recordSearchClick: (q: string, track: { id: string; type?: string }) =>
     req<{ ok: boolean }>('/api/search/history', {
       method: 'POST',

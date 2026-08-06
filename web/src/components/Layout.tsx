@@ -64,6 +64,8 @@ export function Layout() {
   const [openSug, setOpenSug] = useState(false);
   /** -1 = texte tapé ; 0..n-1 = suggestion (liste affichée) */
   const [sugIndex, setSugIndex] = useState(-1);
+  /** true = dropdown = historique (pas de « Rechercher « … » ») */
+  const [historyMode, setHistoryMode] = useState(true);
   /** Texte réellement tapé (les flèches peuvent remplir `q` sans l’écraser) */
   const typedDraftRef = useRef('');
   const [authOpen, setAuthOpen] = useState(false);
@@ -189,32 +191,53 @@ export function Layout() {
     const guest = !user || user.isGuest || user.email?.includes('@local.ytmusic');
     if (guest) {
       setSuggestions([]);
+      setHistoryMode(false);
       return;
     }
     const id = ++sugReq.current;
-    if (!q.trim()) {
+    const draft = q.trim();
+    // Champ vide → historique seul (pas de propositions YouTube)
+    if (!draft) {
       const t = setTimeout(() => {
         api
-          .suggestions('')
+          .searchHistory()
           .then((r) => {
             if (sugReq.current !== id) return;
-            setSuggestions(r.suggestions.slice(0, 8));
+            const seen = new Set<string>();
+            const out: string[] = [];
+            for (const h of r.history || []) {
+              const query = String((h as { query?: string })?.query || '').trim();
+              if (!query || seen.has(query.toLowerCase())) continue;
+              seen.add(query.toLowerCase());
+              out.push(query);
+              if (out.length >= 12) break;
+            }
+            setSuggestions(out);
+            setHistoryMode(true);
           })
           .catch(() => {
-            if (sugReq.current === id) setSuggestions([]);
+            if (sugReq.current === id) {
+              setSuggestions([]);
+              setHistoryMode(true);
+            }
           });
-      }, 100);
+      }, 80);
       return () => clearTimeout(t);
     }
+    // Texte tapé → suggestions API (+ historique filtré côté serveur)
     const t = setTimeout(() => {
       api
-        .suggestions(q)
+        .suggestions(draft)
         .then((r) => {
           if (sugReq.current !== id) return;
-          setSuggestions(r.suggestions.slice(0, 8));
+          setSuggestions(r.suggestions.slice(0, 10));
+          setHistoryMode(false);
         })
         .catch(() => {
-          if (sugReq.current === id) setSuggestions([]);
+          if (sugReq.current === id) {
+            setSuggestions([]);
+            setHistoryMode(false);
+          }
         });
     }, 200);
     return () => clearTimeout(t);
@@ -503,15 +526,17 @@ export function Layout() {
               className="relative mx-auto w-full max-w-xl"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (!q.trim()) return;
+                const query = q.trim();
+                if (!query) return;
                 setOpenSug(false);
-                navigate(`/search?q=${encodeURIComponent(q.trim())}`);
+                void api.recordSearch(query);
+                navigate(`/search?q=${encodeURIComponent(query)}`);
               }}
             >
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-yt-muted" />
               <input
                 value={q}
-                    onChange={(e) => {
+                onChange={(e) => {
                   const v = e.target.value;
                   setQ(v);
                   typedDraftRef.current = v;
@@ -521,26 +546,54 @@ export function Layout() {
                 onFocus={() => setOpenSug(true)}
                 onKeyDown={(e) => {
                   const draft = typedDraftRef.current.trim();
-                  const opts = [
-                    ...(draft ? [draft] : []),
-                    ...suggestions.filter((s) => s.trim().toLowerCase() !== draft.toLowerCase()),
-                  ];
+                  // Historique : uniquement les entrées (pas d’option « texte tapé »)
+                  // Suggestions : option tapée en tête si besoin
+                  const opts = historyMode
+                    ? suggestions
+                    : [
+                        ...(draft ? [draft] : []),
+                        ...suggestions.filter((s) => s.trim().toLowerCase() !== draft.toLowerCase()),
+                      ];
                   const n = opts.length;
 
                   if (e.key === 'ArrowDown' && openSug && n > 0) {
                     e.preventDefault();
                     e.stopPropagation();
-                    const next = sugIndex < 0 ? 0 : sugIndex >= n - 1 ? -1 : sugIndex + 1;
+                    const next = historyMode
+                      ? sugIndex < 0
+                        ? 0
+                        : (sugIndex + 1) % n
+                      : sugIndex < 0
+                        ? 0
+                        : sugIndex >= n - 1
+                          ? -1
+                          : sugIndex + 1;
                     setSugIndex(next);
-                    setQ(next < 0 ? typedDraftRef.current : opts[next] || typedDraftRef.current);
+                    if (historyMode) {
+                      setQ(opts[next] || '');
+                    } else {
+                      setQ(next < 0 ? typedDraftRef.current : opts[next] || typedDraftRef.current);
+                    }
                     return;
                   }
                   if (e.key === 'ArrowUp' && openSug && n > 0) {
                     e.preventDefault();
                     e.stopPropagation();
-                    const next = sugIndex < 0 ? n - 1 : sugIndex === 0 ? -1 : sugIndex - 1;
+                    const next = historyMode
+                      ? sugIndex <= 0
+                        ? n - 1
+                        : sugIndex - 1
+                      : sugIndex < 0
+                        ? n - 1
+                        : sugIndex === 0
+                          ? -1
+                          : sugIndex - 1;
                     setSugIndex(next);
-                    setQ(next < 0 ? typedDraftRef.current : opts[next] || typedDraftRef.current);
+                    if (historyMode) {
+                      setQ(opts[next] || '');
+                    } else {
+                      setQ(next < 0 ? typedDraftRef.current : opts[next] || typedDraftRef.current);
+                    }
                     return;
                   }
                   if (e.key === 'Enter' && openSug && sugIndex >= 0 && opts[sugIndex]) {
@@ -550,6 +603,7 @@ export function Layout() {
                     setQ(pick);
                     setOpenSug(false);
                     setSugIndex(-1);
+                    void api.recordSearch(pick);
                     navigate(`/search?q=${encodeURIComponent(pick)}`);
                     return;
                   }
@@ -558,7 +612,6 @@ export function Layout() {
                   e.stopPropagation();
                   setOpenSug(false);
                   setSugIndex(-1);
-                  setSuggestions([]);
                   if (q) {
                     setQ('');
                     typedDraftRef.current = '';
@@ -587,9 +640,8 @@ export function Layout() {
                   onClick={() => {
                     setQ('');
                     typedDraftRef.current = '';
-                    setSuggestions([]);
                     setSugIndex(-1);
-                    setOpenSug(false);
+                    setOpenSug(true);
                     if (location.pathname.startsWith('/search')) {
                       navigate('/search');
                     }
@@ -598,18 +650,29 @@ export function Layout() {
                   <X className="h-4 w-4" />
                 </button>
               ) : null}
-              {openSug && (suggestions.length > 0 || typedDraftRef.current.trim() || q.trim()) && (
+              {openSug && (suggestions.length > 0 || (!historyMode && (typedDraftRef.current.trim() || q.trim()))) && (
                 <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-80 overflow-y-auto rounded-xl border border-yt-border bg-yt-elevated shadow-2xl">
+                  {historyMode && suggestions.length > 0 ? (
+                    <p className="px-4 pt-2.5 pb-1 text-[11px] font-medium uppercase tracking-wide text-yt-muted">
+                      Récentes
+                    </p>
+                  ) : null}
                   {(() => {
                     const draft = typedDraftRef.current.trim() || q.trim();
-                    const opts = [
-                      ...(draft ? [{ label: draft, isTyped: true }] : []),
-                      ...suggestions
-                        .filter((s) => s.trim().toLowerCase() !== draft.toLowerCase())
-                        .map((s) => ({ label: s, isTyped: false })),
-                    ];
+                    const opts = historyMode
+                      ? suggestions.map((s) => ({ label: s, isTyped: false }))
+                      : [
+                          ...(draft ? [{ label: draft, isTyped: true }] : []),
+                          ...suggestions
+                            .filter((s) => s.trim().toLowerCase() !== draft.toLowerCase())
+                            .map((s) => ({ label: s, isTyped: false })),
+                        ];
                     return opts.map((opt, i) => {
-                      const hi = sugIndex < 0 ? opt.isTyped : sugIndex === i;
+                      const hi = historyMode
+                        ? sugIndex === i || (sugIndex < 0 && i === 0 && false)
+                        : sugIndex < 0
+                          ? opt.isTyped
+                          : sugIndex === i;
                       return (
                         <button
                           key={`${opt.isTyped ? 'typed' : 'sug'}-${opt.label}`}
@@ -623,6 +686,7 @@ export function Layout() {
                             setQ(opt.label);
                             setOpenSug(false);
                             setSugIndex(-1);
+                            void api.recordSearch(opt.label);
                             navigate(`/search?q=${encodeURIComponent(opt.label)}`);
                           }}
                         >
