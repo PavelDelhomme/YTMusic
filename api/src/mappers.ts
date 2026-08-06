@@ -708,16 +708,58 @@ export function mapListItem(item: any, fallbackThumbs?: Thumb[]): Track | null {
   // Ne pas figer « Sans titre » : titre vide → hydrateTracks/getTrack corrigera
   if (!title) title = '';
 
-  const durationTextRaw = item.duration?.text || asText(item.duration);
-  const durationSeconds =
+  const durationTextRaw =
+    item.duration?.text ||
+    asText(item.duration) ||
+    asText(item.lengthText) ||
+    asText(item.length_text) ||
+    asText(item.length?.text) ||
+    asText(item.thumbnail_overlays?.find?.((o: any) => o?.text)?.text) ||
+    '';
+  // Cherche mm:ss / h:mm:ss dans overlays / labels
+  let parsedFromLabel: string | undefined;
+  if (!durationTextRaw) {
+    const blob = [
+      asText(item.overlay?.content?.accessibility?.accessibility_data?.label),
+      asText(item.accessibility?.accessibility_data?.label),
+      ...(Array.isArray(item.thumbnail_overlays)
+        ? item.thumbnail_overlays.map((o: any) => asText(o?.text) || asText(o))
+        : []),
+      ...(Array.isArray(item.flex_columns)
+        ? item.flex_columns.map((c: any) => asText(c?.title) || asText(c?.subtitle))
+        : []),
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    const m = blob.match(/\b(\d{1,2}:\d{2}(?::\d{2})?)\b/);
+    if (m) parsedFromLabel = m[1];
+  }
+  const durationSecondsRaw =
     typeof item.duration?.seconds === 'number'
       ? item.duration.seconds
+      : typeof item.length_seconds === 'number'
+        ? item.length_seconds
+        : typeof item.lengthSeconds === 'number'
+          ? item.lengthSeconds
+          : undefined;
+  let duration = durationTextRaw || parsedFromLabel || undefined;
+  let durationSeconds =
+    typeof durationSecondsRaw === 'number' && durationSecondsRaw > 0
+      ? Math.floor(durationSecondsRaw)
       : undefined;
-  let duration = durationTextRaw || undefined;
   if (typeof durationSeconds === 'number') {
     duration = formatDurationClock(durationSeconds);
   } else if (duration) {
     duration = normalizeDurationText(duration);
+    // Remplir durationSeconds depuis le texte normalisé
+    const parts = String(duration)
+      .split(':')
+      .map((p) => Number(p));
+    if (parts.length === 2 && parts.every((n) => Number.isFinite(n))) {
+      durationSeconds = parts[0] * 60 + parts[1];
+    } else if (parts.length === 3 && parts.every((n) => Number.isFinite(n))) {
+      durationSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+    }
   }
   const type = inferType(String(id), item);
 
