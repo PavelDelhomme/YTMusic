@@ -710,8 +710,16 @@ export function PlayerBar({
             <button
               type="button"
               onClick={onOpenDevices}
-              className={`flex h-11 w-11 items-center justify-center rounded-full ${!isActivePlayer ? 'text-yt-red' : 'text-yt-muted hover:bg-white/10 hover:text-white'}`}
-              title="Cast"
+              className={`flex h-11 w-11 items-center justify-center rounded-full ${
+                receiveRemoteSync && !isActivePlayer
+                  ? 'text-yt-red'
+                  : 'text-yt-muted hover:bg-white/10 hover:text-white'
+              }`}
+              title={
+                receiveRemoteSync && !isActivePlayer
+                  ? 'Cast · lecture sur un autre appareil'
+                  : 'Cast'
+              }
             >
               <Cast className="h-5 w-5" />
             </button>

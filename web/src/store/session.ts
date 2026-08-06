@@ -42,6 +42,13 @@ export const useSession = create<SessionState>((set, get) => ({
   init: () => {
     sessionSocket.connect({
       onRegistered: (deviceId) => set({ deviceId, connected: true }),
+      onDisconnected: () =>
+        set({
+          connected: false,
+          // Sans WS, on redevient le lecteur local (évite Cast rouge fantôme)
+          isActivePlayer: true,
+          activePlayerId: null,
+        }),
       onSnapshot: ({ devices, activePlayerId, state }) => {
         const me = sessionSocket.id;
         set({
