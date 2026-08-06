@@ -27,6 +27,7 @@ class AppContainer(context: Context) {
     val tokenStore = TokenStore(appContext)
     val quickAccess = QuickAccessStore(appContext)
     val homeCache = HomeCacheStore(appContext)
+    val mixCache = MixCacheStore(appContext)
     val offlineStore by lazy { LocalOfflineStore(appContext, moshi) }
     val localPlayback by lazy { LocalPlaybackStore(appContext, moshi) }
     private val apiPrefs = appContext.getSharedPreferences("ytm_api", Context.MODE_PRIVATE)

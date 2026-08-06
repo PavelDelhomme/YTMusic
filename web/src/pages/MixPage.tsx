@@ -10,6 +10,7 @@ import { useExplore } from '../store/explore';
 import { formatTotalDuration, sumTracksDurationSeconds } from '../lib/time';
 import { warmFormats } from '../lib/streamPrefetch';
 import { perfStart } from '../lib/perf';
+import { getCachedMix, mixCacheKey, setCachedMix } from '../lib/mixCache';
 import { Play, Shuffle, Library, Plus } from 'lucide-react';
 import { PlayingCoverOverlay } from '../components/PlayingBars';
 import { useNowPlayingMatch } from '../lib/nowPlaying';
@@ -52,8 +53,14 @@ export function MixPage() {
   const load = useCallback(async () => {
     if (!id) return;
     const end = perfStart('mix.detail');
+    const cKey = mixCacheKey('cat', id);
+    const cached = getCachedMix(cKey);
     const preview = radioPreviews[id] || [];
-    if (preview.length) {
+    if (cached?.length) {
+      setTracks(cached);
+      setLoading(false);
+      void warmFormats(cached.slice(0, 3).map((t) => t.id));
+    } else if (preview.length) {
       setTracks(preview);
       setLoading(false);
       void warmFormats(preview.slice(0, 3).map((t) => t.id));
@@ -66,15 +73,16 @@ export function MixPage() {
       const list = (r.tracks || []).filter((t) => /^[a-zA-Z0-9_-]{11}$/.test(t.id));
       if (list.length) {
         setTracks(list);
+        setCachedMix(cKey, list, { generatedAt: r.generatedAt, target: r.target });
         void warmFormats(list.slice(0, 4).map((t) => t.id));
-      } else if (!preview.length) {
+      } else if (!preview.length && !cached?.length) {
         setError('Aucun titre dans ce mix.');
       }
       const catTitle = radios.find((x) => x.id === id)?.title;
       if (catTitle) setTitle(catTitle);
       else if (r.category?.title) setTitle(String(r.category.title));
     } catch (e) {
-      if (!preview.length) setError(String((e as Error).message || e));
+      if (!preview.length && !cached?.length) setError(String((e as Error).message || e));
     } finally {
       setLoading(false);
       end(id);

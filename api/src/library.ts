@@ -334,7 +334,7 @@ export function saveMix(userId: string, mix: Record<string, unknown>) {
       .filter(Boolean)
       .slice(0, 4),
     covers,
-    tracks: tracks.slice(0, 80),
+    tracks: tracks.slice(0, 200),
     trackCount: tracks.length || Number(mix.trackCount) || 0,
   };
   db.prepare(
