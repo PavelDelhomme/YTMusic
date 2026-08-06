@@ -594,9 +594,14 @@ export const api = {
   recoSimilar: (trackId: string) =>
     req<{ tracks: Track[]; related: Track[]; radio: Track[] }>(`/api/reco/similar/${trackId}`),
   recoRadio: (category: string, opts?: { preview?: boolean }) =>
-    req<{ category: any; tracks: Track[]; seed: Track | null }>(
-      `/api/reco/radio/${category}${opts?.preview ? '?preview=1' : ''}`,
-    ),
+    req<{
+      category: any;
+      tracks: Track[];
+      seed: Track | null;
+      cached?: boolean;
+      target?: number;
+      generatedAt?: number;
+    }>(`/api/reco/radio/${category}${opts?.preview ? '?preview=1' : ''}`),
   recoRadios: () => req<{ radios: { id: string; title: string }[] }>('/api/reco/radios'),
   recoFeedback: (payload: {
     trackId: string;
@@ -613,12 +618,30 @@ export const api = {
   track: (id: string) =>
     req<{ track: Track; streamUrl: string; cached: boolean }>(`/api/track/${id}`),
   upNext: (id: string) => req<{ tracks: Track[] }>(`/api/track/${id}/upnext`),
-  related: (id: string, opts?: { fast?: boolean }) =>
-    req<{ related: Track[]; radio: Track[]; tracks?: Track[]; fast?: boolean }>(
-      `/api/track/${id}/related${opts?.fast ? '?fast=1' : ''}`,
+  related: (id: string, opts?: { fast?: boolean; full?: boolean }) => {
+    const q = new URLSearchParams();
+    if (opts?.fast) q.set('fast', '1');
+    if (opts?.full === false) q.set('full', '0');
+    if (opts?.full === true) q.set('full', '1');
+    const qs = q.toString();
+    return req<{
+      related: Track[];
+      radio: Track[];
+      tracks?: Track[];
+      fast?: boolean;
+      cached?: boolean;
+      target?: number;
+      generatedAt?: number;
+    }>(`/api/track/${id}/related${qs ? `?${qs}` : ''}`);
+  },
+  albumRadio: (id: string) =>
+    req<{ tracks: Track[]; cached?: boolean; target?: number; generatedAt?: number }>(
+      `/api/album/${id}/radio`,
     ),
-  albumRadio: (id: string) => req<{ tracks: Track[] }>(`/api/album/${id}/radio`),
-  artistRadio: (id: string) => req<{ tracks: Track[] }>(`/api/artist/${id}/radio`),
+  artistRadio: (id: string) =>
+    req<{ tracks: Track[]; cached?: boolean; target?: number; generatedAt?: number }>(
+      `/api/artist/${id}/radio`,
+    ),
   artistSongs: (id: string, limit?: number) =>
     req<{
       artist: { id: string; name: string; subscribers?: string; thumbnails: Track['thumbnails']; description?: string };

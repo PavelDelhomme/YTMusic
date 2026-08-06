@@ -198,11 +198,17 @@ data class RelatedResponse(
     val related: List<TrackDto> = emptyList(),
     val radio: List<TrackDto> = emptyList(),
     val tracks: List<TrackDto> = emptyList(),
+    val cached: Boolean? = null,
+    val target: Int? = null,
+    val generatedAt: Long? = null,
 )
 
 @JsonClass(generateAdapter = false)
 data class TracksResponse(
     val tracks: List<TrackDto> = emptyList(),
+    val cached: Boolean? = null,
+    val target: Int? = null,
+    val generatedAt: Long? = null,
 )
 
 @JsonClass(generateAdapter = false)
@@ -473,6 +479,7 @@ interface YtMusicApi {
     suspend fun related(
         @Path("id") id: String,
         @Query("fast") fast: Int? = null,
+        @Query("full") full: Int? = null,
     ): RelatedResponse
 
     @GET("api/track/{id}/upnext")

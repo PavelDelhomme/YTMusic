@@ -265,15 +265,24 @@ fun CollectionDetailScreen(
                         .joinToString(" ") { w -> w.replaceFirstChar { c -> c.uppercase() } }
                     subtitle = "Mix"
                     cover = seed ?: TrackDto(id = id, title = title, type = "mix")
+                    val cacheKey = container.mixCache.keyCategory(id)
+                    container.mixCache.get(cacheKey)?.let { cached ->
+                        tracks = cached
+                        cover = cached.first()
+                        subtitle = "${cached.size} titres · Mix"
+                        loading = false
+                    }
                     // Preview rapide pour afficher la liste sans attendre le mix complet
-                    runCatching {
-                        val preview = container.api.recoRadio(id, preview = 1)
-                        val pt = preview.tracks.filter { it.isPlayable() }
-                        if (pt.isNotEmpty()) {
-                            tracks = pt
-                            cover = pt.first()
-                            subtitle = "${pt.size}+ titres · Mix"
-                            loading = false
+                    if (tracks.isEmpty()) {
+                        runCatching {
+                            val preview = container.api.recoRadio(id, preview = 1)
+                            val pt = preview.tracks.filter { it.isPlayable() }
+                            if (pt.isNotEmpty()) {
+                                tracks = pt
+                                cover = pt.first()
+                                subtitle = "${pt.size}+ titres · Mix"
+                                loading = false
+                            }
                         }
                     }
                     val r = container.api.recoRadio(id)
@@ -282,6 +291,7 @@ fun CollectionDetailScreen(
                         tracks = list
                         cover = list.first()
                         subtitle = "${list.size} titres · Mix"
+                        container.mixCache.put(cacheKey, list, r.generatedAt ?: System.currentTimeMillis())
                     }
                     inLib = runCatching {
                         container.api.library().mixes.any { it.id == id }
@@ -428,6 +438,7 @@ fun CollectionDetailScreen(
                                         "album",
                                         id,
                                         seed,
+                                        mixCache = container.mixCache,
                                     )
                                     radioBusy = false
                                     val rest = mix.filter { it.id != seed?.id }

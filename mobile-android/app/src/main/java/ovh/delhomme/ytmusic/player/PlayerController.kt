@@ -19,7 +19,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import ovh.delhomme.ytmusic.data.MixCacheStore
 import ovh.delhomme.ytmusic.data.TrackDto
+import ovh.delhomme.ytmusic.data.isPrecomputedMixSource
 import ovh.delhomme.ytmusic.YtMusicApp
 import android.widget.Toast
 
@@ -233,6 +235,8 @@ class PlayerController(
     fun appendAutoTracks(tracks: List<TrackDto>, forSeedId: String? = null) {
         if (!autoplaySuggestions) return
         if (forSeedId != null && _state.value.track?.id != forSeedId) return
+        val remainingUser = (userQueueEnd - _state.value.queueIndex - 1).coerceAtLeast(0)
+        if (isPrecomputedMixSource(sourceKind, remainingUser)) return
         val extra = tracks.filter { it.isPlayable() }
         if (extra.isEmpty()) return
         val c = player() ?: return
@@ -829,7 +833,7 @@ class PlayerController(
     fun enqueueAfterCurrent(
         tracks: List<TrackDto>,
         replaceRest: Boolean = true,
-        cap: Int = 36,
+        cap: Int = MixCacheStore.MIX_TARGET,
         title: String? = null,
         sourceId: String? = null,
         sourceKind: String? = null,
@@ -854,7 +858,7 @@ class PlayerController(
         } else {
             queue.drop(idx + 1).filter { t -> filtered.none { it.id == t.id } }
         }
-        val newQ = (head + filtered + kept).take(idx + 1 + 90)
+        val newQ = (head + filtered + kept).take(idx + 1 + MixCacheStore.MIX_TARGET)
         while (c.mediaItemCount > idx + 1) {
             c.removeMediaItem(idx + 1)
         }
@@ -867,25 +871,28 @@ class PlayerController(
 
     /** Radio / Mix : si un titre tourne déjà, n’ajoute que la suite (sans reset). */
     fun playRadioOrEnqueue(mix: List<TrackDto>, title: String, sourceKind: String = "mix") {
-        val playable = mix.filter { it.isPlayable() }
+        val playable = mix.filter { it.isPlayable() }.take(MixCacheStore.MIX_TARGET)
         if (playable.isEmpty()) return
         val st = _state.value
         if (st.playing && st.track != null) {
             enqueueAfterCurrent(
                 playable,
                 replaceRest = true,
-                cap = 36,
+                cap = MixCacheStore.MIX_TARGET,
                 title = title,
                 sourceKind = sourceKind,
             )
+            // File précalculée — coupe l’autoplay incrémental
+            setAutoplaySuggestions(false)
         } else {
             play(
-                playable.take(37),
+                playable,
                 0,
                 title = title,
-                userQueueEnd = playable.take(37).size,
+                userQueueEnd = playable.size,
                 sourceKind = sourceKind,
             )
+            setAutoplaySuggestions(false)
         }
     }
 

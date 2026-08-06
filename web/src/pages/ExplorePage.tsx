@@ -10,6 +10,7 @@ import { useItemActions } from '../store/itemActions';
 import { useExplore } from '../store/explore';
 import { perfStart } from '../lib/perf';
 import { warmFormats } from '../lib/streamPrefetch';
+import { getCachedMix, mixCacheKey, MIX_TARGET, setCachedMix } from '../lib/mixCache';
 
 export function ExplorePage() {
   const navigate = useNavigate();
@@ -46,22 +47,54 @@ export function ExplorePage() {
     setStartingId(id);
     const end = perfStart('mix.play');
     const soft = Boolean(isPlaying && currentId);
+    const cKey = mixCacheKey('cat', id);
     try {
       const preview = (radioPreviews[id] || []).filter((t) =>
         /^[a-zA-Z0-9_-]{11}$/.test(t.id),
       );
       if (preview.length) {
         if (soft) {
-          enqueueAfterCurrent(preview, { replaceRest: true, cap: 36, sourceId: id, sourceKind: 'mix' });
+          enqueueAfterCurrent(preview, {
+            replaceRest: true,
+            cap: MIX_TARGET,
+            sourceId: id,
+            sourceKind: 'mix',
+          });
         } else {
           void playQueue(preview, 0, { sourceId: id, sourceKind: 'mix' });
         }
         void warmFormats([preview[0]!.id, preview[1]?.id].filter(Boolean) as string[]);
       }
+      const cached = getCachedMix(cKey);
+      if (cached?.length) {
+        if (soft || (usePlayer.getState().isPlaying && usePlayer.getState().current?.id)) {
+          enqueueAfterCurrent(cached, {
+            replaceRest: true,
+            cap: MIX_TARGET,
+            sourceId: id,
+            sourceKind: 'mix',
+          });
+        } else {
+          void playQueue(cached, 0, { sourceId: id, sourceKind: 'mix' });
+        }
+        void warmFormats(cached.slice(0, 3).map((t) => t.id));
+        void api.recoRadio(id).then((r) => {
+          if (r.tracks?.length) {
+            setCachedMix(cKey, r.tracks, { generatedAt: r.generatedAt, target: r.target });
+          }
+        });
+        return;
+      }
       const r = await api.recoRadio(id);
       if (r.tracks?.length) {
+        setCachedMix(cKey, r.tracks, { generatedAt: r.generatedAt, target: r.target });
         if (soft || (usePlayer.getState().isPlaying && usePlayer.getState().current?.id)) {
-          enqueueAfterCurrent(r.tracks, { replaceRest: true, cap: 36, sourceId: id, sourceKind: 'mix' });
+          enqueueAfterCurrent(r.tracks, {
+            replaceRest: true,
+            cap: MIX_TARGET,
+            sourceId: id,
+            sourceKind: 'mix',
+          });
         } else {
           void playQueue(r.tracks, 0, { sourceId: id, sourceKind: 'mix' });
         }
