@@ -173,31 +173,40 @@ export function bestThumbUrl(thumbs: Thumb[], size = 544): string {
 }
 
 export function isJunkArtistName(name: string) {
+  const n = String(name || '').trim();
   return (
-    !name ||
-    name === '•' ||
-    name === '·' ||
+    !n ||
+    n === '•' ||
+    n === '·' ||
     // Handle / pseudo YouTube collé comme « artiste »
-    /^@[\w.-]+$/i.test(name.trim()) ||
-    /^profile$/i.test(name.trim()) ||
+    /^@[\w.-]+$/i.test(n) ||
+    /^profile$/i.test(n) ||
+    // Podcast / Episode YTM (ex. « Episode », « Jan 31, 2025 », « May 8 »)
+    /^episodes?$/i.test(n) ||
+    /^(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\.?\s+\d{1,2}(?:,?\s+\d{4})?$/i.test(
+      n,
+    ) ||
+    /^\d{1,2}\s+(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\.?(?:\s+\d{4})?$/i.test(
+      n,
+    ) ||
     // « Various Artists » est un vrai libellé YTM — ne pas le jeter (sinon UI → « Artiste »)
     /^(song|album|playlist|video|ep|single|artist|artiste|inconnu|unknown|n\/a|va|divers)$/i.test(
-      name,
+      n,
     ) ||
-    /^\d+:\d+$/.test(name) ||
-    /^\d{4}$/.test(name) ||
-    /^\d+\s*songs?$/i.test(name.trim()) ||
-    /^\d+\s*titres?$/i.test(name.trim()) ||
-    /^\d+\s*(min|mins|minutes?|sec|secs|seconds?|h|hr|hrs|hours?)$/i.test(name.trim()) ||
-    /^\d+\s*(song|album|playlist|video)s?$/i.test(name.trim()) ||
-    /^\d+\s*hours?(?:,?\s*\d+\s*minutes?)?$/i.test(name.trim()) ||
-    /^\d+\s*hour,\s*\d+\s*minutes?$/i.test(name.trim()) ||
+    /^\d+:\d+$/.test(n) ||
+    /^\d{4}$/.test(n) ||
+    /^\d+\s*songs?$/i.test(n) ||
+    /^\d+\s*titres?$/i.test(n) ||
+    /^\d+\s*(min|mins|minutes?|sec|secs|seconds?|h|hr|hrs|hours?)$/i.test(n) ||
+    /^\d+\s*(song|album|playlist|video)s?$/i.test(n) ||
+    /^\d+\s*hours?(?:,?\s*\d+\s*minutes?)?$/i.test(n) ||
+    /^\d+\s*hour,\s*\d+\s*minutes?$/i.test(n) ||
     /^(?:\d+\s*)?(?:hour|hours|minute|minutes|second|seconds)(?:\s*,\s*\d+\s*(?:hour|hours|minute|minutes|second|seconds))?$/i.test(
-      name.trim(),
+      n,
     ) ||
-    /plays?/i.test(name) ||
-    /views?/i.test(name) ||
-    /monthly audience/i.test(name)
+    /plays?/i.test(n) ||
+    /views?/i.test(n) ||
+    /monthly audience/i.test(n)
   );
 }
 
