@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { api, artistNames, type Track } from '../api';
-import { resolvePlayUrl } from '../lib/offlineCache';
+import { resolvePlayUrl, streamProxyUrl } from '../lib/offlineCache';
 import {
   prefetchAround,
   resolvePrefetchedPlayUrl,
@@ -911,6 +911,33 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
     : resolveCachedUrl(track.id);
   const metaPromise = api.track(track.id).catch(() => undefined);
 
+  // Démarre TOUT DE SUITE sur le proxy (sync) pour garder le geste utilisateur
+  // (sinon await resolveCachedUrl + coalesce → NotAllowedError / titre « coché » sans son).
+  const quickSrc = srcFromStandby || streamProxyUrl(track.id);
+  const elEarly = usePlayer.getState().audioEl || audio;
+  let earlyStarted = false;
+  try {
+    elEarly.src = quickSrc;
+    elEarly.dataset.trackId = track.id;
+    elEarly.muted = false;
+    elEarly.volume = targetVol;
+    try {
+      elEarly.load();
+    } catch {
+      /* ignore */
+    }
+    if (gen === playGeneration) {
+      usePlayer.setState({ isLoading: false, isPlaying: true, playError: null });
+    }
+    const earlyPlay = elEarly.play();
+    earlyStarted = true;
+    void earlyPlay.catch(() => {
+      earlyStarted = false;
+    });
+  } catch {
+    earlyStarted = false;
+  }
+
   let enriched = track;
   if (/^[a-zA-Z0-9_-]{11}$/.test(track.id)) {
     const ytimg = [
@@ -940,12 +967,6 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
 
   // Re-lire l’élément actif (peut avoir changé… mais on ne swap plus)
   const el = usePlayer.getState().audioEl || audio;
-  try {
-    el.pause();
-  } catch {
-    /* ignore */
-  }
-  if (gen !== playGeneration) return;
 
   const tryPlaySrc = async (playSrc: string) => {
     el.src = playSrc;
@@ -965,39 +986,82 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
     usePlayer.setState({ isLoading: false, isPlaying: true, playError: null });
   }
 
-  const isDirectCdn =
-    /^https?:\/\//i.test(src) &&
-    !src.includes('/api/stream/') &&
-    !src.startsWith('blob:');
-
-  try {
-    await tryPlaySrc(src);
-  } catch (err) {
-    if (gen !== playGeneration) return;
-    const name = err instanceof DOMException ? err.name : '';
-    if (name === 'AbortError') return;
-    // CDN 403 (IP VPS ≠ navigateur) ou NotSupported → proxy
-    if (isDirectCdn) {
-      const proxySrc = await resolvePlayUrl(track.id);
-      if (gen !== playGeneration) return;
-      usedSrc = proxySrc;
-      try {
-        await tryPlaySrc(proxySrc);
-      } catch (err2) {
-        if (gen !== playGeneration) return;
-        const n2 = err2 instanceof DOMException ? err2.name : '';
-        if (n2 === 'AbortError') return;
-        throw new Error('Lecture bloquée ou interrompue');
+  // Déjà en lecture sur le même proxy → ne pas recharger (évite silence + 2ᵉ clic)
+  const sameQuick =
+    earlyStarted &&
+    el.dataset.trackId === track.id &&
+    (el.src.includes(`/api/stream/${track.id}`) || el.src === quickSrc) &&
+    !src.startsWith('blob:') &&
+    src.includes(`/api/stream/${track.id}`);
+  if (sameQuick && !el.paused) {
+    usedSrc = quickSrc;
+    if (typeof console !== 'undefined') {
+      console.info(`[play] ${track.id} early-proxy ${(performance.now() - t0).toFixed(0)}ms`);
+    }
+  } else if (
+    earlyStarted &&
+    el.dataset.trackId === track.id &&
+    !el.paused &&
+    src.startsWith('blob:')
+  ) {
+    // Upgrade soft vers blob préchargé (seulement si early a marché)
+    try {
+      const t = el.currentTime;
+      await tryPlaySrc(src);
+      if (Number.isFinite(t) && t > 0.2) {
+        try {
+          el.currentTime = t;
+        } catch {
+          /* */
+        }
       }
-    } else {
-      try {
-        el.load();
-        await el.play();
-      } catch (err2) {
+      usedSrc = src;
+    } catch {
+      /* garde early */
+      usedSrc = quickSrc;
+    }
+  } else {
+    try {
+      el.pause();
+    } catch {
+      /* ignore */
+    }
+    if (gen !== playGeneration) return;
+
+    const isDirectCdn =
+      /^https?:\/\//i.test(src) &&
+      !src.includes('/api/stream/') &&
+      !src.startsWith('blob:');
+
+    try {
+      await tryPlaySrc(src);
+    } catch (err) {
+      if (gen !== playGeneration) return;
+      const name = err instanceof DOMException ? err.name : '';
+      if (name === 'AbortError') return;
+      // CDN 403 (IP VPS ≠ navigateur) ou NotSupported → proxy
+      if (isDirectCdn) {
+        const proxySrc = await resolvePlayUrl(track.id);
         if (gen !== playGeneration) return;
-        const n2 = err2 instanceof DOMException ? err2.name : '';
-        if (n2 === 'AbortError') return;
-        throw new Error('Lecture bloquée ou interrompue');
+        usedSrc = proxySrc;
+        try {
+          await tryPlaySrc(proxySrc);
+        } catch (err2) {
+          if (gen !== playGeneration) return;
+          const n2 = err2 instanceof DOMException ? err2.name : '';
+          if (n2 === 'AbortError') return;
+          throw new Error('Lecture bloquée ou interrompue');
+        }
+      } else {
+        try {
+          el.load();
+          await el.play();
+        } catch (err2) {
+          if (gen !== playGeneration) return;
+          const n2 = err2 instanceof DOMException ? err2.name : '';
+          if (n2 === 'AbortError') return;
+          throw new Error('Lecture bloquée ou interrompue');
+        }
       }
     }
   }
