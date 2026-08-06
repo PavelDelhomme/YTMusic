@@ -88,6 +88,11 @@ export function PlayerBar({
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
 
+  // Si le volume change hors UI (↑/↓ clavier), désactive le mute local
+  useEffect(() => {
+    if (volume > 0.001) setMuted(false);
+  }, [volume]);
+
   // Barre fluide : lit l’élément audio (évite re-render store à chaque timeupdate)
   useEffect(() => {
     let raf = 0;
@@ -267,8 +272,9 @@ export function PlayerBar({
             stop(e);
             const dur = effectiveDuration;
             if (!(dur > 0)) return;
-            if (e.key === 'ArrowRight') seek(Math.min(dur, progress + 5));
-            if (e.key === 'ArrowLeft') seek(Math.max(0, progress - 5));
+            const cur = displayProgress;
+            if (e.key === 'ArrowRight') seek(Math.min(dur, cur + 5));
+            if (e.key === 'ArrowLeft') seek(Math.max(0, cur - 5));
           }}
         >
           <div className="absolute inset-x-0 top-1/2 h-[2px] -translate-y-1/2 bg-[#3a3a3a] transition group-hover:h-1">
