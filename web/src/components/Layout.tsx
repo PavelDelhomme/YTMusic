@@ -62,6 +62,10 @@ export function Layout() {
   const [q, setQ] = useState('');
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [openSug, setOpenSug] = useState(false);
+  /** -1 = texte tapé ; 0..n-1 = suggestion (liste affichée) */
+  const [sugIndex, setSugIndex] = useState(-1);
+  /** Texte réellement tapé (les flèches peuvent remplir `q` sans l’écraser) */
+  const typedDraftRef = useRef('');
   const [authOpen, setAuthOpen] = useState(false);
   const [devicesOpen, setDevicesOpen] = useState(false);
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
@@ -507,27 +511,72 @@ export function Layout() {
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-yt-muted" />
               <input
                 value={q}
-                onChange={(e) => {
-                  setQ(e.target.value);
+                    onChange={(e) => {
+                  const v = e.target.value;
+                  setQ(v);
+                  typedDraftRef.current = v;
+                  setSugIndex(-1);
                   setOpenSug(true);
                 }}
                 onFocus={() => setOpenSug(true)}
                 onKeyDown={(e) => {
+                  const draft = typedDraftRef.current.trim();
+                  const opts = [
+                    ...(draft ? [draft] : []),
+                    ...suggestions.filter((s) => s.trim().toLowerCase() !== draft.toLowerCase()),
+                  ];
+                  const n = opts.length;
+
+                  if (e.key === 'ArrowDown' && openSug && n > 0) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const next = sugIndex < 0 ? 0 : sugIndex >= n - 1 ? -1 : sugIndex + 1;
+                    setSugIndex(next);
+                    setQ(next < 0 ? typedDraftRef.current : opts[next] || typedDraftRef.current);
+                    return;
+                  }
+                  if (e.key === 'ArrowUp' && openSug && n > 0) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const next = sugIndex < 0 ? n - 1 : sugIndex === 0 ? -1 : sugIndex - 1;
+                    setSugIndex(next);
+                    setQ(next < 0 ? typedDraftRef.current : opts[next] || typedDraftRef.current);
+                    return;
+                  }
+                  if (e.key === 'Enter' && openSug && sugIndex >= 0 && opts[sugIndex]) {
+                    e.preventDefault();
+                    const pick = opts[sugIndex];
+                    typedDraftRef.current = pick;
+                    setQ(pick);
+                    setOpenSug(false);
+                    setSugIndex(-1);
+                    navigate(`/search?q=${encodeURIComponent(pick)}`);
+                    return;
+                  }
                   if (e.key !== 'Escape') return;
                   e.preventDefault();
                   e.stopPropagation();
                   setOpenSug(false);
+                  setSugIndex(-1);
                   setSuggestions([]);
-                  if (q) setQ('');
+                  if (q) {
+                    setQ('');
+                    typedDraftRef.current = '';
+                  }
                 }}
                 onBlur={() => {
-                  window.setTimeout(() => setOpenSug(false), 120);
+                  window.setTimeout(() => {
+                    setOpenSug(false);
+                    setSugIndex(-1);
+                  }, 180);
                 }}
                 placeholder="Rechercher titres, albums, artistes…"
                 className={`w-full rounded-full border border-yt-border bg-yt-surface py-2.5 pl-10 text-sm outline-none transition focus:border-white/30 ${
                   q ? 'pr-10' : 'pr-4'
                 }`}
                 aria-label="Recherche"
+                aria-autocomplete="list"
+                aria-expanded={openSug}
               />
               {q ? (
                 <button
@@ -537,7 +586,9 @@ export function Layout() {
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
                     setQ('');
+                    typedDraftRef.current = '';
                     setSuggestions([]);
+                    setSugIndex(-1);
                     setOpenSug(false);
                     if (location.pathname.startsWith('/search')) {
                       navigate('/search');
@@ -547,23 +598,42 @@ export function Layout() {
                   <X className="h-4 w-4" />
                 </button>
               ) : null}
-              {openSug && suggestions.length > 0 && (
-                <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-xl border border-yt-border bg-yt-elevated shadow-2xl">
-                  {suggestions.map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-yt-hover"
-                      onClick={() => {
-                        setQ(s);
-                        setOpenSug(false);
-                        navigate(`/search?q=${encodeURIComponent(s)}`);
-                      }}
-                    >
-                      <Search className="h-3.5 w-3.5 text-yt-muted" />
-                      {s}
-                    </button>
-                  ))}
+              {openSug && (suggestions.length > 0 || typedDraftRef.current.trim() || q.trim()) && (
+                <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-80 overflow-y-auto rounded-xl border border-yt-border bg-yt-elevated shadow-2xl">
+                  {(() => {
+                    const draft = typedDraftRef.current.trim() || q.trim();
+                    const opts = [
+                      ...(draft ? [{ label: draft, isTyped: true }] : []),
+                      ...suggestions
+                        .filter((s) => s.trim().toLowerCase() !== draft.toLowerCase())
+                        .map((s) => ({ label: s, isTyped: false })),
+                    ];
+                    return opts.map((opt, i) => {
+                      const hi = sugIndex < 0 ? opt.isTyped : sugIndex === i;
+                      return (
+                        <button
+                          key={`${opt.isTyped ? 'typed' : 'sug'}-${opt.label}`}
+                          type="button"
+                          className={`flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm ${
+                            hi ? 'bg-yt-hover text-white' : 'hover:bg-yt-hover'
+                          }`}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            typedDraftRef.current = opt.label;
+                            setQ(opt.label);
+                            setOpenSug(false);
+                            setSugIndex(-1);
+                            navigate(`/search?q=${encodeURIComponent(opt.label)}`);
+                          }}
+                        >
+                          <Search className="h-3.5 w-3.5 text-yt-muted" />
+                          <span className={opt.isTyped ? 'italic text-yt-muted' : undefined}>
+                            {opt.isTyped ? `Rechercher « ${opt.label} »` : opt.label}
+                          </span>
+                        </button>
+                      );
+                    });
+                  })()}
                 </div>
               )}
             </form>

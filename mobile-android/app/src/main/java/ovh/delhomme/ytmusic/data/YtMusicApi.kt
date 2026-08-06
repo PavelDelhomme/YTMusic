@@ -207,9 +207,12 @@ data class TracksResponse(
 
 @JsonClass(generateAdapter = false)
 data class TimedLyricLine(
-    val startMs: Long = 0L,
+    /** Accepte Int/Long/Double JSON via Moshi (sinon timed vide → pas de karaoke). */
+    val startMs: Double = 0.0,
     val text: String = "",
-)
+) {
+    fun startMsLong(): Long = startMs.toLong().coerceAtLeast(0L)
+}
 
 @JsonClass(generateAdapter = false)
 data class LyricsResponse(
