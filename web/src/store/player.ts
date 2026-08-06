@@ -1265,7 +1265,10 @@ function attachAudioRuntime(
           set({
             isPlaying: false,
             isLoading: false,
-            playError: 'Connexion / lecture impossible. Nouvel essai automatique…',
+            playError:
+              typeof navigator !== 'undefined' && navigator.onLine === false
+                ? 'Hors ligne — titres en cache disponibles'
+                : 'Connexion / lecture impossible. Nouvel essai automatique…',
           });
           refreshMediaSession();
           persistPlayer();
