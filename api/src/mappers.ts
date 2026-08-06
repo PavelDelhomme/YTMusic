@@ -159,7 +159,6 @@ export function resizeThumbUrl(url: string, size = 544): string {
   const vi = u.match(/i\.ytimg\.com\/vi\/([^/]+)\//);
   if (vi) {
     const id = vi[1];
-    if (size >= 640) return `https://i.ytimg.com/vi/${id}/sddefault.jpg`;
     if (size >= 320) return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
     return `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
   }
@@ -737,7 +736,7 @@ export function mapListItem(item: any, fallbackThumbs?: Thumb[]): Track | null {
   // Video id fallback art
   if (!thumbnails.length && /^[a-zA-Z0-9_-]{11}$/.test(String(id))) {
     thumbnails = [
-      { url: `https://i.ytimg.com/vi/${id}/sddefault.jpg`, width: 1280, height: 720 },
+      { url: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, width: 1280, height: 720 },
       { url: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, width: 480, height: 360 },
     ];
   }
@@ -820,7 +819,7 @@ export function mapTwoRowItem(item: any, fallbackThumbs?: Thumb[]): Track | null
   if (!thumbnails.length && fallbackThumbs?.length) thumbnails = fallbackThumbs;
   if (!thumbnails.length && /^[a-zA-Z0-9_-]{11}$/.test(String(id))) {
     thumbnails = [
-      { url: `https://i.ytimg.com/vi/${id}/sddefault.jpg`, width: 1280, height: 720 },
+      { url: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, width: 1280, height: 720 },
       { url: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, width: 480, height: 360 },
     ];
   }

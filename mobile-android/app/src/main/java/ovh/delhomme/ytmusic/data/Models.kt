@@ -89,7 +89,7 @@ data class TrackDto(
             when {
                 sizeHint <= 200 -> "https://i.ytimg.com/vi/$id/mqdefault.jpg"
                 sizeHint <= 480 -> "https://i.ytimg.com/vi/$id/hqdefault.jpg"
-                else -> "https://i.ytimg.com/vi/$id/sddefault.jpg"
+                else -> "https://i.ytimg.com/vi/$id/hqdefault.jpg"
             }
         } else {
             null

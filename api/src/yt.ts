@@ -941,7 +941,7 @@ async function fetchTrackMeta(videoId: string, light = false) {
   let thumbnails = extractThumbs(basic, info, { thumbnail: basic.thumbnail });
   if (!thumbnails.length && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     thumbnails = [
-      { url: `https://i.ytimg.com/vi/${videoId}/sddefault.jpg`, width: 1280, height: 720 },
+      { url: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`, width: 1280, height: 720 },
       { url: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`, width: 480, height: 360 },
     ];
   }
