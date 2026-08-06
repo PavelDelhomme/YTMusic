@@ -619,6 +619,15 @@ interface YtMusicApi {
     @GET("api/search/history")
     suspend fun searchHistory(): Map<String, Any>
 
+    @GET("api/search/suggestions")
+    suspend fun searchSuggestions(@Query("q") q: String): Map<String, Any>
+
     @POST("api/search/history")
     suspend fun recordSearchHistory(@Body body: Map<String, @JvmSuppressWildcards Any?>): Map<String, Any>
+
+    @GET("api/stream/{id}/url")
+    suspend fun streamResolveUrl(
+        @Path("id") id: String,
+        @Query("type") type: String? = null,
+    ): Map<String, Any>
 }
