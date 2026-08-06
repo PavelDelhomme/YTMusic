@@ -22,14 +22,26 @@ import java.util.concurrent.TimeUnit
  * Prefetch streams :
  * 1) POST /api/stream/warm (batch) → chauffe le déchiffrement API
  * 2) CacheWriter → SimpleCache Exo (mêmes octets que la lecture)
+ * 3) Éviction des titres déjà écoutés pour laisser la place à la suite
  * Annulé uniquement sur pause volontaire (pas pendant un rebuffer / skip).
  */
 object StreamPrefetcher {
-    private const val HEAD_WIFI = 1_200 * 1024L
-    private const val HEAD_METERED = 320 * 1024L
-    private const val HEAD_NEXT_WIFI = 2_400 * 1024L // prochain titre : plus d’octets → skip fluide
-    private const val MAX_WARM = 6
-    private const val DISK_CACHE_MB = 24L // warm JSON / resolve — octets audio = SimpleCache Exo
+    /** Tête générique Wi‑Fi (~2.5 Mo ≈ ~1–2 min audio). */
+    private const val HEAD_WIFI = 2_500 * 1024L
+    /** Titre suivant Wi‑Fi : grosse part pour skip / enchaînement fluides. */
+    private const val HEAD_NEXT_WIFI = 10_000 * 1024L
+    /** +2 / +3 Wi‑Fi. */
+    private const val HEAD_NEAR_WIFI = 5_000 * 1024L
+    /** Suite lointaine Wi‑Fi. */
+    private const val HEAD_FAR_WIFI = 1_800 * 1024L
+
+    private const val HEAD_METERED = 480 * 1024L
+    private const val HEAD_NEXT_METERED = 1_600 * 1024L
+
+    private const val MAX_WARM = 14
+    private const val AHEAD_WIFI = 8
+    private const val AHEAD_METERED = 3
+    private const val DISK_CACHE_MB = 24L
     private val JSON = "application/json; charset=utf-8".toMediaType()
 
     @Volatile private var streamDownUntil = 0L
@@ -57,15 +69,15 @@ object StreamPrefetcher {
         OkHttpClient.Builder()
             .cache(okhttp3.Cache(dir, DISK_CACHE_MB * 1024L * 1024L))
             .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(45, TimeUnit.SECONDS)
             .followRedirects(true)
             .build()
     }
 
     private val inFlight = ConcurrentHashMap.newKeySet<String>()
-    private val recent = object : LinkedHashMap<String, Long>(48, 0.75f, true) {
+    private val recent = object : LinkedHashMap<String, Long>(64, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean =
-            size > 48
+            size > 64
     }
 
     /** Coupe les téléchargements prefetch HTTP (pause volontaire uniquement). */
@@ -87,6 +99,9 @@ object StreamPrefetcher {
 
     private fun authHeader(): String? =
         YtMusicApp.instance.container.tokenStore.peekAccess()?.let { "Bearer $it" }
+
+    private fun isLocalOffline(trackId: String): Boolean =
+        runCatching { YtMusicApp.instance.container.offlineStore.has(trackId) }.getOrDefault(false)
 
     fun warm(resolveUrl: String) {
         if (resolveUrl.isBlank() || isStreamDown()) return
@@ -122,12 +137,8 @@ object StreamPrefetcher {
         })
     }
 
-    /**
-     * Chauffe le format du titre courant de façon synchrone (court) avant prepare() —
-     * réduit le cold-start API (~déchiffrement googlevideo).
-     */
     fun warmCurrentBlocking(baseApi: String, trackId: String, timeoutMs: Long = 450L) {
-        if (trackId.length != 11 || isStreamDown()) return
+        if (trackId.length != 11 || isStreamDown() || isLocalOffline(trackId)) return
         val key = "warm:$trackId"
         synchronized(recent) {
             val last = recent[key]
@@ -158,19 +169,18 @@ object StreamPrefetcher {
                 }
             }
         } catch (_: Exception) {
-            // timeout / réseau — laisser Exo démarrer quand même
+            /* timeout — Exo démarre quand même */
         }
     }
 
-    /** Batch resolve formats côté API (1 requête au lieu de N). */
     private fun warmBatch(baseApi: String, trackIds: List<String>) {
         if (isStreamDown()) return
-        val ids = trackIds.distinct().filter { it.length == 11 }.take(MAX_WARM)
+        val ids = trackIds.distinct().filter { it.length == 11 && !isLocalOffline(it) }.take(MAX_WARM)
         if (ids.isEmpty()) return
         val key = "warm:${ids.sorted().joinToString(",")}"
         synchronized(recent) {
             val last = recent[key]
-            if (last != null && System.currentTimeMillis() - last < 60_000L) return
+            if (last != null && System.currentTimeMillis() - last < 45_000L) return
         }
         if (!inFlight.add(key)) return
         val body = JSONObject().put("ids", JSONArray(ids)).toString().toRequestBody(JSON)
@@ -194,7 +204,7 @@ object StreamPrefetcher {
                     if (response.code in 500..599) {
                         noteNetworkFailure()
                     } else if (!isStreamDown()) {
-                        ids.take(2).forEach { id ->
+                        ids.take(3).forEach { id ->
                             warm("${baseApi.trimEnd('/')}/api/stream/$id/url")
                         }
                     }
@@ -208,21 +218,23 @@ object StreamPrefetcher {
         })
     }
 
-    /** Chauffe format + début audio (Exo cache) pour un id. */
     fun warmTrack(baseApi: String, trackId: String) {
-        if (trackId.length != 11 || isStreamDown()) return
+        if (trackId.length != 11 || isStreamDown() || isLocalOffline(trackId)) return
         warmBatch(baseApi, listOf(trackId))
-        exoPrefetch(baseApi, trackId, priority = true)
+        exoPrefetch(baseApi, trackId, distance = 0)
     }
 
-    private fun exoPrefetch(baseApi: String, trackId: String, priority: Boolean) {
-        if (isStreamDown()) return
+    private fun exoPrefetch(baseApi: String, trackId: String, distance: Int) {
+        if (isStreamDown() || isLocalOffline(trackId)) return
         val unmetered = isUnmetered()
         val bytes = when {
-            priority && unmetered -> HEAD_NEXT_WIFI
-            unmetered -> HEAD_WIFI
-            priority -> HEAD_METERED
-            else -> return
+            !unmetered && distance == 0 -> HEAD_NEXT_METERED
+            !unmetered && distance <= 2 -> HEAD_METERED
+            !unmetered -> return
+            distance == 0 -> HEAD_NEXT_WIFI
+            distance <= 2 -> HEAD_NEAR_WIFI
+            distance <= 5 -> HEAD_WIFI
+            else -> HEAD_FAR_WIFI
         }
         val url = "${baseApi.trimEnd('/')}/api/stream/$trackId"
         PlayerCache.prefetchHead(YtMusicApp.instance, url, trackId, bytes)
@@ -238,42 +250,60 @@ object StreamPrefetcher {
         val ids = trackIds.distinct().filter { it.length == 11 }.take(MAX_WARM)
         if (ids.isEmpty()) return
         warmBatch(baseApi, ids)
-        // CacheWriter uniquement sur la suite — jamais la piste courante (conflit ExoPlayer)
         ids.drop(1).forEachIndexed { i, id ->
-            exoPrefetch(baseApi, id, priority = i == 0)
+            exoPrefetch(baseApi, id, distance = i)
         }
     }
 
+    /**
+     * Précharge une grosse partie des titres suivants + évince ceux déjà passés.
+     */
     fun warmAround(
         baseApi: String,
         queueIds: List<String>,
         index: Int,
-        ahead: Int = 3,
+        ahead: Int = AHEAD_WIFI,
         behind: Int = 1,
     ) {
         if (queueIds.isEmpty() || isStreamDown()) return
         val unmetered = isUnmetered()
-        // Format warm toujours pour +2 même en data (léger) ; octets Exo plus limités
-        val aheadN = if (unmetered) ahead else 2
+        val aheadN = if (unmetered) ahead.coerceAtLeast(AHEAD_WIFI) else AHEAD_METERED
         val behindN = if (unmetered) behind else 0
         val idx = index.coerceIn(0, queueIds.lastIndex)
+
+        // Libère le cache Exo des titres déjà écoutés (garde [behindN] derrière)
+        evictPlayed(queueIds, idx, keepBehind = behindN.coerceAtLeast(0))
+
         val nextIds = buildList {
             for (i in 1..aheadN) {
                 val t = queueIds.getOrNull(idx + i) ?: break
-                add(t)
+                if (t.length == 11) add(t)
             }
         }
         val behindIds = buildList {
             for (i in 1..behindN) {
                 val t = queueIds.getOrNull(idx - i) ?: break
-                add(t)
+                if (t.length == 11) add(t)
             }
         }
         val current = queueIds[idx]
-        // Formats : courant + suite (léger). Exo CacheWriter : suite seule (pas de contention start).
         warmBatch(baseApi, listOf(current) + nextIds + behindIds)
         nextIds.forEachIndexed { i, id ->
-            exoPrefetch(baseApi, id, priority = i == 0)
+            exoPrefetch(baseApi, id, distance = i)
+        }
+    }
+
+    /** Supprime du SimpleCache les titres avant l’index (sauf keepBehind). */
+    fun evictPlayed(queueIds: List<String>, index: Int, keepBehind: Int = 1) {
+        if (queueIds.isEmpty() || index <= keepBehind) return
+        val ctx = YtMusicApp.instance
+        val cut = (index - keepBehind).coerceAtLeast(0)
+        for (i in 0 until cut) {
+            val id = queueIds.getOrNull(i) ?: continue
+            if (id.length != 11) continue
+            // Ne touche pas aux fichiers offline locaux
+            if (isLocalOffline(id)) continue
+            PlayerCache.invalidate(ctx, id)
         }
     }
 }
