@@ -6,6 +6,7 @@ import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheWriter
@@ -18,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * Cache disque ExoPlayer partagé (réécoute / skip / prefetch).
  * Clé = mediaId (setCustomCacheKey) → survit aux URLs googlevideo qui tournent.
+ * Upstream = DefaultDataSource → file:// (offline) + http(s).
  */
 @OptIn(UnstableApi::class)
 object PlayerCache {
@@ -45,6 +47,7 @@ object PlayerCache {
     }
 
     fun dataSourceFactory(context: Context): CacheDataSource.Factory {
+        val appCtx = context.applicationContext
         val token = runCatching {
             ovh.delhomme.ytmusic.YtMusicApp.instance.container.tokenStore.peekAccess()
         }.getOrNull()
@@ -52,14 +55,16 @@ object PlayerCache {
         if (!token.isNullOrBlank()) {
             props["Authorization"] = "Bearer $token"
         }
-        val upstream = DefaultHttpDataSource.Factory()
+        val http = DefaultHttpDataSource.Factory()
             .setUserAgent("YTMusic-Android")
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(12_000)
             .setReadTimeoutMs(30_000)
             .setDefaultRequestProperties(props)
+        // file:// (téléchargements locaux) + http(s)
+        val upstream = DefaultDataSource.Factory(appCtx, http)
         return CacheDataSource.Factory()
-            .setCache(get(context))
+            .setCache(get(appCtx))
             .setUpstreamDataSourceFactory(upstream)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }

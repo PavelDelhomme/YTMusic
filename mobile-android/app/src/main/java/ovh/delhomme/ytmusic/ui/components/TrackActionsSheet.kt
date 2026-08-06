@@ -153,21 +153,27 @@ fun TrackActionsSheet(
                     )
                 }
             }
-            val lib = container.api.library()
-            downloaded = track.id in lib.downloaded
-            val serverLiked = lib.liked.any { it.id == track.id }
-            liked = serverLiked
-            songInLibrary = lib.songs.any { it.id == track.id } ||
-                (lib.songs.isEmpty() && lib.liked.any { it.id == track.id })
-            if (serverLiked != (track.id in likedIds)) {
-                onLikedChanged(
-                    if (serverLiked) likedIds + track.id else likedIds - track.id,
-                )
-            }
-            val albumId = enriched.album?.id ?: enriched.id.takeIf { enriched.isAlbum() }
-            albumInLibrary = albumId != null && lib.albums.any { it.id == albumId }
-            if (track.type?.equals("mix", ignoreCase = true) == true) {
-                songInLibrary = lib.mixes.any { it.id == track.id }
+            val lib = runCatching { container.api.library() }.getOrNull()
+            downloaded = container.offlineStore.has(track.id) ||
+                (lib?.downloaded?.contains(track.id) == true)
+            if (lib != null) {
+                val serverLiked = lib.liked.any { it.id == track.id }
+                liked = serverLiked
+                songInLibrary = lib.songs.any { it.id == track.id } ||
+                    (lib.songs.isEmpty() && lib.liked.any { it.id == track.id })
+                if (serverLiked != (track.id in likedIds)) {
+                    onLikedChanged(
+                        if (serverLiked) likedIds + track.id else likedIds - track.id,
+                    )
+                }
+                val albumId = enriched.album?.id ?: enriched.id.takeIf { enriched.isAlbum() }
+                albumInLibrary = albumId != null && lib.albums.any { it.id == albumId }
+                if (track.type?.equals("mix", ignoreCase = true) == true) {
+                    songInLibrary = lib.mixes.any { it.id == track.id }
+                }
+            } else {
+                // Hors-ligne : au moins le statut DL local
+                downloaded = container.offlineStore.has(track.id)
             }
         }
     }
@@ -423,32 +429,30 @@ fun TrackActionsSheet(
                 enabled = downloadProgress == null,
             ) {
                 if (downloaded) {
-                    Toast.makeText(context, "Déjà sur l'appareil", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Déjà sur l'appareil (lisible hors-ligne)", Toast.LENGTH_SHORT).show()
                     return@SheetAction
                 }
                 scope.launch {
-                    downloadProgress = 0.08f
-                    val tick = launch {
-                        while (true) {
-                            delay(350)
-                            val cur = downloadProgress ?: 0.08f
-                            if (cur < 0.9f) downloadProgress = (cur + 0.06f).coerceAtMost(0.9f)
-                        }
+                    downloadProgress = 0.02f
+                    runCatching {
+                        container.ensureFreshToken()
+                        container.offlineStore.download(
+                            enriched,
+                            container.remoteStreamUrl(enriched.id),
+                        ) { p -> downloadProgress = p.coerceIn(0.02f, 0.99f) }
+                    }.onSuccess { result ->
+                        result.getOrThrow()
+                        downloadProgress = 1f
+                        downloaded = true
+                        // Best-effort sync serveur (n’empêche pas le local)
+                        runCatching { container.api.download(enriched.id) }
+                        delay(200)
+                        downloadProgress = null
+                        Toast.makeText(context, "Téléchargé — lisible hors-ligne", Toast.LENGTH_SHORT).show()
+                    }.onFailure {
+                        downloadProgress = null
+                        Toast.makeText(context, it.message ?: "Échec téléchargement", Toast.LENGTH_SHORT).show()
                     }
-                    runCatching { container.api.download(enriched.id) }
-                        .onSuccess {
-                            tick.cancel()
-                            downloadProgress = 1f
-                            downloaded = true
-                            delay(250)
-                            downloadProgress = null
-                            Toast.makeText(context, "Téléchargé", Toast.LENGTH_SHORT).show()
-                        }
-                        .onFailure {
-                            tick.cancel()
-                            downloadProgress = null
-                            Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
-                        }
                 }
             }
 

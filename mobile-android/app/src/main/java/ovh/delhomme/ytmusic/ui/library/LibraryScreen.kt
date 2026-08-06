@@ -94,17 +94,31 @@ fun LibraryScreen(
         if (!force && now - lastFetchAt < 45_000L && lib != null) return
         if (showSpinner && lib == null) loading = true
         if (force && lib != null) refreshing = true
+        val localTracks = container.offlineStore.listTracks()
         runCatching {
             container.ensureFreshToken()
             container.api.library()
         }.onSuccess {
-            lib = it
+            // Fusionne les IDs DL locaux dans downloaded serveur
+            val mergedIds = (it.downloaded + localTracks.map { t -> t.id }).distinct()
+            lib = it.copy(downloaded = mergedIds)
             lastFetchAt = System.currentTimeMillis()
             error = null
             loading = false
             refreshing = false
+            if (localTracks.isNotEmpty()) {
+                downloadMeta = downloadMeta + localTracks.associateBy { t -> t.id }
+            }
         }.onFailure {
-            if (lib == null) error = it.message
+            if (localTracks.isNotEmpty()) {
+                // Mode hors-ligne : bibliothèque minimale = fichiers locaux
+                lib = LibraryResponse(downloaded = localTracks.map { t -> t.id })
+                downloadMeta = localTracks.associateBy { t -> t.id }
+                selected = LibraryFilter.Downloads
+                error = null
+            } else if (lib == null) {
+                error = it.message
+            }
             loading = false
             refreshing = false
         }
@@ -190,7 +204,7 @@ fun LibraryScreen(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "API : ${container.resolvedApiBase()}\nMême Wi‑Fi que le PC, API démarrée (make ensure-api), ou Compte → API & logs.",
+                        "Sans connexion : télécharge des titres (menu ⋮) pour les lire hors-ligne dans Téléchargés.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -546,14 +560,14 @@ private fun buildLibraryContent(
             val rows = az(
                 data.downloaded.mapNotNull { id ->
                     byId[id] ?: TrackDto(id = id, title = id, type = "song")
-                },
+                }.distinctBy { it.id },
             )
             val playable = rows.filter { it.isPlayable() }
             LibraryContent(
                 headline = "Téléchargés · A–Z",
                 rows = rows,
                 playableQueue = playable,
-                emptyMessage = "Aucun téléchargement prêt. Lance un DL depuis le menu ⋮ d'un titre.",
+                emptyMessage = "Aucun téléchargement sur l'appareil. Menu ⋮ d'un titre → Télécharger.",
                 showPlayAll = playable.isNotEmpty(),
                 playLabel = "Tout lire",
                 shuffleLabel = "Aléatoire",
