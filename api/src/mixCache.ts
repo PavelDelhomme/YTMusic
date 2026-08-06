@@ -35,7 +35,11 @@ export function mixKeyRadio(kind: 'track' | 'album' | 'artist', id: string) {
   return `radio:${kind}:${id}`;
 }
 
-export function getMixCache(userId: string, mixKey: string): MixCachePayload | null {
+export function getMixCache(
+  userId: string,
+  mixKey: string,
+  opts?: { minTracks?: number },
+): MixCachePayload | null {
   const row = db
     .prepare(
       `SELECT payload_json, generated_at, track_count FROM user_mix_cache
@@ -46,9 +50,12 @@ export function getMixCache(userId: string, mixKey: string): MixCachePayload | n
     | undefined;
   if (!row) return null;
   if (Date.now() - row.generated_at > MIX_CACHE_TTL_MS) return null;
+  const minTracks = opts?.minTracks ?? 50;
+  if (row.track_count < minTracks) return null;
   try {
     const parsed = JSON.parse(row.payload_json) as MixCachePayload;
     if (!Array.isArray(parsed?.tracks) || !parsed.tracks.length) return null;
+    if (parsed.tracks.length < minTracks) return null;
     return {
       ...parsed,
       generatedAt: row.generated_at,
