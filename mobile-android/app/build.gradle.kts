@@ -53,24 +53,32 @@ android {
         val rawApi = (project.findProperty("API_BASE_URL") as String?)
             ?: rootEnv["ANDROID_API_BASE_URL"]
             ?: rootEnv["API_BASE_URL"]
-            ?: "http://127.0.0.1:8787"
-        val apiBase = if (
-            rawApi.contains("127.0.0.1") || rawApi.contains("localhost")
-        ) {
-            // Device physique : préférer l’IP LAN (sinon Failed to connect to /127.0.0.1)
-            val lan = runCatching {
-                ProcessBuilder("bash", "-lc",
+            ?: ""
+        fun detectLanIp(): String =
+            runCatching {
+                ProcessBuilder(
+                    "bash",
+                    "-lc",
                     "ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if(\$i==\"src\") {print \$(i+1); exit}}'",
                 ).redirectErrorStream(true).start()
                     .inputStream.bufferedReader().readText().trim()
             }.getOrNull().orEmpty()
-            if (lan.matches(Regex("""\d+\.\d+\.\d+\.\d+"""))) {
-                "http://$lan:8787"
-            } else {
-                rawApi
-            }
+
+        val lanIp = detectLanIp()
+        val lanApi = if (lanIp.matches(Regex("""\d+\.\d+\.\d+\.\d+"""))) {
+            "http://$lanIp:8787"
         } else {
-            rawApi
+            ""
+        }
+        // Téléphone physique ≠ 127.0.0.1 (ça pointe le phone). Toujours LAN pour le local.
+        val apiBase = when {
+            rawApi.isBlank() -> lanApi.ifBlank { error("API_BASE_URL manquant et IP LAN introuvable") }
+            rawApi.contains("127.0.0.1") || rawApi.contains("localhost") ->
+                lanApi.ifBlank {
+                    logger.warn("API locale 127.0.0.1/localhost → IP LAN introuvable, garde $rawApi (émulateur ?)")
+                    rawApi
+                }
+            else -> rawApi
         }
         // Jamais préremplir les secrets locaux quand l’APK pointe la prod / un HTTPS distant
         val isRemoteApi = apiBase.startsWith("https://") &&
