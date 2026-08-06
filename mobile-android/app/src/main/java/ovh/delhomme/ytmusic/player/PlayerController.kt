@@ -477,6 +477,18 @@ class PlayerController(
         _state.value = _state.value.copy(positionMs = target)
     }
 
+    /** Avance / recule dans le titre courant (appui long next/prev). */
+    fun seekBy(deltaMs: Long) {
+        val p = player() ?: PlaybackService.Holder.player
+        val cur = p?.currentPosition?.takeIf { it >= 0L } ?: _state.value.positionMs
+        val dur = when {
+            p != null && p.duration > 0L -> p.duration
+            _state.value.durationMs > 0L -> _state.value.durationMs
+            else -> Long.MAX_VALUE / 4
+        }
+        seek((cur + deltaMs).coerceIn(0L, dur))
+    }
+
     /** Position UI seule (miroir remote sans forcément seek Exo si non préparé). */
     fun mirrorPosition(ms: Long, durationMs: Long = _state.value.durationMs) {
         _state.value = _state.value.copy(
