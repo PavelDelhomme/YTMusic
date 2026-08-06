@@ -31,7 +31,7 @@ import ovh.delhomme.ytmusic.R
 
 /**
  * En-tête commun Accueil / Bibliothèque.
- * Accueil : logo + « Music » · avatar
+ * Accueil : logo + « PLM » · avatar
  * Biblio : « Bibliothèque » · historique + avatar
  */
 @Composable

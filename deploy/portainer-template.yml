@@ -1,5 +1,5 @@
 # Template Portainer CE — Custom Templates
-# Title: YTMusic (perso / un compte)
+# Title: PLM (perso / un compte)
 # Description: YouTube Music self-hosted derrière Nginx Proxy Manager
 # Platform: Linux / Compose
 #
@@ -56,7 +56,7 @@ services:
       SMTP_USE_SSL: ${SMTP_USE_SSL:-1}
       SMTP_USER: ${SMTP_USER:-noreply@example.com}
       SMTP_PASS: ${SMTP_PASS:?set SMTP_PASS}
-      SMTP_FROM: ${SMTP_FROM:-YTMusic <noreply@example.com>}
+      SMTP_FROM: ${SMTP_FROM:-PLM <noreply@example.com>}
       SMTP_REPLY_TO: ${SMTP_REPLY_TO:-noreply@example.com}
     volumes:
       - ytmusic_data:/app/data

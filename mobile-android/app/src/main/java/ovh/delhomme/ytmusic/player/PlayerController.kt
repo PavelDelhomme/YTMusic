@@ -320,6 +320,56 @@ class PlayerController(
         StreamPrefetcher.cancelIdle()
     }
 
+    /**
+     * Arrête la lecture et vide complètement la file (mini-lecteur disparaît).
+     * Déclenché typiquement par un swipe bas sur la barre réduite.
+     */
+    fun stopAndClear() {
+        userWantsPlaying = false
+        pendingAutoplay = false
+        pending = null
+        pendingSeekMs = 0L
+        fillJob?.cancel()
+        clearSleepTimer()
+        StreamPrefetcher.cancelIdle()
+        connect()
+        val p = player() ?: PlaybackService.Holder.player
+        p?.let {
+            it.pause()
+            it.clearMediaItems()
+        }
+        PlaybackService.Holder.queue = emptyList()
+        PlaybackService.Holder.index = 0
+        PlaybackService.Holder.queueTitle = "File d'attente"
+        userQueueEnd = 0
+        queueTitle = "File d'attente"
+        sourceId = null
+        sourceKind = null
+        _state.value = PlayerUiState(
+            track = null,
+            playing = false,
+            positionMs = 0,
+            durationMs = 0,
+            bufferedMs = 0,
+            queueSize = 0,
+            queueIndex = 0,
+            queue = emptyList(),
+            sleepLabel = null,
+            shuffle = shuffleEnabled,
+            repeat = repeatMode,
+            queueTitle = queueTitle,
+            userQueueEnd = 0,
+            autoplaySuggestions = autoplaySuggestions,
+            autoFillBusy = false,
+            sourceId = null,
+            sourceKind = null,
+        )
+        onClearLocal?.invoke()
+    }
+
+    /** Branché depuis MainActivity → efface le snapshot local. */
+    var onClearLocal: (() -> Unit)? = null
+
     fun playResume() {
         userWantsPlaying = true
         pendingAutoplay = true
@@ -578,6 +628,32 @@ class PlayerController(
         userQueueEnd = (userQueueEnd - cur).coerceAtLeast(0).coerceAtMost(queue.size)
         PlaybackService.Holder.queue = queue
         syncFrom(p)
+    }
+
+    /**
+     * Vide la file : ne garde que le titre en cours (plus de suivants / autoplay).
+     * Utile depuis le bandeau file rétracté sur mobile.
+     */
+    fun clearUpcomingFromQueue() {
+        // Coupe l’autoplay d’abord pour éviter un re-remplissage immédiat
+        if (autoplaySuggestions) setAutoplaySuggestions(false)
+        val p = player() ?: return
+        val cur = p.currentMediaItemIndex.coerceAtLeast(0)
+        val queue = PlaybackService.Holder.queue
+        if (queue.isEmpty() || cur !in queue.indices) return
+        if (queue.size <= 1) return
+        val current = queue[cur]
+        while (p.mediaItemCount > cur + 1) {
+            p.removeMediaItem(p.mediaItemCount - 1)
+        }
+        while (p.mediaItemCount > 1 && p.currentMediaItemIndex > 0) {
+            p.removeMediaItem(0)
+        }
+        PlaybackService.Holder.queue = listOf(current)
+        userQueueEnd = 1
+        syncFrom(p)
+        queueTitle = "File d'attente"
+        _state.value = _state.value.copy(queueTitle = "File d'attente")
     }
 
     fun moveInQueue(from: Int, to: Int) {

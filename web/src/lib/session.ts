@@ -59,7 +59,7 @@ export function setDeviceName(name: string) {
 function guessDefaultName() {
   try {
     if (Capacitor.isNativePlatform()) {
-      return Capacitor.getPlatform() === 'android' ? 'Android · YTMusic' : 'iOS · YTMusic';
+      return Capacitor.getPlatform() === 'android' ? 'Android · PLM' : 'iOS · PLM';
     }
   } catch {
     /* ignore */

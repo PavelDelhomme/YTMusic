@@ -1,4 +1,4 @@
-# Déploiement YTMusic — à suivre dans l’ordre
+# Déploiement PLM — à suivre dans l’ordre
 
 **État actuel typique :** tu es en local, tu as aligné `.env` / `.env.example`,  
 tu as **`DEPLOY_URL=https://ytmusic.delhomme.ovh`**.  
@@ -94,7 +94,7 @@ ayant le droit `read:packages`.
 | `YTMUSIC_IMAGE` | `ghcr.io/paveldelhomme/ytmusic:latest` |
 | `SMTP_HOST` | `ssl0.ovh.net` |
 | `SMTP_USER` | `noreply@example.com` |
-| `SMTP_FROM` | `YTMusic <noreply@example.com>` |
+| `SMTP_FROM` | `PLM <noreply@example.com>` |
 
 7. **Deploy the stack**  
 8. Onglet Containers : `ytmusic` doit passer **healthy** / running  

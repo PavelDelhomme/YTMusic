@@ -38,6 +38,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ClearAll
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DragHandle
@@ -978,8 +979,13 @@ fun NowPlayingScreen(
                     item {
                         QueueSectionHeader(
                             title = "File d'attente",
+                            canClear = ui.queue.size > 1,
                             onExpand = { expandQueue() },
                             onSave = { showSaveQueue = true },
+                            onClear = {
+                                player.clearUpcomingFromQueue()
+                                Toast.makeText(context, "File vidée", Toast.LENGTH_SHORT).show()
+                            },
                             onStartMix = {
                                 val t = ui.track ?: return@QueueSectionHeader
                                 scope.launch {
@@ -1086,6 +1092,10 @@ fun NowPlayingScreen(
                         onMore = onMore,
                         onMove = player::moveInQueue,
                         onSave = { showSaveQueue = true },
+                        onClear = {
+                            player.clearUpcomingFromQueue()
+                            Toast.makeText(context, "File vidée", Toast.LENGTH_SHORT).show()
+                        },
                         onStartMix = {
                             val t = ui.track ?: return@QueueExpandedBody
                             scope.launch {
@@ -1166,8 +1176,10 @@ private fun SecondaryChip(
 @Composable
 private fun QueueSectionHeader(
     title: String,
+    canClear: Boolean = false,
     onExpand: () -> Unit,
     onSave: () -> Unit,
+    onClear: () -> Unit = {},
     onStartMix: () -> Unit,
     onQueueDrag: (Float) -> Unit,
     onQueueDragEnd: (velocityY: Float) -> Unit,
@@ -1209,6 +1221,16 @@ private fun QueueSectionHeader(
                     color = PlayerMuted,
                 )
                 Text(title, fontWeight = FontWeight.SemiBold, color = PlayerFg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (canClear) {
+                IconButton(onClick = onClear) {
+                    Icon(
+                        Icons.Default.ClearAll,
+                        contentDescription = "Vider la file",
+                        tint = PlayerFg,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
             }
             IconButton(onClick = onStartMix) {
                 Icon(
@@ -1373,6 +1395,7 @@ private fun QueueExpandedBody(
     onMore: ((TrackDto) -> Unit)?,
     onMove: (Int, Int) -> Unit,
     onSave: () -> Unit,
+    onClear: () -> Unit = {},
     onStartMix: () -> Unit,
     onToggleAutoplay: () -> Unit,
     onCollapsePull: (Float) -> Unit = {},
@@ -1491,6 +1514,16 @@ private fun QueueExpandedBody(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.End,
             ) {
+                if (ui.queue.size > 1) {
+                    IconButton(onClick = onClear) {
+                        Icon(
+                            Icons.Default.ClearAll,
+                            contentDescription = "Vider la file",
+                            tint = PlayerFg,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                }
                 IconButton(onClick = onStartMix) {
                     Icon(
                         MixIcon,

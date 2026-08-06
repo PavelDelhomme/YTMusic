@@ -32,7 +32,7 @@ public class MusicKeepAliveService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String title = intent != null ? intent.getStringExtra(EXTRA_TITLE) : null;
         String artist = intent != null ? intent.getStringExtra(EXTRA_ARTIST) : null;
-        if (title == null || title.isEmpty()) title = "YTMusic";
+        if (title == null || title.isEmpty()) title = "PLM";
         if (artist == null) artist = "Lecture en cours";
 
         Intent open = getPackageManager().getLaunchIntentForPackage(getPackageName());
@@ -77,7 +77,7 @@ public class MusicKeepAliveService extends Service {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationChannel channel = new NotificationChannel(
             CHANNEL_ID,
-            "Lecture YTMusic",
+            "Lecture PLM",
             NotificationManager.IMPORTANCE_LOW
         );
         channel.setDescription("Maintient la lecture en arrière-plan");

@@ -1,4 +1,4 @@
-# YTMusic — commandes locales & déploiement (style JobbingTrack)
+# PLM — commandes locales & déploiement (style JobbingTrack)
 # Usage : make help
 
 .DEFAULT_GOAL := help
@@ -31,7 +31,7 @@ DEVICE ?= R5CT7263YJL
 
 help: ## Affiche cette aide colorée
 	@echo ""
-	@printf "$(C_BOLD)  YTMusic — make targets$(C_RESET)\n"
+	@printf "$(C_BOLD)  PLM — make targets$(C_RESET)\n"
 	@echo "  ======================"
 	@echo ""
 	@printf "  $(C_GREEN)▶ Démarrage$(C_RESET)\n"
@@ -97,7 +97,7 @@ up: ## API + Vite en fond (setsid) — terminal libre
 	@printf '%s\n' up > "$(ROOT)/.ytmusic-stack-mode" 2>/dev/null || true
 
 up-full: ## Reset propre + API + Vite + status (+ seed optionnel)
-	@printf "$(C_BOLD)🚀 up-full YTMusic$(C_RESET)\n"
+	@printf "$(C_BOLD)🚀 up-full PLM$(C_RESET)\n"
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@chmod +x $(ROOT)/scripts/kill-dev.sh $(ROOT)/scripts/dev-up.sh $(ROOT)/scripts/env-check.sh
 	@bash $(ROOT)/scripts/env-check.sh || true
@@ -183,7 +183,7 @@ docker-build: ## Build image Docker locale
 
 mobile-hint: ## Affiche comment installer l’app mobile (APK + PWA)
 	@echo ""
-	@echo "  YTMusic sur téléphone Android"
+	@echo "  PLM sur téléphone Android"
 	@echo "  -----------------------------"
 	@echo "  App Kotlin native (Compose + ExoPlayer) :"
 	@echo "    make android                      # API locale :8787"
@@ -203,7 +203,7 @@ mobile-qr: ## Liste les URLs d’accès LAN pour le mobile
 	@echo ""
 	@echo "Préféré USB : make mobile-install-adb DEVICE=$(DEVICE)"
 
-mobile-adb: ## Ouvre YTMusic sur le device (adb reverse + Chrome)
+mobile-adb: ## Ouvre PLM sur le device (adb reverse + Chrome)
 	@chmod +x $(ROOT)/scripts/mobile-install-adb.sh
 	@DEVICE="$(DEVICE)" bash $(ROOT)/scripts/mobile-install-adb.sh open
 
@@ -297,7 +297,7 @@ update-apps: ## Rappel : comment MAJ web / mobile / desktop
 
 status: ## Statut coloré API / Vite / Docker / DB
 	@echo ""
-	@printf "$(C_BOLD)📊 Statut YTMusic$(C_RESET)\n"
+	@printf "$(C_BOLD)📊 Statut PLM$(C_RESET)\n"
 	@echo "================="
 	@echo ""
 	@printf "  "; \
@@ -393,7 +393,7 @@ db-backup: ## Backup data/ytmusic.db → data/backups/
 	@bash $(ROOT)/scripts/db-ops.sh backup
 
 ports: ## Affiche qui écoute 5173 / 8787
-	@echo "Ports YTMusic :"
+	@echo "Ports PLM :"
 	@ss -tlnp 2>/dev/null | grep -E ':5173|:8787' || netstat -tlnp 2>/dev/null | grep -E '5173|8787' || echo "  (rien)"
 	@echo ""
 	@for p in 5173 8787; do \

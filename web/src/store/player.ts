@@ -99,6 +99,10 @@ type PlayerState = {
   removeFromQueue: (index: number) => void;
   /** Retire les titres avant l’index courant (section « Déjà joués »). */
   clearPlayedFromQueue: () => void;
+  /** Vide la suite : garde le titre en cours, coupe l’autoplay. */
+  clearUpcomingFromQueue: () => void;
+  /** Arrête tout et vide la file (barre lecteur disparaît). */
+  stopAndClear: () => void;
   appendRelated: (tracks: Track[]) => void;
   clearQueue: () => void;
   /** Insère / remplace la suite après le titre courant sans le relancer. */
@@ -2049,6 +2053,54 @@ export const usePlayer = create<PlayerState>((set, get) => ({
         queueIndex: 0,
         userQueueEnd: Math.min(end, q.length),
       };
+    });
+    publish();
+  },
+
+  clearUpcomingFromQueue: () => {
+    set((s) => {
+      const cur = s.current ?? s.queue[s.queueIndex];
+      if (!cur) {
+        return { queue: [], queueIndex: 0, userQueueEnd: 0, autoplay: false };
+      }
+      return {
+        queue: [cur],
+        queueIndex: 0,
+        userQueueEnd: 1,
+        autoplay: false,
+      };
+    });
+    publish();
+  },
+
+  stopAndClear: () => {
+    const el = get().audioEl;
+    if (el) {
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
+      delete el.dataset.trackId;
+    }
+    const standby = get().standbyEl;
+    if (standby) {
+      standby.pause();
+      standby.removeAttribute('src');
+      standby.load();
+    }
+    set({
+      current: null,
+      queue: [],
+      queueIndex: 0,
+      userQueueEnd: 0,
+      isPlaying: false,
+      isLoading: false,
+      progress: 0,
+      duration: 0,
+      showQueue: false,
+      showLyrics: false,
+      playError: null,
+      queueHint: null,
+      autoplay: false,
     });
     publish();
   },

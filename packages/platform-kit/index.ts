@@ -1,7 +1,7 @@
 /**
  * Platform Kit — socle réutilisable (déploiement / auth multi-env / télémétrie)
  * ================================================================
- * Copiable dans d’autres projets. Ne dépend pas de la logique métier YTMusic.
+ * Copiable dans d’autres projets. Ne dépend pas de la logique métier PLM.
  *
  * Contenu typique à réutiliser :
  * - compose Portainer + réseaux NPM externes

@@ -79,6 +79,9 @@ fun LibraryScreen(
     val hidden by filterStore.hiddenIds.collectAsState(initial = LibraryFilter.defaultHidden)
     val offlineRev by container.offlineStore.revision.collectAsState()
 
+    val pins by container.quickAccess.pins.collectAsState(initial = emptyList())
+    val pinIds = remember(pins) { pins.map { it.id }.toHashSet() }
+
     var lib by remember { mutableStateOf<LibraryResponse?>(null) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
@@ -333,6 +336,12 @@ fun LibraryScreen(
                                     },
                                     onMore = { onMore(row) },
                                     onOpenArtist = onOpenArtist,
+                                    pinned = row.id in pinIds,
+                                    onTogglePin = {
+                                        scope.launch {
+                                            container.quickAccess.toggle(row, container.api)
+                                        }
+                                    },
                                 )
                             }
                             item {

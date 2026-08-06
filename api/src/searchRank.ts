@@ -26,6 +26,37 @@ function includesWord(hay: string, needle: string): boolean {
   return ` ${hay} `.includes(` ${needle} `);
 }
 
+/** Orthographes proches pour noms d’artistes courts (suzanne / suzane). */
+export function artistNameAliasMatch(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 2) return false;
+  if (a.length < 4 || b.length < 4) return false;
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length > b.length ? a : b;
+  if (longer.startsWith(shorter) && longer.length - shorter.length <= 2) return true;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    edits += 1;
+    if (edits > 1) return false;
+    if (a.length > b.length) i += 1;
+    else if (b.length > a.length) j += 1;
+    else {
+      i += 1;
+      j += 1;
+    }
+  }
+  edits += a.length - i + (b.length - j);
+  return edits <= 1;
+}
+
 /** Préfixe de mot entier : « poto » matche « poto remix », pas « potomac ». */
 function startsWithWord(hay: string, needle: string): boolean {
   if (!needle || !hay.startsWith(needle)) return false;
@@ -103,30 +134,47 @@ export function scoreSearchItem(track: Track, query: string): number {
   let score = 0;
 
   // —— Titre ——
-  if (title === q) score += 1200;
-  else if (startsWithWord(title, q)) score += 820;
-  else if (includesWord(title, q)) score += 640;
-  else if (q.length >= 4 && title.includes(q)) score += 280;
+  // Fiche artiste : le « titre » = nom d’artiste → scoré surtout en section artiste
+  // (évite que « Suzanne » exact écrase « Suzane » plus connu via +1200 titre)
+  if (type !== 'artist') {
+    if (title === q) score += 1200;
+    else if (startsWithWord(title, q)) score += 820;
+    else if (includesWord(title, q)) score += 640;
+    else if (q.length >= 4 && title.includes(q)) score += 280;
 
-  // « Titre : épisode podcast » / « Titre - long clickbait » au-delà de la requête
-  if (title !== q && (startsWithWord(title, q) || includesWord(title, q))) {
-    const extra = title.length - q.length;
-    if (extra >= 10) score -= Math.min(280, 40 + extra * 4);
-    if (/[:|•]/.test(String(track.title || '')) && extra >= 6) score -= 220;
+    // « Titre : épisode podcast » / « Titre - long clickbait » au-delà de la requête
+    if (title !== q && (startsWithWord(title, q) || includesWord(title, q))) {
+      const extra = title.length - q.length;
+      if (extra >= 10) score -= Math.min(280, 40 + extra * 4);
+      if (/[:|•]/.test(String(track.title || '')) && extra >= 6) score -= 220;
+    }
+
+    // Tous les tokens de la query dans le titre
+    const allTokensInTitle =
+      qTokens.length > 1 && qTokens.every((t) => titleTokens.has(t) || includesWord(title, t));
+    if (allTokensInTitle) score += 420;
+    score += tokenCoverage(titleTokens, qTokens) * 280;
   }
-
-  // Tous les tokens de la query dans le titre
-  const allTokensInTitle =
-    qTokens.length > 1 && qTokens.every((t) => titleTokens.has(t) || includesWord(title, t));
-  if (allTokensInTitle) score += 420;
-  score += tokenCoverage(titleTokens, qTokens) * 280;
 
   // —— Artiste ——
   // Ne pas matcher des fragments dans des pseudos (@poto_…) : mots entiers seulement
-  if (artists === q) score += 1100;
-  else if (artistNames.some((n) => foldText(n) === q)) score += 1050;
-  else if (startsWithWord(artists, q) || includesWord(artists, q)) score += 700;
-  score += tokenCoverage(artistTokens, qTokens) * (type === 'artist' ? 120 : 220);
+  if (type === 'artist') {
+    const name = title || artists;
+    if (name === q) score += 900;
+    else if (artistNameAliasMatch(name, q)) {
+      // Orthographe corrigée plus courte (suzane ← suzanne) = souvent l’artiste « vrai »
+      score += name.length < q.length ? 1180 : 980;
+    } else if (startsWithWord(name, q) || includesWord(name, q)) score += 500;
+    score += tokenCoverage(new Set(tokenize(name)), qTokens) * 120;
+  } else {
+    if (artists === q) score += 1100;
+    else if (artistNames.some((n) => foldText(n) === q)) score += 1050;
+    else if (artistNames.some((n) => artistNameAliasMatch(foldText(n), q))) {
+      const aliased = artistNames.map((n) => foldText(n)).find((n) => artistNameAliasMatch(n, q));
+      score += aliased && aliased.length < q.length ? 1120 : 980;
+    } else if (startsWithWord(artists, q) || includesWord(artists, q)) score += 700;
+    score += tokenCoverage(artistTokens, qTokens) * 220;
+  }
 
   // Combien de tokens query matchent vraiment le champ artiste (pas seulement le titre « Artist - Song »)
   let artistTokenHits = 0;
@@ -139,7 +187,7 @@ export function scoreSearchItem(track: Track, query: string): number {
 
   // —— Titre + artiste (ex. "Poto Demi Portion" ou "pentatonix daft punk") ——
   let splitMatch = false;
-  if (qTokens.length >= 2) {
+  if (type !== 'artist' && qTokens.length >= 2) {
     for (let i = 1; i < qTokens.length; i++) {
       const left = qTokens.slice(0, i).join(' ');
       const right = qTokens.slice(i).join(' ');
@@ -161,6 +209,10 @@ export function scoreSearchItem(track: Track, query: string): number {
 
   // Titre descriptif « ARTISTE - TITRE » sur une chaîne tierce (lyrics/reaction) :
   // tous les tokens dans le titre mais aucun dans le vrai champ artiste → fortement pénalisé
+  const allTokensInTitle =
+    type !== 'artist' &&
+    qTokens.length > 1 &&
+    qTokens.every((t) => titleTokens.has(t) || includesWord(title, t));
   if (allTokensInTitle && artistTokenHits === 0 && qTokens.length >= 2 && !splitMatch) {
     score -= 720;
   } else if (allTokensInTitle && artistTokenHits === 0 && qTokens.length >= 2) {
@@ -186,8 +238,13 @@ export function scoreSearchItem(track: Track, query: string): number {
   else if (type === 'artist') {
     // Chaîne perso (@handle / Profile) nommée comme un titre → pas un artiste
     if (!isPlausibleArtistEntity(track)) score -= 900;
-    else if (artists === q || title === q) score += 80;
-    else score += 10;
+    else if (artists === q || title === q) score += 200;
+    else if (
+      artistNameAliasMatch(title, q) ||
+      artistNames.some((n) => artistNameAliasMatch(foldText(n), q))
+    ) {
+      score += 320;
+    } else score += 40;
   } else if (type === 'album') score += 40;
   else if (type === 'video') score -= 180;
   else if (type === 'playlist') score -= 80;
@@ -421,6 +478,8 @@ export function pickTopResult(
   if (!candidates.length) return null;
 
   const q = foldText(query);
+  const qTokens = tokenize(query);
+
   const exactSongs = cleanSongs.filter((t) => {
     if (foldText(t.title) !== q) return false;
     const raw = String(t.title || '');
@@ -428,7 +487,53 @@ export function pickTopResult(
     if (/\s[-–—]\s/.test(raw) || /[()]/.test(raw)) return false;
     return true;
   });
-  // Titre exact trouvé → prioriser le morceau (pas une fausse fiche artiste homonyme)
+
+  /** Artiste dont le nom = la requête (Suzane, Stromae…) — y compris alias orthographe. */
+  const exactArtists = buckets.artists.filter((a) => {
+    if (!isPlausibleArtistEntity(a)) return false;
+    const name = foldText(a.title || a.artists?.[0]?.name || '');
+    if (!name || name.length < 2) return false;
+    if (name === q) return true;
+    // Alias proches (suzanne ↔ suzane) : même racine, 1 lettre de diff, pas trop courts
+    return artistNameAliasMatch(name, q);
+  });
+
+  // Requête courte = nom d’artiste → fiche artiste gagne sur un titre homonyme d’un autre
+  // (ex. « Suzanne » → artiste, pas Leonard Cohen ; « Suzane » → artiste FR)
+  if (exactArtists.length >= 1 && qTokens.length <= 2) {
+    const bestArtist = [...exactArtists].sort((a, b) => {
+      const nameA = foldText(a.title || a.artists?.[0]?.name || '');
+      const nameB = foldText(b.title || b.artists?.[0]?.name || '');
+      const aliasBoost = (name: string) =>
+        name !== q && artistNameAliasMatch(name, q) && name.length <= q.length ? 120 : 0;
+      return (
+        artistQuality(b, query) +
+        aliasBoost(nameB) -
+        (artistQuality(a, query) + aliasBoost(nameA))
+      );
+    })[0];
+    const bestExactSong = exactSongs.length
+      ? rankByQuery(exactSongs, query, personalization)[0]
+      : null;
+    const songScore = bestExactSong ? scoreSearchItem(bestExactSong, query) : 0;
+    // Fausse fiche « Despacito » (peu de qualité) vs vrai tube → garder le titre
+    if (bestExactSong && songScore >= 1400 && artistQuality(bestArtist, query) < 220) {
+      /* fall through → exact song */
+    } else {
+      const songByThisArtist = exactSongs.find((t) =>
+        (t.artists || []).some((a) => {
+          const an = foldText(a.name);
+          const artistName = foldText(bestArtist.title || bestArtist.artists?.[0]?.name || '');
+          return an === artistName || an === q || artistNameAliasMatch(an, artistName);
+        }),
+      );
+      if (!songByThisArtist || qTokens.length === 1) {
+        return bestArtist;
+      }
+    }
+  }
+
+  // Titre exact trouvé → prioriser le morceau (sauf conflit artiste géré au-dessus)
   if (exactSongs.length >= 1) {
     const bestExact = rankByQuery(exactSongs, query, personalization)[0];
     if (bestExact && scoreSearchItem(bestExact, query) >= 200) {
@@ -453,6 +558,10 @@ export function pickTopResult(
   if (bestSong && bestSongScore >= 600) {
     // Ne pas laisser une vidéo / lyrics channel battre un vrai titre
     if (best.type === 'video' || isLowQualitySearchHit(best) || bestScore <= bestSongScore + 80) {
+      // Si le meilleur candidat est un artiste exact, le garder
+      if (best.type === 'artist' && exactArtists.some((a) => a.id === best.id)) {
+        return best;
+      }
       return bestSong;
     }
   }

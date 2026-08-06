@@ -155,7 +155,7 @@ export function updateMediaSessionMetadata() {
     navigator.mediaSession.metadata = new MediaMetadata({
       title: current.title,
       artist: current.artists?.map((a) => a.name).filter(Boolean).join(', ') || 'Artiste',
-      album: current.album?.name || 'YTMusic',
+      album: current.album?.name || 'PLM',
       artwork: mediaArtwork(current),
     });
     navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
