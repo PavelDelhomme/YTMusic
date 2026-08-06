@@ -121,6 +121,7 @@ import ovh.delhomme.ytmusic.player.PlayerUiState
 import ovh.delhomme.ytmusic.player.RepeatMode
 import ovh.delhomme.ytmusic.ui.components.ArtistLinksText
 import ovh.delhomme.ytmusic.ui.components.DownloadStatusIcon
+import ovh.delhomme.ytmusic.ui.components.HoldSeekIconButton
 import ovh.delhomme.ytmusic.ui.components.MediaCover
 import ovh.delhomme.ytmusic.ui.icons.MixIcon
 import kotlin.math.abs
@@ -848,13 +849,14 @@ fun NowPlayingScreen(
                                                 tint = if (ui.shuffle) MaterialTheme.colorScheme.primary else PlayerFg,
                                             )
                                         }
-                                        PlayerChromeAction.Previous -> IconButton(
+                                        PlayerChromeAction.Previous -> HoldSeekIconButton(
                                             onClick = {
                                                 val now = SystemClock.elapsedRealtime()
                                                 val double = now - lastPrevTap < 380L
                                                 lastPrevTap = now
                                                 player.skipPrevOrRestart(forcePrevious = double)
                                             },
+                                            onHoldTick = { player.seekBy(-2_000L) },
                                         ) {
                                             Icon(
                                                 Icons.Default.SkipPrevious,
@@ -871,7 +873,10 @@ fun NowPlayingScreen(
                                                 modifier = Modifier.size(56.dp),
                                             )
                                         }
-                                        PlayerChromeAction.Next -> IconButton(onClick = player::skipNext) {
+                                        PlayerChromeAction.Next -> HoldSeekIconButton(
+                                            onClick = player::skipNext,
+                                            onHoldTick = { player.seekBy(2_000L) },
+                                        ) {
                                             Icon(
                                                 Icons.Default.SkipNext,
                                                 slot.label,
