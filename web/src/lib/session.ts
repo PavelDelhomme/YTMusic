@@ -89,6 +89,7 @@ export class SessionSocket {
   private deviceId = getDeviceId();
   private reconnectTimer: number | null = null;
   private intentionalClose = false;
+  private reconnectAttempt = 0;
 
   get id() {
     return this.deviceId;
@@ -123,6 +124,7 @@ export class SessionSocket {
     this.ws = ws;
 
     ws.onopen = () => {
+      this.reconnectAttempt = 0;
       this.send({
         type: 'register',
         deviceId: this.deviceId,
@@ -167,7 +169,10 @@ export class SessionSocket {
     ws.onclose = () => {
       this.ws = null;
       if (!this.intentionalClose) {
-        this.reconnectTimer = window.setTimeout(() => this.open(), 1500);
+        // Backoff pendant un redeploy (502) : 1.5s → ~30s max
+        const delay = Math.min(30_000, 1500 * 2 ** Math.min(this.reconnectAttempt, 4));
+        this.reconnectAttempt += 1;
+        this.reconnectTimer = window.setTimeout(() => this.open(), delay);
       }
     };
   }
