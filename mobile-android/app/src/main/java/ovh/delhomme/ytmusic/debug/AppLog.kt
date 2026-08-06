@@ -140,9 +140,11 @@ object AppLog {
         when (level) {
             "E" -> Log.e(TAG, "$tag: $msg", t)
             "W" -> Log.w(TAG, "$tag: $msg", t)
-            "I" -> Log.i(TAG, "$tag: $msg")
-            else -> Log.d(TAG, "$tag: $msg")
+            "I" -> if (BuildConfig.DEBUG) Log.i(TAG, "$tag: $msg")
+            else -> if (BuildConfig.DEBUG) Log.d(TAG, "$tag: $msg")
         }
+        // En release : disque seulement pour W/E (+ crash via crash())
+        if (!BuildConfig.DEBUG && level != "E" && level != "W") return
         if (!ready.get()) return
         writer.execute {
             synchronized(lock) {
