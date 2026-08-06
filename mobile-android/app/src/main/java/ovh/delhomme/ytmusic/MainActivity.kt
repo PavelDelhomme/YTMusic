@@ -11,11 +11,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,7 +49,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
+import kotlin.math.roundToInt
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -419,6 +420,10 @@ private fun MainTabs(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    // Garde NowPlaying monté après 1ʳᵉ ouverture (pas de remount → pas de rebuffer)
+    var playerSheetMounted by remember { mutableStateOf(expanded) }
+    if (expanded) playerSheetMounted = true
+
     LaunchedEffect(current) {
         if (!current.isNullOrBlank()) AppLog.breadcrumb("nav", current)
     }
@@ -774,9 +779,9 @@ private fun MainTabs(
         }
     }
 
-    LaunchedEffect(playerUi.playing, playerUi.track?.id, expanded) {
-        // NowPlaying a son propre tick plus fin (paroles) — éviter le double tick
-        if (expanded) return@LaunchedEffect
+    LaunchedEffect(playerUi.playing, playerUi.track?.id, expanded, playerSheetMounted) {
+        // NowPlaying (monté) gère son tick — éviter double tick / travail inutile
+        if (playerSheetMounted) return@LaunchedEffect
         while (playerUi.playing && playerUi.track != null) {
             player.tick()
             delay(500)
@@ -1082,27 +1087,52 @@ private fun MainTabs(
         )
     }
 
-    AnimatedVisibility(
-        visible = expanded,
-        enter = fadeIn() + slideInVertically { it },
-        exit = fadeOut() + slideOutVertically { it },
-        modifier = Modifier
-            .fillMaxSize()
-            .zIndex(10f),
-    ) {
-        NowPlayingScreen(
-            player = player,
-            ui = playerUi,
-            container = container,
-            likedIds = likedIds,
-            onLikedChanged = { likedIds = it },
-            onClose = onClosePlayer,
-            onMore = { menuTrack = it; menuPlaylistId = null },
-            onCast = { showCast = true },
-            onOpenAddToPlaylist = { addToPlaylistTrack = it },
-            onOpenArtist = ::openArtist,
-            focusPlayerToken = playerFocusToken,
-        )
+    // Garde NowPlaying en composition une fois ouvert — évite remount / rebuffer à chaque expand
+    val sheetAlpha by animateFloatAsState(
+        targetValue = if (expanded) 1f else 0f,
+        animationSpec = tween(220),
+        label = "np-alpha",
+    )
+    val sheetSlide by animateFloatAsState(
+        targetValue = if (expanded) 0f else 1f,
+        animationSpec = tween(240),
+        label = "np-slide",
+    )
+    if (playerSheetMounted) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .zIndex(10f)
+                .graphicsLayer {
+                    alpha = sheetAlpha
+                    translationY = size.height * 0.08f * sheetSlide
+                    // Hors écran + non interactif quand rétracté
+                    if (!expanded) {
+                        // clip n’empêche pas les hits : on shrink via alpha + ignore
+                    }
+                }
+                .then(
+                    if (!expanded) {
+                        Modifier.offset { IntOffset(0, 100_000) } // hors hit-test
+                    } else {
+                        Modifier
+                    },
+                ),
+        ) {
+            NowPlayingScreen(
+                player = player,
+                ui = playerUi,
+                container = container,
+                likedIds = likedIds,
+                onLikedChanged = { likedIds = it },
+                onClose = onClosePlayer,
+                onMore = { menuTrack = it; menuPlaylistId = null },
+                onCast = { showCast = true },
+                onOpenAddToPlaylist = { addToPlaylistTrack = it },
+                onOpenArtist = ::openArtist,
+                focusPlayerToken = playerFocusToken,
+            )
+        }
     }
 
     if (showCast) {
