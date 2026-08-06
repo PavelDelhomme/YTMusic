@@ -2,6 +2,9 @@
 # Exporte les cookies YouTube depuis ton navigateur (Chrome/Firefox) et les
 # pousse vers l’API (prod ou local) — SANS DevTools / Network.
 #
+# Compte Google GRATUIT suffit (connecté à youtube.com). YouTube Premium
+# n’est PAS requis — PLM stream en direct sans pubs de l’app officielle.
+#
 # Prérequis : être connecté à youtube.com dans Chrome (ou Firefox).
 #
 # Usage :
@@ -54,16 +57,27 @@ fi
 COOKIE_FILE="$TMP/cookies.netscape"
 echo "==> Export cookies depuis navigateur « $BROWSER » (ferme Chrome si le DB est verrouillé)…"
 set +e
-"$YTD" --cookies-from-browser "$BROWSER" --cookies "$COOKIE_FILE" --skip-download -q \
-  "https://www.youtube.com/watch?v=jNQXAC9IVRw" 2>"$TMP/ytd.err"
+# ignore-no-formats : on veut seulement écrire le Netscape, pas streamer
+"$YTD" --cookies-from-browser "$BROWSER" --cookies "$COOKIE_FILE" \
+  --skip-download --ignore-no-formats-error --no-warnings -q \
+  "https://www.youtube.com/" 2>"$TMP/ytd.err"
 RC=$?
 set -e
-if [[ $RC -ne 0 || ! -s "$COOKIE_FILE" ]]; then
+# Le fichier cookies est souvent écrit même si yt-dlp exit ≠ 0 (formats KO)
+if [[ ! -s "$COOKIE_FILE" ]]; then
   echo "Échec export $BROWSER — essai firefox…" >&2
   cat "$TMP/ytd.err" >&2 || true
   BROWSER=firefox
-  "$YTD" --cookies-from-browser "$BROWSER" --cookies "$COOKIE_FILE" --skip-download -q \
-    "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+  set +e
+  "$YTD" --cookies-from-browser "$BROWSER" --cookies "$COOKIE_FILE" \
+    --skip-download --ignore-no-formats-error --no-warnings -q \
+    "https://www.youtube.com/" 2>"$TMP/ytd.err"
+  set -e
+fi
+if [[ ! -s "$COOKIE_FILE" ]]; then
+  echo "Impossible d’exporter les cookies navigateur (DB verrouillée ? ferme Chrome/Firefox)." >&2
+  cat "$TMP/ytd.err" >&2 || true
+  exit 1
 fi
 
 HEADER="$TMP/cookie.header"

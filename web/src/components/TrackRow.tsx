@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import type { Track } from '../api';
 import { usePlayer } from '../store/player';
-import { Heart, MoreHorizontal, Play, Radio } from 'lucide-react';
+import { Heart, MoreHorizontal, Pin, Play, Radio } from 'lucide-react';
 import { useLibrary } from '../store/library';
 import { useEffect, useState } from 'react';
 import { ArtistLinks } from './ArtistLinks';
@@ -9,6 +9,7 @@ import { CoverImage } from './CoverImage';
 import { formatTrackDuration } from '../lib/time';
 import { useItemActions } from '../store/itemActions';
 import { PlayingCoverOverlay } from './PlayingBars';
+import { usePins } from '../store/pins';
 
 type Props = {
   track: Track;
@@ -53,8 +54,11 @@ export function TrackRow({
   const isPlaying = usePlayer((s) => s.isPlaying);
   const { isLiked, toggleLike } = useLibrary();
   const openActions = useItemActions((s) => s.open);
+  const pinned = usePins((s) => s.isPinned(track.id));
+  const togglePin = usePins((s) => s.togglePin);
   const [dragging, setDragging] = useState(false);
   const [enriched, setEnriched] = useState<Track>(track);
+  const [pinBusy, setPinBusy] = useState(false);
   const navigate = useNavigate();
   const active = current?.id === track.id;
   const liked = isLiked(track.id);
@@ -122,19 +126,40 @@ export function TrackRow({
         </span>
       ) : null}
 
-      <button
-        type="button"
-        onClick={open}
-        className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-yt-elevated sm:h-12 sm:w-12"
-      >
-        <CoverImage item={enriched} size={96} rounded="md" />
-        <PlayingCoverOverlay active={active} playing={Boolean(active && isPlaying)} size="sm" />
-        {!active && (
-          <span className="absolute inset-0 z-[2] flex items-center justify-center bg-black/50 opacity-0 transition group-hover:opacity-100">
-            <Play className="h-5 w-5 fill-white text-white" />
-          </span>
+      <div className="relative shrink-0">
+        <button
+          type="button"
+          onClick={open}
+          className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-md bg-yt-elevated sm:h-12 sm:w-12"
+        >
+          <CoverImage item={enriched} size={96} rounded="md" />
+          <PlayingCoverOverlay active={active} playing={Boolean(active && isPlaying)} size="sm" />
+          {!active && (
+            <span className="absolute inset-0 z-[2] flex items-center justify-center bg-black/50 opacity-0 transition group-hover:opacity-100">
+              <Play className="h-5 w-5 fill-white text-white" />
+            </span>
+          )}
+        </button>
+        {pinned && (
+          <button
+            type="button"
+            title="Retirer de l'accès rapide"
+            aria-label="Retirer de l'accès rapide"
+            disabled={pinBusy}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (pinBusy) return;
+              setPinBusy(true);
+              void togglePin(enriched)
+                .catch((err) => console.error(err))
+                .finally(() => setPinBusy(false));
+            }}
+            className="absolute -left-1 -top-1 z-[3] flex h-5 w-5 items-center justify-center rounded-full bg-yt-red text-white shadow disabled:opacity-60"
+          >
+            <Pin className="h-2.5 w-2.5 fill-current" />
+          </button>
         )}
-      </button>
+      </div>
 
       <div className="min-w-0 flex-1 text-left">
         <button type="button" onClick={open} className="w-full text-left">

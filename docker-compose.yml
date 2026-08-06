@@ -1,5 +1,5 @@
 # =============================================================================
-# YTMusic — Production (Portainer / VPS)
+# PLM — Production (Portainer / VPS)
 # Conteneur unique : API + frontend web (PWA) + WebSocket
 # =============================================================================
 
@@ -33,7 +33,7 @@ services:
       SMTP_PORT: ${SMTP_PORT:-465}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
-      SMTP_FROM: ${SMTP_FROM:-YTMusic <noreply@maily.ovh>}
+      SMTP_FROM: ${SMTP_FROM:-PLM <noreply@maily.ovh>}
       SMTP_REPLY_TO: ${SMTP_REPLY_TO:-noreply@maily.ovh}
       SMTP_SECURE: ${SMTP_SECURE:-1}
       SMTP_USE_SSL: ${SMTP_USE_SSL:-1}

@@ -1,9 +1,10 @@
 import { CoverImage } from './CoverImage';
 import type { Track } from '../api';
-import { Library, MoreHorizontal, Pause, Play, Plus } from 'lucide-react';
-import type { MouseEvent } from 'react';
+import { Library, MoreHorizontal, Pause, Pin, Play, Plus } from 'lucide-react';
+import { useState, type MouseEvent } from 'react';
 import { PlayingCoverOverlay } from './PlayingBars';
 import { useNowPlayingMatch } from '../lib/nowPlaying';
+import { usePins } from '../store/pins';
 
 /** Carte mix style album : mosaïque 2×2. Clic carte → ouvrir ; Play → lecture. */
 export function MixCollageCard({
@@ -47,6 +48,9 @@ export function MixCollageCard({
     covers: tracks,
   });
   const showPlaying = playing || nowActive;
+  const pinned = usePins((s) => (id ? s.isPinned(id) : false));
+  const togglePin = usePins((s) => s.togglePin);
+  const [pinBusy, setPinBusy] = useState(false);
 
   const stop = (e: MouseEvent) => {
     e.preventDefault();
@@ -89,6 +93,31 @@ export function MixCollageCard({
         )}
 
         <PlayingCoverOverlay active={showPlaying} playing={playing || nowPlaying} size="md" />
+
+        {pinned && id && (
+          <button
+            type="button"
+            title="Retirer de l'accès rapide"
+            aria-label="Retirer de l'accès rapide"
+            disabled={pinBusy}
+            onClick={(e) => {
+              stop(e);
+              if (pinBusy) return;
+              setPinBusy(true);
+              void togglePin({
+                id,
+                title,
+                type: 'mix',
+                thumbnails: tracks[0]?.thumbnails,
+              })
+                .catch((err) => console.error(err))
+                .finally(() => setPinBusy(false));
+            }}
+            className="absolute left-2 top-2 z-[2] flex h-8 w-8 items-center justify-center rounded-full bg-yt-red text-white shadow-lg disabled:opacity-60"
+          >
+            <Pin className="h-3.5 w-3.5 fill-current" />
+          </button>
+        )}
 
         <button
           type="button"

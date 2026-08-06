@@ -518,6 +518,18 @@ export const api = {
   },
   suggestions: (q: string) =>
     req<{ suggestions: string[] }>(`/api/search/suggestions?q=${encodeURIComponent(q)}`),
+  identifySearch: (body: { audioBase64: string; mimeType?: string; mode?: 'listen' | 'hum' }) =>
+    req<{
+      ok: boolean;
+      query?: string;
+      title?: string;
+      artist?: string;
+      error?: string;
+      hint?: string;
+    }>('/api/search/identify', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   searchHistory: () => req<{ history: any[] }>('/api/search/history'),
   recordSearch: (q: string) =>
     req<{ ok: boolean }>('/api/search/history', {

@@ -2,7 +2,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { Track } from '../api';
 import { api } from '../api';
 import { usePlayer } from '../store/player';
-import { Check, Library, MoreHorizontal, Pin, PinOff, Play, Plus } from 'lucide-react';
+import { Check, Library, MoreHorizontal, Pin, Play, Plus } from 'lucide-react';
 import { ArtistLinks } from './ArtistLinks';
 import { CoverImage } from './CoverImage';
 import { useLibrary } from '../store/library';
@@ -178,6 +178,20 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
     }
   };
 
+  const onTogglePin = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (pinBusy) return;
+    setPinBusy(true);
+    void togglePin(item)
+      .then((r) => {
+        setPinToast(r === 'pinned' ? 'Épinglé' : 'Retiré');
+        window.setTimeout(() => setPinToast(null), 1600);
+      })
+      .catch((err) => console.error(err))
+      .finally(() => setPinBusy(false));
+  };
+
   const cover = (
     <div
       className={`relative overflow-hidden bg-yt-elevated ${
@@ -205,6 +219,19 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
         />
         <PlayingCoverOverlay active={nowActive} playing={nowPlaying} size="md" />
       </div>
+      {/* Épingle toujours visible si épinglé (pas seulement au survol) */}
+      {pinned && (
+        <button
+          type="button"
+          title="Retirer de l'accès rapide"
+          aria-label="Retirer de l'accès rapide"
+          disabled={pinBusy}
+          onClick={onTogglePin}
+          className="absolute left-2 top-2 z-[2] flex h-8 w-8 items-center justify-center rounded-full bg-yt-red text-white shadow-lg disabled:opacity-60"
+        >
+          <Pin className="h-3.5 w-3.5 fill-current" />
+        </button>
+      )}
       <div className="pointer-events-none absolute bottom-2 right-2 flex gap-1 opacity-0 transition group-hover:opacity-100">
         <button
           type="button"
@@ -214,29 +241,17 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
         >
           <MoreHorizontal className="h-4 w-4" />
         </button>
-        <button
-          type="button"
-          title={pinned ? 'Épinglé — retirer' : 'Épingler à l’accès rapide'}
-          disabled={pinBusy}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (pinBusy) return;
-            setPinBusy(true);
-            void togglePin(item)
-              .then((r) => {
-                setPinToast(r === 'pinned' ? 'Épinglé' : 'Retiré');
-                window.setTimeout(() => setPinToast(null), 1600);
-              })
-              .catch((err) => console.error(err))
-              .finally(() => setPinBusy(false));
-          }}
-          className={`pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full shadow-lg ${
-            pinned ? 'bg-yt-red text-white' : 'bg-black/70 text-white'
-          }`}
-        >
-          {pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
-        </button>
+        {!pinned && (
+          <button
+            type="button"
+            title="Épingler à l’accès rapide"
+            disabled={pinBusy}
+            onClick={onTogglePin}
+            className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-white shadow-lg"
+          >
+            <Pin className="h-4 w-4" />
+          </button>
+        )}
         {(item.type === 'playlist' || item.type === 'album' || item.type === 'artist') && !local && (
           <button
             type="button"
@@ -301,9 +316,6 @@ export function MediaCard({ item, queue }: { item: Track; queue?: Track[] }) {
             >
               {item.title}
             </button>
-          )}
-          {pinned && (
-            <div className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-yt-red">Épinglé</div>
           )}
           <div className="truncate text-xs text-yt-muted">
             {item.id.startsWith('mood:') || item.id.includes('moods_and_genres')

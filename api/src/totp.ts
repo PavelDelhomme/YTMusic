@@ -5,7 +5,7 @@ import { setTotpSecret } from './platform.js';
 export function generateTotpSetup(userEmail: string) {
   const secret = new OTPAuth.Secret({ size: 20 });
   const totp = new OTPAuth.TOTP({
-    issuer: 'YTMusic',
+    issuer: 'PLM',
     label: userEmail,
     algorithm: 'SHA1',
     digits: 6,
@@ -20,7 +20,7 @@ export function generateTotpSetup(userEmail: string) {
 
 export function verifyTotp(secretBase32: string, token: string) {
   const totp = new OTPAuth.TOTP({
-    issuer: 'YTMusic',
+    issuer: 'PLM',
     algorithm: 'SHA1',
     digits: 6,
     period: 30,

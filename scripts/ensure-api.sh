@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assure que l’API YTMusic écoute sur :8787
+# Assure que l’API PLM écoute sur :8787
 # - Si /api/health répond → OK (réutilise l’instance existante)
 # - Si le port est pris sans health → tue le process sur le port puis relance
 # - Si libre → démarre en arrière-plan
@@ -70,6 +70,10 @@ start_server() {
     source "$ROOT/.env"
     set +a
   fi
+  {
+    echo ""
+    echo "==== api start $(date '+%Y-%m-%d %H:%M:%S %z') ===="
+  } >>"$LOG"
   # Nouvelle session : survit à la fermeture du shell parent (Cursor / make)
   # Évite que $! pointe seulement sur un wrapper npx tué avec le groupe.
   setsid nohup "$ROOT/node_modules/.bin/tsx" api/src/index.ts >>"$LOG" 2>&1 </dev/null &
@@ -77,6 +81,31 @@ start_server() {
   disown $! 2>/dev/null || true
   sleep 1.8
   echo "  PID api: $(cat "$PIDFILE" 2>/dev/null || echo '?')"
+}
+
+warn_cookies() {
+  local try_auto="${1:-0}"
+  local header="$ROOT/data/youtube-cookies.header"
+  local netscape="$ROOT/data/youtube-cookies.txt"
+  if [[ -s "$header" || -s "$netscape" ]]; then
+    return 0
+  fi
+  echo "ℹ️  Pas de fichier cookies YouTube (optionnel)"
+  echo "   PLM = sans pubs, sans YouTube Premium. Les streams marchent souvent sans cookies."
+  echo "   Stabiliser / VPS : bash scripts/push-youtube-cookies.sh local  (compte Google gratuit)"
+  # Auto-export seulement au démarrage (pas à chaque ensure-api si déjà UP)
+  # Défaut OFF : Chrome ouvert verrouille souvent la DB → hang. Force avec AUTO_YT_COOKIES=1
+  if [[ "$try_auto" == "1" && "${AUTO_YT_COOKIES:-0}" == "1" ]]; then
+    echo "   Tentative export auto depuis le navigateur (max 45s)…"
+    if timeout 45 bash "$ROOT/scripts/push-youtube-cookies.sh" local >>"$LOG" 2>&1; then
+      echo "   ✅ Cookies importés — redémarrage API pour les prendre en compte…"
+      free_port
+      start_server
+      wait_health || true
+    else
+      echo "   (export auto échoué — Chrome ouvert ? relance push-youtube-cookies.sh local)"
+    fi
+  fi
 }
 
 wait_health() {
@@ -103,13 +132,16 @@ if [[ "$FORCE" == "1" ]]; then
   free_port
   start_server
   wait_health
-  exit $?
+  ec=$?
+  warn_cookies 1
+  exit "$ec"
 fi
 
 if is_up; then
   echo "✅ API déjà UP — on réutilise (pas de conflit de port)"
   curl -fsS --max-time 2 "$HEALTH_URL" 2>/dev/null | head -c 220 || true
   echo ""
+  warn_cookies 0
   exit 0
 fi
 
@@ -120,3 +152,6 @@ fi
 
 start_server
 wait_health
+ec=$?
+warn_cookies 1
+exit "$ec"

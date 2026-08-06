@@ -1,10 +1,10 @@
 # Platform Kit — réutilisation multi-projets
 
-Ce dossier est **indépendant du métier YTMusic**. Tu peux le copier dans un autre repo.
+Ce dossier est **indépendant du métier PLM**. Tu peux le copier dans un autre repo.
 
 ## Inclut (conceptuellement)
 
-| Élément | Fichier source YTMusic |
+| Élément | Fichier source PLM |
 |---------|-------------------------|
 | Compose Portainer + réseaux NPM | `docker-compose.yml`, `deploy/portainer-template.yml` |
 | Schéma auth longue + email + telemetry | `server/src/platform.ts`, `mail.ts`, `totp.ts` |

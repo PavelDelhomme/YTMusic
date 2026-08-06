@@ -42,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -69,6 +70,9 @@ fun TrackRow(
     /** Lignes plus denses (page album). */
     compact: Boolean = false,
     showCover: Boolean = true,
+    /** Affiche le badge épingle (accès rapide) — toujours visible si true. */
+    pinned: Boolean = false,
+    onTogglePin: (() -> Unit)? = null,
 ) {
     val vPad = if (compact) 4.dp else 8.dp
     val coverSz = if (compact) 44.dp else 52.dp
@@ -99,7 +103,18 @@ fun TrackRow(
             )
         }
         if (showCover) {
-            MediaCover(track, coverSz)
+            Box {
+                MediaCover(track, coverSz)
+                if (pinned) {
+                    PinnedBadge(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(2.dp),
+                        onClick = onTogglePin,
+                        size = if (compact) 18.dp else 20.dp,
+                    )
+                }
+            }
             Spacer(Modifier.width(if (compact) 10.dp else 12.dp))
         } else if (indexLabel == null) {
             Spacer(Modifier.width(4.dp))
@@ -199,6 +214,8 @@ fun MiniPlayerBar(
     durationMs: Long = 0L,
     onToggle: () -> Unit,
     onOpen: () -> Unit,
+    /** Swipe bas → fermer lecteur + vider la file. */
+    onDismiss: (() -> Unit)? = null,
     onCast: (() -> Unit)? = null,
     onSeek: ((Float) -> Unit)? = null,
     onPrev: (() -> Unit)? = null,
@@ -210,6 +227,7 @@ fun MiniPlayerBar(
     var scrub by remember(track.id) { mutableFloatStateOf(-1f) }
     val shown = if (scrub >= 0f) scrub else progress.coerceIn(0f, 1f)
     var barWidthPx by remember { mutableFloatStateOf(1f) }
+    var dismissDrag by remember { mutableFloatStateOf(0f) }
     val thumbPx = with(LocalDensity.current) { 8.dp.toPx() }
     val remainingLabel = remember(shown, durationMs) {
         formatRemainingMs(durationMs, shown)
@@ -222,7 +240,15 @@ fun MiniPlayerBar(
         onSeek(ratio)
     }
 
-    Column(modifier = modifier.fillMaxWidth()) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                val p = (dismissDrag / 140f).coerceIn(0f, 1f)
+                translationY = dismissDrag.coerceAtLeast(0f) * 0.55f
+                alpha = 1f - p * 0.55f
+            },
+    ) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -294,18 +320,27 @@ fun MiniPlayerBar(
                 .fillMaxWidth()
                 .height(64.dp)
                 .clickable(onClick = onOpen)
-                .pointerInput(Unit) {
+                .pointerInput(onDismiss, onOpen) {
                     var total = 0f
                     detectVerticalDragGestures(
                         onVerticalDrag = { _, amount ->
                             total += amount
+                            dismissDrag = total.coerceAtLeast(0f)
                         },
                         onDragEnd = {
-                            // Swipe vers le haut → ouvrir le lecteur plein écran
-                            if (total < -48f) onOpen()
+                            when {
+                                // Swipe vers le bas → fermer lecteur + vider file
+                                total > 56f && onDismiss != null -> onDismiss()
+                                // Swipe vers le haut → ouvrir le lecteur plein écran
+                                total < -48f -> onOpen()
+                            }
                             total = 0f
+                            dismissDrag = 0f
                         },
-                        onDragCancel = { total = 0f },
+                        onDragCancel = {
+                            total = 0f
+                            dismissDrag = 0f
+                        },
                     )
                 }
                 .padding(horizontal = 8.dp),

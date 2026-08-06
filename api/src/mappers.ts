@@ -227,6 +227,14 @@ export function isPlausibleArtistEntity(item: {
   if (subs.some((n) => isJunkArtistName(n) || /^@/.test(n) || /^profile$/i.test(n))) {
     return false;
   }
+  // « 347 subscribers » / « 1,2 k abonnés » = chaîne nommée comme un titre, pas un artiste
+  if (
+    subs.some((n) =>
+      /^\d[\d\s.,]*\s*(k|m|md|b)?\s*(subscribers?|abonn[eé]s?)\s*$/i.test(n.trim()),
+    )
+  ) {
+    return false;
+  }
   // Sous-titre typique d’une chaîne non-artiste YTM
   const blob = subs.join(' ').toLowerCase();
   if (/\bprofile\b/.test(blob) && subs.length <= 2) return false;

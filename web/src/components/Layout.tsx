@@ -6,6 +6,8 @@ import {
   Library,
   ListMusic,
   Menu,
+  Mic,
+  Music2,
   PanelLeftClose,
   Plus,
   Search,
@@ -25,6 +27,7 @@ import { ItemActionsSheet } from './ItemActionsSheet';
 import { NowPlaying, type NowPlayingTab } from './NowPlaying';
 import { OnboardingWizard } from './OnboardingWizard';
 import { BrandLogo } from './BrandLogo';
+import { SearchIdentifySheet, startWebSpeechDictation } from './SearchIdentifySheet';
 import { useLibrary } from '../store/library';
 import { usePlayer, wireRemotePlayer, reportListenProgress, flushPlayerPersist } from '../store/player';
 import { useAuth } from '../store/auth';
@@ -74,6 +77,7 @@ export function Layout() {
   const [nowPlayingTab, setNowPlayingTab] = useState<NowPlayingTab>('queue');
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [eqOpen, setEqOpen] = useState(false);
+  const [identifyOpen, setIdentifyOpen] = useState(false);
   // Menu gauche en drawer rétractable (persisté — desktop seulement pour l’état ouvert)
   const [navOpen, setNavOpen] = useState(() => {
     if (typeof window === 'undefined') return true;
@@ -326,7 +330,12 @@ export function Layout() {
       <div className="mb-4 flex shrink-0 items-center justify-between gap-2 px-2">
         <div className="flex min-w-0 items-center gap-2">
           <BrandLogo className="h-8 w-8 shrink-0" />
-          <span className="font-display text-lg font-semibold tracking-tight">YTMusic</span>
+          <span
+            className="font-display text-lg font-semibold tracking-tight"
+            title="Pue La Merde · sans pubs · YouTube Premium non requis"
+          >
+            PLM
+          </span>
         </div>
         <button
           type="button"
@@ -625,31 +634,63 @@ export function Layout() {
                 }}
                 placeholder="Rechercher titres, albums, artistes…"
                 className={`w-full rounded-full border border-yt-border bg-yt-surface py-2.5 pl-10 text-sm outline-none transition focus:border-white/30 ${
-                  q ? 'pr-10' : 'pr-4'
+                  q ? 'pr-24' : 'pr-20'
                 }`}
                 aria-label="Recherche"
                 aria-autocomplete="list"
                 aria-expanded={openSug}
               />
-              {q ? (
+              <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+                {q ? (
+                  <button
+                    type="button"
+                    aria-label="Effacer la recherche"
+                    className="rounded-full p-1.5 text-yt-muted transition hover:bg-white/10 hover:text-white"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setQ('');
+                      typedDraftRef.current = '';
+                      setSugIndex(-1);
+                      setOpenSug(true);
+                      if (location.pathname.startsWith('/search')) {
+                        navigate('/search');
+                      }
+                    }}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  aria-label="Effacer la recherche"
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-yt-muted transition hover:bg-white/10 hover:text-white"
+                  aria-label="Dictée vocale"
+                  title="Dictée"
+                  className="rounded-full p-1.5 text-yt-muted transition hover:bg-white/10 hover:text-white"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
-                    setQ('');
-                    typedDraftRef.current = '';
-                    setSugIndex(-1);
-                    setOpenSug(true);
-                    if (location.pathname.startsWith('/search')) {
-                      navigate('/search');
-                    }
+                    startWebSpeechDictation({
+                      onResult: (text) => {
+                        setQ(text);
+                        typedDraftRef.current = text;
+                        navigate(`/search?q=${encodeURIComponent(text)}`);
+                        void api.recordSearch(text);
+                      },
+                      onError: (msg) => window.alert(msg),
+                    });
                   }}
                 >
-                  <X className="h-4 w-4" />
+                  <Mic className="h-4 w-4" />
                 </button>
-              ) : null}
+                <button
+                  type="button"
+                  aria-label="Identifier un titre"
+                  title="Écouter / fredonner"
+                  className="rounded-full p-1.5 text-yt-muted transition hover:bg-white/10 hover:text-white"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setIdentifyOpen(true)}
+                >
+                  <Music2 className="h-4 w-4" />
+                </button>
+              </div>
               {openSug && (suggestions.length > 0 || (!historyMode && (typedDraftRef.current.trim() || q.trim()))) && (
                 <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-80 overflow-y-auto rounded-xl border border-yt-border bg-yt-elevated shadow-2xl">
                   {historyMode && suggestions.length > 0 ? (
@@ -817,6 +858,7 @@ export function Layout() {
         onClose={() => setNowPlayingOpen(false)}
       />
       <InstallBanner />
+      <SearchIdentifySheet open={identifyOpen} onClose={() => setIdentifyOpen(false)} />
       <AuthModal
         open={(authOpen || (authLoaded && isGuest && !allowGuestPage)) && !needsOnboarding}
         onClose={() => {

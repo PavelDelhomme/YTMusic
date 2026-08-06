@@ -2,7 +2,7 @@
   "name": "ytmusic",
   "version": "1.3.9",
   "private": true,
-  "description": "YouTube Music — web, API, Android Kotlin & desktop",
+  "description": "PLM — Pue La Merde. Musique web, API, Android & desktop",
   "scripts": {
     "dev": "npm run dev:web",
     "dev:all": "concurrently -n api,web -c red,cyan \"npm run dev -w api\" \"npm run dev -w web\"",

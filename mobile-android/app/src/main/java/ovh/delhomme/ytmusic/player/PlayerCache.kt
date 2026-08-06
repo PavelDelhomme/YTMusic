@@ -56,7 +56,7 @@ object PlayerCache {
             props["Authorization"] = "Bearer $token"
         }
         val http = DefaultHttpDataSource.Factory()
-            .setUserAgent("YTMusic-Android")
+            .setUserAgent("PLM-Android")
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(12_000)
             .setReadTimeoutMs(30_000)

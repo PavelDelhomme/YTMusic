@@ -102,7 +102,8 @@ export function SearchPage() {
       <div className="animate-fade-up">
         <h1 className="mb-2 font-display text-3xl font-semibold tracking-tight">Recherche</h1>
         <p className="mb-6 text-sm text-yt-muted">
-          Suggestions perso (historique + prefs) dans la barre du haut.
+          Suggestions perso dans la barre du haut · micro (dictée) · note (écouter / fredonner).
+          Sans pubs, sans YouTube Premium.
         </p>
         {history.length > 0 ? (
           <section>

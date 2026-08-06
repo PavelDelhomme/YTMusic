@@ -50,7 +50,7 @@ const live = process.env.CAP_LIVE_RELOAD === '1';
 const liveUrl = process.env.CAP_SERVER_URL || '';
 const cfg = {
   appId: 'ovh.delhomme.ytmusic',
-  appName: 'YTMusic',
+  appName: 'PLM',
   webDir: 'dist',
   server: {
     androidScheme: 'https',

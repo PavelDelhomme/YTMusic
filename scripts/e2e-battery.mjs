@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Batterie E2E API YTMusic (local et/ou prod).
+ * Batterie E2E API PLM (local et/ou prod).
  * Usage:
  *   node --env-file=.env scripts/e2e-battery.mjs
  *   API_BASE_URL=https://ytmusic.delhomme.ovh node --env-file=.env scripts/e2e-battery.mjs

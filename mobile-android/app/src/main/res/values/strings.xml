@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">YTMusic</string>
-    <string name="playback_channel">Lecture YTMusic</string>
+    <string name="app_name">PLM</string>
+    <string name="app_name_full">Pue La Merde</string>
+    <string name="playback_channel">Lecture PLM</string>
     <string name="playback_channel_name">Lecture en cours</string>
 </resources>

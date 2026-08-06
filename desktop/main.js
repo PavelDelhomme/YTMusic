@@ -23,7 +23,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#030303',
-    title: 'YTMusic',
+    title: 'PLM',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
