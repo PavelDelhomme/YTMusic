@@ -15,8 +15,8 @@ services:
       APP_ENV: local
       APP_URL: http://localhost:8787
       JWT_SECRET: ${JWT_SECRET:-dev-local-secret-change-me}
-      ADMIN_EMAILS: ${ADMIN_EMAILS:-admin@example.com,dev@example.com}
-      SEED_EMAIL: ${SEED_EMAIL:-dev@example.com}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      SEED_EMAIL: ${SEED_EMAIL:-}
       SEED_PASSWORD: ${SEED_PASSWORD:-}
       WEBAUTHN_RP_ID: localhost
       WEBAUTHN_ORIGIN: http://localhost:8787
@@ -44,7 +44,7 @@ services:
       - "5173:5173"
     environment:
       VITE_API_ORIGIN: http://localhost:8787
-      VITE_DEV_EMAIL: ${VITE_DEV_EMAIL:-dev@example.com}
+      VITE_DEV_EMAIL: ${VITE_DEV_EMAIL:-}
       VITE_DEV_PASSWORD: ${VITE_DEV_PASSWORD:-}
     volumes:
       - ./:/app

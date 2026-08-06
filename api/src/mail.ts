@@ -24,7 +24,7 @@ export function parseFromAddress(raw: string): { name: string; address: string }
   if (s.includes('@')) return { name: 'PLM', address: s };
   return {
     name: 'PLM',
-    address: process.env.SMTP_USER || 'noreply@example.com',
+    address: process.env.SMTP_USER || 'noreply@localhost',
   };
 }
 
@@ -37,7 +37,9 @@ export function smtpPublicConfig() {
     process.env.SMTP_SECURE === 'true' ||
     useSsl ||
     port === 465;
-  const fromRaw = process.env.SMTP_FROM || 'PLM <noreply@example.com>';
+  const fromRaw =
+    process.env.SMTP_FROM ||
+    (process.env.SMTP_USER ? `PLM <${process.env.SMTP_USER}>` : 'PLM <noreply@localhost>');
   const from = parseFromAddress(fromRaw);
   return {
     configured: Boolean(host),
@@ -49,7 +51,7 @@ export function smtpPublicConfig() {
     fromParsed: from,
     replyTo: process.env.SMTP_REPLY_TO || process.env.SMTP_USER || from.address,
     mode: host ? 'smtp' : 'outbox',
-    domainHint: 'maily.ovh (OVH MX Plan)',
+    domainHint: 'SMTP (configuré via .env)',
   };
 }
 
@@ -151,7 +153,7 @@ export async function sendVerificationEmail(email: string, name: string, rawToke
 }
 
 function cfgDomain() {
-  return process.env.SMTP_USER?.split('@')[1] || 'maily.ovh';
+  return process.env.SMTP_USER?.split('@')[1] || 'localhost';
 }
 
 /** Smoke SMTP — verify() + mail de test optionnel. */
@@ -175,12 +177,12 @@ export async function testSmtp(to?: string) {
       sent = await sendMail({
         to,
         subject: `[PLM] Test SMTP · ${getAppEnv()} · ${new Date().toISOString()}`,
-        text: `Test PLM OK.\nFrom configuré : ${cfg.from}\nHost : ${cfg.host}:${cfg.port}\nSi tu vois encore « JobbingTrack », vide le cache d’affichage du client mail (Gmail garde l’ancien nom pour noreply@example.com).`,
+        text: `Test PLM OK.\nFrom configuré : ${cfg.from}\nHost : ${cfg.host}:${cfg.port}\nSi le nom d’affichage est faux, vide le cache du client mail.`,
         html: `<div style="font-family:system-ui,sans-serif">
           <p><strong>Test PLM OK</strong></p>
           <p>From configuré : <code>${cfg.from}</code></p>
           <p>Host : ${cfg.host}:${cfg.port} (${getAppEnv()})</p>
-          <p style="color:#666;font-size:12px">Si l’expéditeur affiche encore « JobbingTrack Security », c’est le cache du client mail / le nom d’affichage OVH du compte noreply@example.com — pas SMTP_FROM.</p>
+          <p style="color:#666;font-size:12px">Si le nom d’affichage est incorrect, c’est souvent le cache du client mail / le display name côté fournisseur SMTP — pas SMTP_FROM.</p>
         </div>`,
       });
     }

@@ -409,11 +409,11 @@ bash scripts/link-home-stream.sh
       <section className="mb-6 rounded-2xl border border-yt-border bg-yt-surface p-5">
         <div className="mb-3 flex items-center gap-2">
           <Mail className="h-5 w-5 text-yt-red" />
-          <h3 className="font-display text-lg font-semibold">SMTP · maily.ovh</h3>
+          <h3 className="font-display text-lg font-semibold">SMTP</h3>
         </div>
         <p className="mb-3 text-sm text-yt-muted">
-          Envoi via OVH MX Plan (<code className="text-white">noreply@example.com</code>) — validation
-          d’inscription, tests. Voir <code className="text-white">docs/SMTP-MAILY.md</code>.
+          Envoi via le SMTP configuré dans <code className="text-white">.env</code> (validation
+          d’inscription, tests). Voir <code className="text-white">docs/SMTP-MAILY.md</code>.
         </p>
         <dl className="mb-4 grid gap-2 text-sm sm:grid-cols-2">
           <div>
@@ -442,7 +442,7 @@ bash scripts/link-home-stream.sh
             <input
               value={smtpTestTo}
               onChange={(e) => setSmtpTestTo(e.target.value)}
-              placeholder="dev@example.com"
+              placeholder="toi@email.com"
               className="mt-1 w-full rounded-xl border border-yt-border bg-yt-bg px-3 py-2 text-sm text-white"
             />
           </label>

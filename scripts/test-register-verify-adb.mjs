@@ -2,7 +2,7 @@
 /**
  * Recrée un compte, envoie l’email de validation, ouvre le lien sur Android (ADB).
  *
- *   TEST_EMAIL=dev@example.com TEST_PASSWORD='…' DEVICE=R5CT7263YJL \
+ *   TEST_EMAIL=toi@email.com TEST_PASSWORD='…' DEVICE=… \
  *     node scripts/test-register-verify-adb.mjs
  */
 import { config as loadEnv } from 'dotenv';
@@ -15,13 +15,17 @@ import Database from 'better-sqlite3';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 loadEnv({ path: join(ROOT, '.env') });
-const DEVICE = process.env.DEVICE || 'R5CT7263YJL';
-const EMAIL = (process.env.TEST_EMAIL || 'dev@example.com').toLowerCase();
+const DEVICE = process.env.DEVICE || '';
+const EMAIL = (process.env.TEST_EMAIL || process.env.SEED_EMAIL || '').toLowerCase();
 const PASS = (process.env.TEST_PASSWORD || process.env.SEED_PASSWORD || '').replace(/^['"]|['"]$/g, '');
 const NAME = process.env.TEST_NAME || 'Dev';
 const API = process.env.API_URL || 'http://127.0.0.1:8787';
 const APP = (process.env.APP_URL || 'http://127.0.0.1:5173').replace(/\/$/, '');
 
+if (!EMAIL) {
+  console.error('TEST_EMAIL ou SEED_EMAIL requis');
+  process.exit(1);
+}
 if (!PASS) {
   console.error('TEST_PASSWORD ou SEED_PASSWORD requis');
   process.exit(1);

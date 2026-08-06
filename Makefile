@@ -67,7 +67,7 @@ help: ## Affiche cette aide colorée
 install: ## Installe les dépendances (workspaces api + web)
 	cd $(ROOT) && npm install
 
-seed-users: ## Crée/maj paul@ + dev@ (SEED_PASSWORD dans .env)
+seed-users: ## Crée/maj comptes SEED_* (SEED_PASSWORD dans .env)
 	cd $(ROOT) && node scripts/seed-users.mjs
 
 test-verify-email: ## Teste validation email (API locale)
@@ -277,7 +277,7 @@ android-capacitor-prod: ## Legacy Capacitor → API prod
 test-register-adb: ## Recrée compte + email validation + ouvre le lien sur Android
 	@cd $(ROOT) && \
 	  DEVICE="$(DEVICE)" \
-	  TEST_EMAIL="$(or $(TEST_EMAIL),dev@example.com)" \
+	  TEST_EMAIL="$(or $(TEST_EMAIL),$(SEED_EMAIL))" \
 	  TEST_PASSWORD="$(TEST_PASSWORD)" \
 	  node scripts/test-register-verify-adb.mjs
 

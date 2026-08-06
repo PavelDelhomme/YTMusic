@@ -83,8 +83,8 @@ ayant le droit `read:packages`.
 | Name | Value |
 |------|--------|
 | `JWT_SECRET` | lance `openssl rand -hex 32` et colle le résultat (**pas** le secret local) |
-| `SMTP_PASS` | le même mot de passe maily que dans ton `.env` local |
-| `ADMIN_EMAILS` | `dev@example.com` (ou ton email) |
+| `SMTP_PASS` | le même mot de passe SMTP que dans ton `.env` local |
+| `ADMIN_EMAILS` | `toi@email.com` (ou ton email) |
 | `AUTH_ALLOWED_EMAILS` | **identique** à `ADMIN_EMAILS` |
 | `AUTH_ALLOW_REGISTER` | `0` |
 | `AUTH_ALLOW_GUEST` | `0` |
@@ -93,8 +93,8 @@ ayant le droit `read:packages`.
 | `WEBAUTHN_ORIGIN` | `https://ytmusic.delhomme.ovh` |
 | `YTMUSIC_IMAGE` | `ghcr.io/paveldelhomme/ytmusic:latest` |
 | `SMTP_HOST` | `ssl0.ovh.net` |
-| `SMTP_USER` | `noreply@example.com` |
-| `SMTP_FROM` | `PLM <noreply@example.com>` |
+| `SMTP_USER` | `noreply@ton-domaine` |
+| `SMTP_FROM` | `PLM <noreply@ton-domaine>` |
 
 7. **Deploy the stack**  
 8. Onglet Containers : `ytmusic` doit passer **healthy** / running  
@@ -164,7 +164,7 @@ curl -fsS https://ytmusic.delhomme.ovh/api/health
 ### ☐ 6. Créer ton compte sur le site prod (une seule fois)
 
 Le site répond déjà (`/api/health` OK). L’inscription est **fermée** (`AUTH_ALLOW_REGISTER=0`) :
-c’est voulu pour n’avoir **qu’un** compte (`dev@example.com` dans `AUTH_ALLOWED_EMAILS`).
+c’est voulu pour n’avoir **qu’un** compte (`toi@email.com` dans `AUTH_ALLOWED_EMAILS`).
 
 Pour créer **ce** compte la première fois, on ouvre l’inscription **temporairement**.
 
@@ -192,7 +192,7 @@ curl -fsS https://ytmusic.delhomme.ovh/api/auth/config
 
 1. Navigateur : **https://ytmusic.delhomme.ovh**  
 2. **Créer un compte** avec **exactement** :
-   - email : `dev@example.com` (celui de `AUTH_ALLOWED_EMAILS` / `ADMIN_EMAILS`)  
+   - email : `toi@email.com` (celui de `AUTH_ALLOWED_EMAILS` / `ADMIN_EMAILS`)  
    - mot de passe : celui que tu veux (note-le)  
 3. Connecte-toi → tu dois être admin.
 
@@ -217,8 +217,8 @@ Tes réglages finaux (à garder) :
 |----------|--------|
 | `AUTH_ALLOW_REGISTER` | `0` |
 | `AUTH_ALLOW_GUEST` | `0` |
-| `ADMIN_EMAILS` | `dev@example.com` |
-| `AUTH_ALLOWED_EMAILS` | `dev@example.com` |
+| `ADMIN_EMAILS` | `toi@email.com` |
+| `AUTH_ALLOWED_EMAILS` | `toi@email.com` |
 
 → un seul compte utilisable : le tien.
 
@@ -229,7 +229,7 @@ Tes réglages finaux (à garder) :
 Dans Portainer → stack `ytmusic` → Environment, ajoute :
 
 ```
-SEED_EMAIL=dev@example.com
+SEED_EMAIL=toi@email.com
 SEED_PASSWORD=<le même que ton .env local>
 AUTH_SEED_SYNC=1
 ```
@@ -257,7 +257,7 @@ Sur ton PC (Android SDK) :
 
 ```bash
 cd ~/Documents/Dev/Perso/YTMusic
-ADMIN_EMAIL=dev@example.com ADMIN_PASSWORD='ton-mot-de-passe' make android-upload-apk
+ADMIN_EMAIL=toi@email.com ADMIN_PASSWORD='ton-mot-de-passe' make android-upload-apk
 ```
 
 Ou : `http://localhost:5173/admin` → **APK → VPS**.
