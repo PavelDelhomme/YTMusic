@@ -81,6 +81,8 @@ type PlayerState = {
   prev: () => Promise<void>;
   setProgress: (n: number) => void;
   seek: (n: number) => void;
+  /** Avance / recule relativement à la position audio réelle (pas le progress Zustand throttle). */
+  seekBy: (deltaSec: number) => void;
   setDuration: (n: number) => void;
   setVolume: (n: number) => void;
   toggleShuffle: () => void;
@@ -1710,15 +1712,31 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
 
   seek: (n) => {
+    const t = Math.max(0, Number.isFinite(n) ? n : 0);
     if (!isActivePlayer()) {
-      sendCmd({ action: 'seek', time: n });
-      set({ progress: n });
+      sendCmd({ action: 'seek', time: t });
+      set({ progress: t });
       return;
     }
     const { audioEl } = get();
-    if (audioEl) audioEl.currentTime = n;
-    set({ progress: n });
+    if (audioEl) {
+      try {
+        audioEl.currentTime = t;
+      } catch {
+        /* ignore NotSupportedError pendant chargement */
+      }
+    }
+    set({ progress: t });
     publish();
+  },
+
+  seekBy: (deltaSec) => {
+    const { audioEl, progress, duration } = get();
+    const cur =
+      audioEl && Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : progress;
+    const max = duration > 0 ? duration : Math.max(cur + Math.abs(deltaSec), cur);
+    const next = Math.max(0, Math.min(max, cur + deltaSec));
+    get().seek(next);
   },
 
   setDuration: (n) => set({ duration: n }),
