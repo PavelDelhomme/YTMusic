@@ -623,10 +623,10 @@ function schedulePrefetch(queue: Track[], queueIndex: number) {
   const loopOne = usePlayer.getState().repeat === 'one';
   const durationsSec = playable.map((t) => trackDurationSeconds(t));
   prefetchAround(ids, idx, {
-    ahead: saveData ? 1 : 2,
+    ahead: saveData ? 2 : 6,
     behind: 0,
-    fullAhead: saveData ? 0 : 1,
-    delayFullMs: saveData ? 4000 : 2500,
+    fullAhead: saveData ? 0 : 3,
+    delayFullMs: saveData ? 4000 : 400,
     durationsSec,
     loopOne,
   });

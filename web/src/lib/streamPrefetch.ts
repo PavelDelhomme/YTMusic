@@ -3,19 +3,19 @@ import { apiUrl } from '../api';
 const FULL_CACHE = 'ytm-stream-full-v1';
 
 /** Nombre max de pistes dont on garde le début en mémoire */
-const MAX_HEAD = 12;
+const MAX_HEAD = 18;
 /** Tête générique (~384 Ko) */
-const HEAD_BYTES = 384 * 1024;
+const HEAD_BYTES = 768 * 1024;
 /** Prochain titre : plus d’octets pour un skip fluide */
-const HEAD_NEXT_BYTES = 960 * 1024;
+const HEAD_NEXT_BYTES = 2_400 * 1024;
 /** Pistes complètes en Cache Storage (instant play) — rester léger sur navigateur */
-const MAX_FULL = 10;
+const MAX_FULL = 12;
 /** Au-delà : on ne full-cache pas (trop lourd) — tête seulement */
-export const FULL_PRELOAD_MAX_SEC = 10 * 60;
+export const FULL_PRELOAD_MAX_SEC = 12 * 60;
 /** Warm format API en parallèle */
-const WARM_CONCURRENCY = 4;
+const WARM_CONCURRENCY = 5;
 /** Prefetch tête en parallèle */
-const HEAD_CONCURRENCY = 3;
+const HEAD_CONCURRENCY = 4;
 /** Prefetch full — 1 à la fois (évite 502 / saturation avec le titre en lecture) */
 const FULL_CONCURRENCY = 1;
 
@@ -340,10 +340,10 @@ export function prefetchAround(
   },
 ) {
   if (isStreamDown()) return;
-  const ahead = opts?.ahead ?? 4;
+  const ahead = opts?.ahead ?? 6;
   const behind = opts?.behind ?? 1;
-  const fullAhead = opts?.fullAhead ?? 2;
-  const delayFullMs = opts?.delayFullMs ?? 200;
+  const fullAhead = opts?.fullAhead ?? 3;
+  const delayFullMs = opts?.delayFullMs ?? 180;
   const ids = trackIds.filter(isVideoId);
   if (!ids.length) return;
 
@@ -380,13 +380,23 @@ export function prefetchAround(
     const ordered = [
       ids[idx + 1],
       ids[idx + 2],
-      ids[idx],
       ids[idx + 3],
+      ids[idx + 4],
+      ids[idx + 5],
+      ids[idx + 6],
+      ids[idx],
       ids[idx - 1],
     ].filter((id): id is string => Boolean(id) && unique.includes(id));
     return runPool([...new Set(ordered)], HEAD_CONCURRENCY, (id) => {
       const n = ids[idx + 1];
-      const bytes = id === n ? HEAD_NEXT_BYTES : HEAD_BYTES;
+      const n2 = ids[idx + 2];
+      const n3 = ids[idx + 3];
+      const bytes =
+        id === n
+          ? HEAD_NEXT_BYTES
+          : id === n2 || id === n3
+            ? Math.floor(HEAD_NEXT_BYTES * 0.55)
+            : HEAD_BYTES;
       return warmHead(id, gen, bytes);
     }, gen);
   });
