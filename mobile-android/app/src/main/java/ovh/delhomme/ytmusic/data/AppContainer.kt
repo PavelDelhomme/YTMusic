@@ -64,7 +64,18 @@ class AppContainer(context: Context) {
     /** Base API sans slash final (override prefs > BuildConfig). */
     fun resolvedApiBase(): String {
         val override = apiPrefs.getString("base_url", null)?.trim()?.trimEnd('/')
-        return if (!override.isNullOrBlank()) override else BuildConfig.API_BASE_URL.trimEnd('/')
+        val raw = if (!override.isNullOrBlank()) override else BuildConfig.API_BASE_URL.trimEnd('/')
+        // Sur device physique, 127.0.0.1 = le téléphone — bascule sur BuildConfig (LAN / prod).
+        if (raw.contains("127.0.0.1") || raw.contains("localhost")) {
+            val baked = BuildConfig.API_BASE_URL.trimEnd('/')
+            if (baked.isNotBlank() && !baked.contains("127.0.0.1") && !baked.contains("localhost")) {
+                if (!override.isNullOrBlank()) {
+                    apiPrefs.edit().remove("base_url").apply()
+                }
+                return baked
+            }
+        }
+        return raw
     }
 
     fun apiBaseOverride(): String? =
@@ -72,7 +83,16 @@ class AppContainer(context: Context) {
 
     /** Persiste une URL API (ex. http://192.168.1.134:8787). null = reset BuildConfig. */
     fun setApiBaseOverride(url: String?) {
-        val cleaned = url?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
+        var cleaned = url?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
+        // Refuse 127.0.0.1 sur téléphone : pointe le device, pas le PC.
+        if (cleaned != null && (cleaned.contains("127.0.0.1") || cleaned.contains("localhost"))) {
+            val baked = BuildConfig.API_BASE_URL.trimEnd('/')
+            cleaned = if (!baked.contains("127.0.0.1") && !baked.contains("localhost")) {
+                baked
+            } else {
+                null
+            }
+        }
         apiPrefs.edit().apply {
             if (cleaned == null) remove("base_url") else putString("base_url", cleaned)
         }.apply()

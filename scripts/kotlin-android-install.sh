@@ -28,15 +28,15 @@ detect_lan_ip() {
   ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}'
 }
 
-# Sur un téléphone physique, 127.0.0.1 = le téléphone → utiliser l’IP LAN de la machine
+# Téléphone physique : 127.0.0.1 = le phone, JAMAIS le PC. Toujours IP LAN pour le local.
 if [[ -z "$API_BASE_URL" || "$API_BASE_URL" == *"127.0.0.1"* || "$API_BASE_URL" == *"localhost"* ]]; then
   LAN="$(detect_lan_ip || true)"
   if [[ -n "${LAN:-}" ]]; then
     API_BASE_URL="http://${LAN}:8787"
-    echo "==> API LAN auto : $API_BASE_URL (évite Failed to connect to /127.0.0.1:8787)"
+    echo "==> API LAN auto : $API_BASE_URL (jamais 127.0.0.1 sur device physique)"
   else
-    API_BASE_URL="http://127.0.0.1:8787"
-    echo "==> API fallback 127.0.0.1 + adb reverse"
+    echo "❌ Impossible de détecter l’IP LAN du PC — définis API_BASE_URL=http://IP:8787" >&2
+    exit 1
   fi
 fi
 
@@ -81,17 +81,21 @@ if [[ "$RESOLVED" != "$DEVICE" ]]; then
 fi
 DEVICE="$RESOLVED"
 
-if [[ "$API_BASE_URL" == https://* ]] && [[ "$API_BASE_URL" != *127.0.0.1* ]] && [[ "$API_BASE_URL" != *localhost* ]]; then
-  echo "==> API distante ($API_BASE_URL) — pas de adb reverse local"
+# LAN / HTTPS : pas de adb reverse (127.0.0.1 sur le phone ≠ PC)
+if [[ "$API_BASE_URL" == https://* ]] || [[ "$API_BASE_URL" == *"192.168."* ]] || [[ "$API_BASE_URL" == *"10."* ]]; then
+  echo "==> API $API_BASE_URL — pas de adb reverse (réseau / distant)"
   adb -s "$DEVICE" reverse --remove-all >/dev/null 2>&1 || true
 else
-  echo "==> adb reverse tcp:8787 + tcp:5173…"
+  echo "==> adb reverse tcp:8787 + tcp:5173 (émulateur / cas spécial)…"
   adb -s "$DEVICE" reverse tcp:8787 tcp:8787 || true
   adb -s "$DEVICE" reverse tcp:5173 tcp:5173 || true
 fi
+
+# Efface un éventuel override prefs 127.0.0.1 (ancienne UI debug)
+adb -s "$DEVICE" shell "run-as ovh.delhomme.ytmusic sh -c 'rm -f shared_prefs/ytm_api.xml' 2>/dev/null" || true
 
 echo "==> Install…"
 adb -s "$DEVICE" install -r "$APK"
 echo "==> Launch…"
 adb -s "$DEVICE" shell am start -n ovh.delhomme.ytmusic/.MainActivity
-echo "OK — app Kotlin native installée sur $DEVICE"
+echo "OK — app Kotlin native installée sur $DEVICE (API=$API_BASE_URL)"
