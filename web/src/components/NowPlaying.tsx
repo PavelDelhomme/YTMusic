@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { ListMusic, Mic2, MoreVertical, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles } from 'lucide-react';
-import { api, artistNames, thumb, type Track } from '../api';
+import { api, artistNames, getToken, thumb, type Track } from '../api';
 import { usePlayer } from '../store/player';
 import { useItemActions } from '../store/itemActions';
 import { CoverImage } from './CoverImage';
@@ -12,6 +12,9 @@ export type NowPlayingTab = 'queue' | 'lyrics' | 'related';
 
 const QUEUE_PAGE = 24;
 const QUEUE_MAX = 100;
+
+/** Mode Titre/Vidéo pour la session navigateur (survît au repli NP ; reset au reload). */
+let sessionMediaMode: 'cover' | 'video' = 'cover';
 
 type LyricLine = { t: number; text: string };
 
@@ -166,16 +169,28 @@ export function NowPlaying({
   const cycleRepeat = usePlayer((s) => s.cycleRepeat);
   const topUpAutoplay = usePlayer((s) => s.topUpAutoplay);
   const openActions = useItemActions((s) => s.open);
+  const audioEl = usePlayer((s) => s.audioEl);
+  const isPlaying = usePlayer((s) => s.isPlaying);
   const [tab, setTab] = useState<NowPlayingTab>(initialTab);
   const [lyricsText, setLyricsText] = useState<string | null>(null);
   const [lyricsTimed, setLyricsTimed] = useState<{ startMs: number; text: string }[] | null>(null);
   const [lyricsLoading, setLyricsLoading] = useState(false);
   const [queueVisible, setQueueVisible] = useState(QUEUE_PAGE);
   const [saveOpen, setSaveOpen] = useState(false);
+  const [mediaMode, setMediaMode] = useState<'cover' | 'video'>(sessionMediaMode);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoLoading, setVideoLoading] = useState(false);
+  const [videoError, setVideoError] = useState<string | null>(null);
   const navigate = useNavigate();
   const queueScrollRef = useRef<HTMLDivElement>(null);
   const coverRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const touchRef = useRef<{ x: number; y: number; atTop: boolean } | null>(null);
+
+  const setMode = (mode: 'cover' | 'video') => {
+    sessionMediaMode = mode;
+    setMediaMode(mode);
+  };
 
   useEffect(() => {
     if (open) setTab(initialTab);
@@ -232,6 +247,88 @@ export function NowPlaying({
       cancelled = true;
     };
   }, [open, tab, current?.id]);
+
+  // Charge l’URL vidéo seulement en mode Vidéo (économe : rien en mode Titre)
+  useEffect(() => {
+    if (!open || mediaMode !== 'video' || !current?.id) {
+      setVideoUrl(null);
+      setVideoError(null);
+      setVideoLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setVideoLoading(true);
+    setVideoError(null);
+    setVideoUrl(null);
+    // Warm resolve + URL proxy stable (évite 403 googlevideo côté navigateur)
+    void api
+      .streamUrl(current.id, 'video')
+      .then((r) => {
+        if (cancelled) return;
+        const tok = getToken();
+        // Toujours proxy API : googlevideo direct = 403 hors IP du resolve
+        setVideoUrl(
+          `/api/stream/${current.id}?type=video${
+            tok ? `&access_token=${encodeURIComponent(tok)}` : ''
+          }`,
+        );
+        void r; // warm déjà fait via streamUrl
+      })
+      .catch((e) => {
+        if (!cancelled) setVideoError(String(e?.message || e || 'Vidéo indisponible'));
+      })
+      .finally(() => {
+        if (!cancelled) setVideoLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, mediaMode, current?.id]);
+
+  // Sync image+son : vidéo muette calée sur l’audio (pause / seek inclus)
+  useEffect(() => {
+    if (mediaMode !== 'video' || !videoRef.current || !audioEl) return;
+    const v = videoRef.current;
+    v.muted = true;
+    const sync = () => {
+      if (!Number.isFinite(audioEl.currentTime)) return;
+      if (Math.abs(v.currentTime - audioEl.currentTime) > 0.35) {
+        try {
+          v.currentTime = audioEl.currentTime;
+        } catch {
+          /* ignore seek race */
+        }
+      }
+      if (audioEl.paused || audioEl.ended) {
+        if (!v.paused) v.pause();
+      } else if (v.paused) {
+        void v.play().catch(() => {});
+      }
+    };
+    sync();
+    const onPlay = () => void v.play().catch(() => {});
+    const onPause = () => v.pause();
+    const onSeek = () => {
+      try {
+        v.currentTime = audioEl.currentTime;
+      } catch {
+        /* */
+      }
+    };
+    audioEl.addEventListener('play', onPlay);
+    audioEl.addEventListener('pause', onPause);
+    audioEl.addEventListener('seeked', onSeek);
+    audioEl.addEventListener('timeupdate', sync);
+    const iv = window.setInterval(sync, 500);
+    return () => {
+      audioEl.removeEventListener('play', onPlay);
+      audioEl.removeEventListener('pause', onPause);
+      audioEl.removeEventListener('seeked', onSeek);
+      audioEl.removeEventListener('timeupdate', sync);
+      window.clearInterval(iv);
+      v.pause();
+    };
+  }, [mediaMode, audioEl, videoUrl, isPlaying]);
 
   if (!open || !current) return null;
 
@@ -309,8 +406,63 @@ export function NowPlaying({
       )}
       <div className="relative mx-auto grid min-h-0 w-full max-w-[1800px] flex-1 grid-cols-1 gap-3 overflow-hidden px-2 pb-[100px] pt-3 sm:px-4 md:grid-cols-[minmax(260px,0.85fr)_minmax(420px,1.25fr)] md:gap-8 md:px-6 lg:grid-cols-[minmax(280px,0.75fr)_minmax(520px,1.35fr)] lg:gap-10 lg:px-10 xl:px-14">
         <div ref={coverRef} className="flex min-h-0 flex-col items-center justify-center overflow-hidden">
+          <div className="mb-4 flex rounded-full bg-[#1d1d1d] p-1 text-xs font-medium">
+            <button
+              type="button"
+              onClick={() => setMode('cover')}
+              className={`rounded-full px-5 py-1.5 transition ${
+                mediaMode === 'cover' ? 'bg-white/15 text-white' : 'text-yt-muted hover:text-white'
+              }`}
+            >
+              Titre
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('video')}
+              className={`rounded-full px-5 py-1.5 transition ${
+                mediaMode === 'video' ? 'bg-white/15 text-white' : 'text-yt-muted hover:text-white'
+              }`}
+            >
+              Vidéo
+            </button>
+          </div>
           <div className="relative aspect-square w-full max-w-[min(88vw,520px)] overflow-hidden rounded-md bg-yt-elevated shadow-[0_20px_60px_rgba(0,0,0,0.65)] lg:max-w-[min(42vw,560px)]">
-            <CoverImage item={current} size={800} rounded="md" alt={current.title} />
+            {mediaMode === 'cover' ? (
+              <CoverImage item={current} size={800} rounded="md" alt={current.title} />
+            ) : videoLoading ? (
+              <div className="flex h-full items-center justify-center text-sm text-yt-muted">
+                Chargement vidéo…
+              </div>
+            ) : videoError ? (
+              <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-sm text-yt-muted">
+                <CoverImage item={current} size={400} rounded="md" alt={current.title} />
+                <p>{videoError}</p>
+              </div>
+            ) : videoUrl ? (
+              <video
+                ref={videoRef}
+                key={videoUrl}
+                src={videoUrl}
+                className="h-full w-full object-contain bg-black"
+                playsInline
+                muted
+                preload="metadata"
+                onLoadedMetadata={() => {
+                  const v = videoRef.current;
+                  const a = usePlayer.getState().audioEl;
+                  if (v && a && Number.isFinite(a.currentTime)) {
+                    try {
+                      v.currentTime = a.currentTime;
+                    } catch {
+                      /* */
+                    }
+                    if (!a.paused) void v.play().catch(() => {});
+                  }
+                }}
+              />
+            ) : (
+              <CoverImage item={current} size={800} rounded="md" alt={current.title} />
+            )}
           </div>
         </div>
 

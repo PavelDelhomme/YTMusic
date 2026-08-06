@@ -219,11 +219,35 @@ fun YtMusicAppContent(
             ctrl.autoFillFetcher = { seedId ->
                 fetchAutoplayTracksFast(container.api, seedId)
             }
+            ctrl.onPersistLocal = { snap ->
+                container.localPlayback.save(
+                    ovh.delhomme.ytmusic.data.LocalPlaybackStore.Snapshot(
+                        queue = snap.queue,
+                        queueIndex = snap.queueIndex,
+                        positionMs = snap.positionMs,
+                        userQueueEnd = snap.userQueueEnd,
+                        queueTitle = snap.queueTitle,
+                        wasPlaying = snap.wasPlaying,
+                    ),
+                )
+            }
         }
     }
     DisposableEffect(player) {
         player.connect()
-        onDispose { player.release() }
+        onDispose {
+            player.flushPersist()
+            player.release()
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, player) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) player.flushPersist()
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
 
     // Clic notification → ouvrir le lecteur (singleTask / onNewIntent) + QR login
@@ -495,7 +519,19 @@ private fun MainTabs(
         if (!sessionHydrated) {
             sessionHydrated = true
             if (!container.receiveRemoteSync()) {
-                // Lectures indépendantes : garder la file locale, pas de pull distant.
+                // Lectures indépendantes : restaurer file locale (survit force-stop)
+                val local = container.localPlayback.load()
+                if (local != null && local.queue.isNotEmpty()) {
+                    suppressSessionPublishUntil = System.currentTimeMillis() + 8_000L
+                    player.restoreQueue(
+                        tracks = local.queue,
+                        startIndex = local.queueIndex,
+                        positionMs = local.positionMs,
+                        autoplay = false, // ne pas auto-relancer après kill
+                        title = local.queueTitle,
+                        userQueueEnd = local.userQueueEnd,
+                    )
+                }
             } else runCatching {
                 container.ensureFreshToken()
                 val snap = container.api.session()

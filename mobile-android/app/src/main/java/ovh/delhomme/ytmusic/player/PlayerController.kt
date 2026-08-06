@@ -912,6 +912,35 @@ class PlayerController(
         }
     }
 
+    private var lastPersistAt = 0L
+
+    private fun persistLocalSnapshot() {
+        val now = System.currentTimeMillis()
+        if (now - lastPersistAt < 1_200L) return
+        lastPersistAt = now
+        val ui = _state.value
+        val queue = ui.queue.ifEmpty { PlaybackService.Holder.queue }
+        if (queue.isEmpty()) return
+        onPersistLocal?.invoke(
+            LocalPlaybackSnapshot(
+                queue = queue,
+                queueIndex = ui.queueIndex,
+                positionMs = ui.positionMs,
+                userQueueEnd = ui.userQueueEnd,
+                queueTitle = ui.queueTitle,
+                wasPlaying = ui.playing,
+            ),
+        )
+    }
+
+    /** Branché depuis MainActivity → SharedPreferences (survit force-stop). */
+    var onPersistLocal: ((LocalPlaybackSnapshot) -> Unit)? = null
+
+    fun flushPersist() {
+        lastPersistAt = 0L
+        persistLocalSnapshot()
+    }
+
     private fun syncFrom(player: Player) {
         val queue = PlaybackService.Holder.queue
         val idx = player.currentMediaItemIndex.coerceAtLeast(0)
@@ -944,5 +973,15 @@ class PlayerController(
             sourceKind = sourceKind,
         )
         if (idx in queue.indices) PlaybackService.Holder.index = idx
+        persistLocalSnapshot()
     }
 }
+
+data class LocalPlaybackSnapshot(
+    val queue: List<TrackDto>,
+    val queueIndex: Int,
+    val positionMs: Long,
+    val userQueueEnd: Int,
+    val queueTitle: String,
+    val wasPlaying: Boolean,
+)
