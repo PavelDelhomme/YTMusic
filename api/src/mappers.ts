@@ -178,6 +178,9 @@ export function isJunkArtistName(name: string) {
     !name ||
     name === '•' ||
     name === '·' ||
+    // Handle / pseudo YouTube collé comme « artiste »
+    /^@[\w.-]+$/i.test(name.trim()) ||
+    /^profile$/i.test(name.trim()) ||
     // « Various Artists » est un vrai libellé YTM — ne pas le jeter (sinon UI → « Artiste »)
     /^(song|album|playlist|video|ep|single|artist|artiste|inconnu|unknown|n\/a|va|divers)$/i.test(
       name,
@@ -197,6 +200,73 @@ export function isJunkArtistName(name: string) {
     /views?/i.test(name) ||
     /monthly audience/i.test(name)
   );
+}
+
+/**
+ * Écarte les fausses « fiches artiste » YT :
+ * chaînes perso nommées comme un titre de chanson (@handle / Profile en sous-titre).
+ */
+export function isPlausibleArtistEntity(item: {
+  type?: string;
+  title?: string;
+  id?: string;
+  artists?: { name?: string }[];
+}): boolean {
+  if (item.type && item.type !== 'artist') return true;
+  const subs = (item.artists || [])
+    .map((a) => String(a?.name || '').trim())
+    .filter(Boolean);
+  if (subs.some((n) => isJunkArtistName(n) || /^@/.test(n) || /^profile$/i.test(n))) {
+    return false;
+  }
+  // Sous-titre typique d’une chaîne non-artiste YTM
+  const blob = subs.join(' ').toLowerCase();
+  if (/\bprofile\b/.test(blob) && subs.length <= 2) return false;
+  return true;
+}
+
+/** Détecte @handle / « Profile » dans le payload Innertube brut (avant sanitization). */
+export function itemHasYoutubeHandleBadge(item: any): boolean {
+  if (!item || typeof item !== 'object') return false;
+  const texts: string[] = [];
+  const walk = (x: unknown, depth = 0) => {
+    if (x == null || depth > 6) return;
+    if (typeof x === 'string') {
+      texts.push(x);
+      return;
+    }
+    if (Array.isArray(x)) {
+      for (const v of x.slice(0, 40)) walk(v, depth + 1);
+      return;
+    }
+    if (typeof x === 'object') {
+      const o = x as Record<string, unknown>;
+      if (o.text != null) texts.push(String(o.text));
+      if (o.name != null) texts.push(String(o.name));
+      for (const k of [
+        'runs',
+        'subtitle',
+        'second_subtitle',
+        'flex_columns',
+        'artists',
+        'author',
+        'title',
+        'strapline',
+        'byline',
+      ]) {
+        if (k in o) walk(o[k], depth + 1);
+      }
+    }
+  };
+  walk(item.subtitle);
+  walk(item.second_subtitle);
+  walk(item.flex_columns);
+  walk(item.artists);
+  walk(item.author);
+  walk(item.strapline);
+  walk(item.byline);
+  const blob = texts.join(' ');
+  return /@[A-Za-z0-9._-]{2,}/.test(blob) || /\bProfile\b/.test(blob);
 }
 
 /** Écarte le bruit Wikipedia / URLs / pavés collés dans les headers album. */
@@ -647,6 +717,16 @@ export function mapListItem(item: any, fallbackThumbs?: Thumb[]): Track | null {
   if (type === 'artist' && !artists.length) {
     artists = [{ name: title, id: String(id) }];
   }
+  // Chaîne YT @handle / Profile présentée comme artiste (ex. « Welcome to the internet »)
+  if (type === 'artist' && itemHasYoutubeHandleBadge(item)) {
+    return null;
+  }
+  if (
+    type === 'artist' &&
+    !isPlausibleArtistEntity({ type, title, id: String(id), artists })
+  ) {
+    return null;
+  }
   if (title && title !== 'Sans titre' && title !== 'Artiste') {
     title = stripRedundantArtistSuffix(title, artists) || title;
   }
@@ -723,6 +803,15 @@ export function mapTwoRowItem(item: any, fallbackThumbs?: Thumb[]): Track | null
   let artists = artistsFrom(item);
   if (type === 'artist' && !artists.length) {
     artists = [{ name: title, id: String(id) }];
+  }
+  if (type === 'artist' && itemHasYoutubeHandleBadge(item)) {
+    return null;
+  }
+  if (
+    type === 'artist' &&
+    !isPlausibleArtistEntity({ type, title, id: String(id), artists })
+  ) {
+    return null;
   }
   const finalTitle =
     title !== 'Sans titre' ? stripRedundantArtistSuffix(title, artists) || title : title;
