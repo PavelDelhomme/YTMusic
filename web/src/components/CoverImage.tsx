@@ -78,9 +78,11 @@ export function CoverImage({ item, size = 200, className = '', rounded = 'md', a
           decoding="async"
           onError={advance}
           onLoad={(e) => {
-            // maxresdefault YouTube renvoie parfois un placeholder 120×90 (pas une vraie erreur HTTP)
+            // Placeholder YouTube / image trop petite → candidat suivant
             const img = e.currentTarget;
-            if (img.naturalWidth > 0 && img.naturalWidth < 200) advance();
+            if (img.naturalWidth > 0 && img.naturalWidth < 120 && idx + 1 < candidates.length) {
+              advance();
+            }
           }}
         />
       ) : null}
