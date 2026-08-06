@@ -104,15 +104,12 @@ export function wireMediaSession() {
     if (typeof details.seekTime === 'number') usePlayer.getState().seek(details.seekTime);
   });
   setMediaHandler('seekbackward', (details) => {
-    const p = usePlayer.getState();
     const off = details.seekOffset ?? 10;
-    p.seek(Math.max(0, p.progress - off));
+    usePlayer.getState().seekBy(-off);
   });
   setMediaHandler('seekforward', (details) => {
-    const p = usePlayer.getState();
     const off = details.seekOffset ?? 10;
-    const max = p.duration > 0 ? p.duration : p.progress + off;
-    p.seek(Math.min(max, p.progress + off));
+    usePlayer.getState().seekBy(off);
   });
 }
 
@@ -251,16 +248,20 @@ export function installMediaKeys(): () => void {
     const key = e.key;
     const code = e.code;
 
-    // —— Volume (↑ / ↓) — même hors lecture ——
-    if (!e.ctrlKey && !e.altKey && !e.shiftKey && (key === 'ArrowUp' || code === 'ArrowUp' || key === 'ArrowDown' || code === 'ArrowDown')) {
+    // —— Volume (↑ / ↓ ou + / −) — même hors lecture ——
+    const volUp =
+      (!e.ctrlKey && !e.altKey && !e.shiftKey && (key === 'ArrowUp' || code === 'ArrowUp')) ||
+      (!e.ctrlKey && !e.altKey && (key === '+' || key === '=' || code === 'Equal' || code === 'NumpadAdd'));
+    const volDown =
+      (!e.ctrlKey && !e.altKey && !e.shiftKey && (key === 'ArrowDown' || code === 'ArrowDown')) ||
+      (!e.ctrlKey && !e.altKey && (key === '-' || key === '_' || code === 'Minus' || code === 'NumpadSubtract'));
+    if (volUp || volDown) {
       e.preventDefault();
       e.stopPropagation();
       const p = usePlayer.getState();
       const step = 0.05;
-      const next = Math.max(
-        0,
-        Math.min(1, Math.round((p.volume + (key === 'ArrowUp' || code === 'ArrowUp' ? step : -step)) * 100) / 100),
-      );
+      const base = p.volume > 0.001 ? p.volume : 0;
+      const next = Math.max(0, Math.min(1, Math.round((base + (volUp ? step : -step)) * 100) / 100));
       p.setVolume(next);
       return;
     }
@@ -313,36 +314,30 @@ export function installMediaKeys(): () => void {
       return;
     }
 
-    // Seek J / L / ← / → (flèches seules = ±5 s)
+    // Seek J / L / ← / → — relatif à audio.currentTime (progress Zustand est throttle → faux « reset »)
     if (!e.ctrlKey && !e.altKey && !e.shiftKey) {
       if (key === 'j' || key === 'J') {
         e.preventDefault();
         e.stopPropagation();
-        const p = usePlayer.getState();
-        p.seek(Math.max(0, p.progress - 10));
+        usePlayer.getState().seekBy(-10);
         return;
       }
       if (key === 'l' || key === 'L') {
         e.preventDefault();
         e.stopPropagation();
-        const p = usePlayer.getState();
-        const max = p.duration > 0 ? p.duration : p.progress + 10;
-        p.seek(Math.min(max, p.progress + 10));
+        usePlayer.getState().seekBy(10);
         return;
       }
       if (key === 'ArrowLeft' || code === 'ArrowLeft') {
         e.preventDefault();
         e.stopPropagation();
-        const p = usePlayer.getState();
-        p.seek(Math.max(0, p.progress - 5));
+        usePlayer.getState().seekBy(-5);
         return;
       }
       if (key === 'ArrowRight' || code === 'ArrowRight') {
         e.preventDefault();
         e.stopPropagation();
-        const p = usePlayer.getState();
-        const max = p.duration > 0 ? p.duration : p.progress + 5;
-        p.seek(Math.min(max, p.progress + 5));
+        usePlayer.getState().seekBy(5);
         return;
       }
     }
