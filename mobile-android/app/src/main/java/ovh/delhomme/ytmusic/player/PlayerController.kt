@@ -211,10 +211,8 @@ class PlayerController(
             userQueueEnd = trimmed.size
             PlaybackService.Holder.queue = trimmed
             val c = player()
-            if (c != null && trimmed.isNotEmpty()) {
-                val idx = c.currentMediaItemIndex.coerceIn(0, trimmed.lastIndex)
-                c.setMediaItems(trimmed.map { mediaItem(it) }, idx, c.currentPosition)
-                c.prepare()
+            if (c != null && c.mediaItemCount > end) {
+                c.removeMediaItems(end, c.mediaItemCount)
                 syncFrom(c)
             } else {
                 _state.value = _state.value.copy(
@@ -224,6 +222,7 @@ class PlayerController(
                     autoplaySuggestions = false,
                 )
             }
+            _state.value = _state.value.copy(autoplaySuggestions = false)
             return
         }
         _state.value = _state.value.copy(autoplaySuggestions = true)
@@ -264,12 +263,9 @@ class PlayerController(
         userQueueEnd = trimmed.size
         PlaybackService.Holder.queue = trimmed
         val c = player() ?: PlaybackService.Holder.player
-        if (c != null && trimmed.isNotEmpty()) {
-            val idx = c.currentMediaItemIndex.coerceIn(0, trimmed.lastIndex)
-            val pos = c.currentPosition
-            c.setMediaItems(trimmed.map { mediaItem(it) }, idx, pos)
-            c.prepare()
-            if (c.playWhenReady) c.play()
+        if (c != null && c.mediaItemCount > end) {
+            // Retire seulement la queue — pas de setMediaItems/prepare (évite rebuffer du titre courant)
+            c.removeMediaItems(end, c.mediaItemCount)
             syncFrom(c)
         } else {
             _state.value = _state.value.copy(
