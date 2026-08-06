@@ -699,9 +699,10 @@ fun NowPlayingScreen(
                                             var dlProgress by remember(track.id) { mutableStateOf<Float?>(null) }
                                             var dlDone by remember(track.id) { mutableStateOf(false) }
                                             LaunchedEffect(track.id) {
-                                                dlDone = runCatching {
-                                                    container.api.library().downloaded.contains(track.id)
-                                                }.getOrDefault(false)
+                                                dlDone = container.offlineStore.has(track.id) ||
+                                                    runCatching {
+                                                        container.api.library().downloaded.contains(track.id)
+                                                    }.getOrDefault(false)
                                             }
                                             Row(
                                                 modifier = Modifier
@@ -709,30 +710,25 @@ fun NowPlayingScreen(
                                                     .background(PlayerFg.copy(alpha = 0.08f))
                                                     .clickable(enabled = dlProgress == null && !dlDone) {
                                                         scope.launch {
-                                                            dlProgress = 0.08f
-                                                            val tick = launch {
-                                                                while (true) {
-                                                                    delay(350)
-                                                                    val cur = dlProgress ?: 0.08f
-                                                                    if (cur < 0.9f) {
-                                                                        dlProgress = (cur + 0.06f).coerceAtMost(0.9f)
-                                                                    }
-                                                                }
+                                                            dlProgress = 0.02f
+                                                            runCatching {
+                                                                container.ensureFreshToken()
+                                                                container.offlineStore.download(
+                                                                    track,
+                                                                    container.remoteStreamUrl(track.id),
+                                                                ) { p -> dlProgress = p.coerceIn(0.02f, 0.99f) }
+                                                            }.onSuccess { r ->
+                                                                r.getOrThrow()
+                                                                dlProgress = 1f
+                                                                dlDone = true
+                                                                runCatching { container.api.download(track.id) }
+                                                                delay(200)
+                                                                dlProgress = null
+                                                                Toast.makeText(context, "Téléchargé — hors-ligne OK", Toast.LENGTH_SHORT).show()
+                                                            }.onFailure {
+                                                                dlProgress = null
+                                                                Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
                                                             }
-                                                            runCatching { container.api.download(track.id) }
-                                                                .onSuccess {
-                                                                    tick.cancel()
-                                                                    dlProgress = 1f
-                                                                    dlDone = true
-                                                                    delay(200)
-                                                                    dlProgress = null
-                                                                    Toast.makeText(context, "Téléchargé", Toast.LENGTH_SHORT).show()
-                                                                }
-                                                                .onFailure {
-                                                                    tick.cancel()
-                                                                    dlProgress = null
-                                                                    Toast.makeText(context, it.message ?: "Échec", Toast.LENGTH_SHORT).show()
-                                                                }
                                                         }
                                                     }
                                                     .padding(horizontal = 10.dp, vertical = 8.dp),
