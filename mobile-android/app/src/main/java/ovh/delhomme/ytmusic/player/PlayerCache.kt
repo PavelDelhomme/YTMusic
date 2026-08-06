@@ -24,8 +24,8 @@ import java.util.concurrent.atomic.AtomicInteger
 @OptIn(UnstableApi::class)
 object PlayerCache {
     private const val CACHE_DIR = "exo-media"
-    private const val CACHE_BYTES = 160L * 1024L * 1024L // 160 Mo SimpleCache audio
-    private const val PREFETCH_PARALLEL = 2
+    private const val CACHE_BYTES = 360L * 1024L * 1024L // 360 Mo : suite préchargée + marge
+    private const val PREFETCH_PARALLEL = 3
 
     @Volatile
     private var simpleCache: SimpleCache? = null

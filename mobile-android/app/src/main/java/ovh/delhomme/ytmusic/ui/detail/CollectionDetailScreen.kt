@@ -307,7 +307,7 @@ fun CollectionDetailScreen(
             base,
             tracks.map { it.id },
             0,
-            ahead = 4,
+            ahead = 8,
             behind = 0,
         )
     }
