@@ -177,6 +177,8 @@ fun NowPlayingScreen(
     onOpenArtist: ((id: String?, name: String) -> Unit)? = null,
     /** Incrémenté au clic notif → recentre sur la cover / contrôles. */
     focusPlayerToken: Int = 0,
+    /** Sheet Now Playing visible (sinon pause Exo vidéo). */
+    sheetVisible: Boolean = true,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -633,6 +635,7 @@ fun NowPlayingScreen(
                                             streamUrl = container.videoStreamUrl(track.id),
                                             positionMs = ui.positionMs,
                                             playing = ui.playing,
+                                            active = sheetVisible && SessionMediaMode.video,
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .height(260.dp)

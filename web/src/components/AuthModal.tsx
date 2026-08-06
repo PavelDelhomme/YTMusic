@@ -28,11 +28,10 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
   const refresh = useLibrary((s) => s.refresh);
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState(() =>
-    isProdHost ? '' : import.meta.env.VITE_DEV_EMAIL || '',
+    import.meta.env.DEV && !isProdHost ? String(import.meta.env.VITE_DEV_EMAIL || '') : '',
   );
-  const [password, setPassword] = useState(() =>
-    isProdHost ? '' : import.meta.env.VITE_DEV_PASSWORD || '',
-  );
+  // Jamais de mot de passe dans le bundle prod (VITE_* est public au build)
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState('');
   const [totp, setTotp] = useState('');

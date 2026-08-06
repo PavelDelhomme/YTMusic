@@ -50,6 +50,7 @@ fun SyncedVideoSurface(
     streamUrl: String,
     positionMs: Long,
     playing: Boolean,
+    active: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -92,13 +93,17 @@ fun SyncedVideoSurface(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY) {
                     ready = true
-                    Log.i(TAG, "video ready url=${streamUrl.take(80)}")
+                    if (ovh.delhomme.ytmusic.BuildConfig.DEBUG) {
+                        Log.i(TAG, "video ready url=${streamUrl.take(80)}")
+                    }
                 }
             }
             override fun onPlayerError(e: PlaybackException) {
                 val msg = e.message ?: "Vidéo indisponible"
                 error = msg
-                Log.e(TAG, "video error code=${e.errorCode} $msg url=${streamUrl.take(120)}", e)
+                if (ovh.delhomme.ytmusic.BuildConfig.DEBUG) {
+                    Log.e(TAG, "video error code=${e.errorCode} $msg url=${streamUrl.take(120)}", e)
+                }
             }
         }
         exo.addListener(listener)
@@ -108,7 +113,11 @@ fun SyncedVideoSurface(
         }
     }
 
-    LaunchedEffect(streamUrl) {
+    LaunchedEffect(streamUrl, active) {
+        if (!active) {
+            exo.pause()
+            return@LaunchedEffect
+        }
         while (isActive) {
             val target = latestPos.coerceAtLeast(0L)
             if (kotlin.math.abs(exo.currentPosition - target) > 400L) {
