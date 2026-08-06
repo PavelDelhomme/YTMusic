@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type TouchEvent } from 'react';
-import { ListMusic, Mic2, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles } from 'lucide-react';
-import { api, thumb, type Track } from '../api';
+import { ListMusic, Mic2, MoreVertical, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles } from 'lucide-react';
+import { api, artistNames, thumb, type Track } from '../api';
 import { usePlayer } from '../store/player';
+import { useItemActions } from '../store/itemActions';
 import { CoverImage } from './CoverImage';
 import { TrackRow } from './TrackRow';
 import { SaveQueueSheet } from './SaveQueueSheet';
@@ -165,6 +166,7 @@ export function NowPlaying({
   const topUpAutoplay = usePlayer((s) => s.topUpAutoplay);
   const audioEl = usePlayer((s) => s.audioEl);
   const isPlaying = usePlayer((s) => s.isPlaying);
+  const openActions = useItemActions((s) => s.open);
   const [tab, setTab] = useState<NowPlayingTab>(initialTab);
   const [mediaMode, setMediaMode] = useState<'cover' | 'video'>('cover');
   const [lyricsText, setLyricsText] = useState<string | null>(null);
@@ -677,15 +679,32 @@ export function NowPlaying({
               </div>
             )}
 
-            {tab === 'lyrics' &&
-              (lyricsLoading ? (
-                <div className="px-3 py-5 text-sm text-yt-muted">Chargement des paroles…</div>
-              ) : (
-                <SyncedLyrics
-                  text={lyricsText}
-                  timed={lyricsTimed}
-                />
-              ))}
+            {tab === 'lyrics' && (
+              <div>
+                <div className="mb-2 flex items-start justify-between gap-2 px-1 pt-1">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="truncate font-display text-base font-semibold leading-tight" title={current.title}>
+                      {current.title}
+                    </h3>
+                    <p className="truncate text-xs text-yt-muted">{artistNames(current)}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openActions(current, { queueIndex })}
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-yt-muted hover:bg-white/10 hover:text-white"
+                    title="Plus d'options"
+                    aria-label="Plus d'options"
+                  >
+                    <MoreVertical className="h-4 w-4" />
+                  </button>
+                </div>
+                {lyricsLoading ? (
+                  <div className="px-3 py-5 text-sm text-yt-muted">Chargement des paroles…</div>
+                ) : (
+                  <SyncedLyrics text={lyricsText} timed={lyricsTimed} />
+                )}
+              </div>
+            )}
 
             {tab === 'related' && (
               <div className="space-y-7 pt-1">
