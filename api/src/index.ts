@@ -2,13 +2,17 @@ import { config as loadEnv } from 'dotenv';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { installConsoleTimestamps } from './log.js';
+
+installConsoleTimestamps();
+process.env.DOTENV_CONFIG_QUIET = 'true';
 
 const __envDir = dirname(fileURLToPath(import.meta.url));
 const rootEnv = join(__envDir, '..', '..', '.env');
 const serverEnv = join(__envDir, '..', '.env');
-if (existsSync(rootEnv)) loadEnv({ path: rootEnv });
-else if (existsSync(serverEnv)) loadEnv({ path: serverEnv });
-else loadEnv();
+if (existsSync(rootEnv)) loadEnv({ path: rootEnv, quiet: true });
+else if (existsSync(serverEnv)) loadEnv({ path: serverEnv, quiet: true });
+else loadEnv({ quiet: true });
 
 import express from 'express';
 import cors from 'cors';
@@ -36,6 +40,7 @@ import {
   getMoodCategory,
   resetYT,
 } from './yt.js';
+import { identifyAudio } from './identify.js';
 import {
   getFullLibrary,
   toggleLikeTrack,
@@ -262,7 +267,7 @@ app.use(
 );
 /** Upload APK binaire — avant express.json pour ne pas consommer le flux. */
 app.use('/api/admin/apk/upload', express.raw({ type: () => true, limit: '120mb' }));
-app.use(express.json({ limit: '4mb' }));
+app.use(express.json({ limit: '6mb' }));
 app.use(cookieParser());
 app.use(authOptional);
 
@@ -292,6 +297,13 @@ app.get('/api/health', (_req, res) => {
       configured: ytCookies.configured,
       source: ytCookies.source,
       hint: ytCookies.hint,
+    },
+    /** Contrat produit : pas de pubs YTM, pas de YouTube Premium requis. */
+    playback: {
+      ads: false,
+      youtubePremiumRequired: false,
+      maxBitrateHintKbps: ytCookies.configured ? 256 : 160,
+      note: 'Stream direct googlevideo/yt-dlp — hors player officiel YouTube (donc sans pubs). Premium non requis.',
     },
     streamUpstream: resolveStreamUpstream(),
   });
@@ -436,18 +448,18 @@ app.get('/verify-email', (req, res) => {
   if (!token) {
     res.status(400).type('html').send(`<!DOCTYPE html>
 <html lang="fr"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Lien invalide — YTMusic</title>
+<title>Lien invalide — PLM</title>
 <style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;background:#030303;color:#fff}
 .card{max-width:420px;margin:24px;padding:28px;border-radius:16px;border:1px solid #222;background:#121212}
 .err{color:#f87171}a{color:#ff0033}</style></head>
 <body><div class="card"><h1 class="err">Lien invalide</h1><p>Aucun jeton dans l’URL.</p>
-<p><a href="/">Retour YTMusic</a></p></div></body></html>`);
+<p><a href="/">Retour PLM</a></p></div></body></html>`);
     return;
   }
 
   res.type('html').send(`<!DOCTYPE html>
 <html lang="fr"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Validation email — YTMusic</title>
+<title>Validation email — PLM</title>
 <style>
   body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
     font-family:system-ui,sans-serif;background:#030303;color:#fff}
@@ -463,7 +475,7 @@ app.get('/verify-email', (req, res) => {
   <p id="msg">Confirmation de ton adresse email.</p>
   <button id="btn" type="button" style="display:none">Valider mon email</button>
   <p class="muted" id="hint"></p>
-  <p style="margin-top:20px"><a href="/">Retour YTMusic</a></p>
+  <p style="margin-top:20px"><a href="/">Retour PLM</a></p>
 </div>
 <script>
 (function () {
@@ -1013,7 +1025,7 @@ app.get('/api/deploy/apk', (req, res) => {
     return;
   }
   res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-  res.setHeader('Content-Disposition', 'attachment; filename="ytmusic.apk"');
+  res.setHeader('Content-Disposition', 'attachment; filename="plm.apk"');
   res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path);
 });
@@ -1208,6 +1220,34 @@ app.post('/api/search/history', accountRequired, (req, res) => {
   });
   res.json({ ok: true, history: listSearchHistory(req.userId!, 40) });
 });
+
+/** Reconnaissance titre / fredonnement (AudD) → résultats recherche. */
+app.post(
+  '/api/search/identify',
+  accountRequired,
+  rateLimit({ windowMs: 60_000, max: 8 }),
+  async (req, res) => {
+    try {
+      const audioBase64 = String(req.body?.audioBase64 || req.body?.audio || '');
+      const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType : undefined;
+      const mode = req.body?.mode === 'hum' ? 'hum' : 'listen';
+      const result = await identifyAudio({
+        audioBase64,
+        mimeType,
+        mode,
+        userId: req.userId!,
+      });
+      if (!result.ok) {
+        res.status(422).json(result);
+        return;
+      }
+      if (result.query) addSearchHistory(req.userId!, result.query);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ ok: false, error: String(err) });
+    }
+  },
+);
 
 app.get('/api/track/:id', accountRequired, async (req, res) => {
   try {
@@ -2028,7 +2068,7 @@ server.listen(PORT, '0.0.0.0', () => {
   } catch (err) {
     console.error('[auth] seed sync', err);
   }
-  console.log(`YTMusic API → http://localhost:${PORT}`);
-  console.log(`YTMusic LAN → http://0.0.0.0:${PORT} (toutes interfaces)`);
-  console.log(`YTMusic WS  → ws://localhost:${PORT}/ws`);
+  console.log(`PLM API → http://localhost:${PORT}`);
+  console.log(`PLM LAN → http://0.0.0.0:${PORT} (toutes interfaces)`);
+  console.log(`PLM WS  → ws://localhost:${PORT}/ws`);
 });

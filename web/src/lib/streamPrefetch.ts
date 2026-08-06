@@ -78,21 +78,6 @@ export function markStreamFailure(reason?: string): void {
   }
 }
 
-function noteFetchResult(res: Response | null, err?: unknown): void {
-  if (err) {
-    markStreamFailure(err instanceof Error ? err.message : 'network');
-    return;
-  }
-  if (!res) return;
-  if (res.ok || res.status === 206) {
-    markStreamOk();
-    return;
-  }
-  if (res.status === 0 || res.status === 502 || res.status === 503 || res.status === 504) {
-    markStreamFailure(`HTTP ${res.status}`);
-  }
-}
-
 /** Prefetch arrière-plan : ne déclenche PAS le circuit-breaker (évite spam 502). */
 function notePrefetchResult(res: Response | null, _err?: unknown): void {
   if (!res) return;
@@ -144,14 +129,15 @@ export async function warmFormat(id: string): Promise<void> {
       credentials: 'include',
       headers: await authHeaders(),
     });
-    noteFetchResult(res);
+    // Warm arrière-plan : ne pas tripper le circuit-breaker (évite pause lecture)
+    notePrefetchResult(res);
     if (res.ok) warmDone.set(id, Date.now());
     if (warmDone.size > 80) {
       const first = warmDone.keys().next().value;
       if (first) warmDone.delete(first);
     }
-  } catch (e) {
-    noteFetchResult(null, e);
+  } catch {
+    /* silence prefetch */
   } finally {
     inflightWarm.delete(id);
   }
@@ -175,15 +161,14 @@ export async function warmFormats(ids: string[]): Promise<void> {
       },
       body: JSON.stringify({ ids: need.slice(0, 16) }),
     });
-    noteFetchResult(res);
+    notePrefetchResult(res);
     if (res.ok) {
       const now = Date.now();
       for (const id of need.slice(0, 16)) warmDone.set(id, now);
     } else if (!isStreamDown()) {
       await runPool(need.slice(0, 8), WARM_CONCURRENCY, warmFormat);
     }
-  } catch (e) {
-    noteFetchResult(null, e);
+  } catch {
     // Pas de fallback individuel si l’API est down (évite N requêtes mortes)
   }
 }

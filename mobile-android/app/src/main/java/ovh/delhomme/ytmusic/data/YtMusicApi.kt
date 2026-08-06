@@ -317,6 +317,28 @@ data class ListenBody(
 )
 
 @JsonClass(generateAdapter = false)
+data class IdentifySearchBody(
+    val audioBase64: String,
+    val mimeType: String? = "audio/mp4",
+    /** `listen` = micro vers la musique · `hum` = fredonnement */
+    val mode: String = "listen",
+)
+
+@JsonClass(generateAdapter = false)
+data class IdentifySearchResponse(
+    val ok: Boolean = false,
+    val query: String? = null,
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    val score: Double? = null,
+    val provider: String? = null,
+    val search: SearchResponse? = null,
+    val error: String? = null,
+    val hint: String? = null,
+)
+
+@JsonClass(generateAdapter = false)
 data class HistoryEntityBody(
     val id: String,
     val kind: String,
@@ -624,6 +646,10 @@ interface YtMusicApi {
 
     @POST("api/search/history")
     suspend fun recordSearchHistory(@Body body: Map<String, @JvmSuppressWildcards Any?>): Map<String, Any>
+
+    /** Reconnaissance audio (écoute / fredonnement) → query + résultats. */
+    @POST("api/search/identify")
+    suspend fun identifySearch(@Body body: IdentifySearchBody): IdentifySearchResponse
 
     @GET("api/stream/{id}/url")
     suspend fun streamResolveUrl(

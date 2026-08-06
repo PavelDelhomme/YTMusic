@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Colorize YTMusic logs (style JobbingTrack)
+# Colorize PLM logs (style JobbingTrack)
 # Usage: … | bash scripts/ops/color-logs.sh
 
 RED=$'\033[1;31m'
@@ -33,6 +33,12 @@ while IFS= read -r line || [ -n "$line" ]; do
   if [[ "$out" =~ ^\[(ytmusic-[a-zA-Z0-9._-]+)\] ]]; then
     tag="${BASH_REMATCH[1]}"
     out="${MAGENTA}[${tag}]${R}${out:${#tag}+2}"
+  fi
+
+  # Horodatage [YYYY-MM-DD HH:MM:SS(.ms)]
+  if [[ "$out" =~ \[([0-9]{4}-[0-9]{2}-[0-9]{2}[^\]]*)\] ]]; then
+    ts="${BASH_REMATCH[1]}"
+    out="${out/\[$ts\]/${DIM}[$ts]${R}}"
   fi
 
   # Conteneur ytmusic-*

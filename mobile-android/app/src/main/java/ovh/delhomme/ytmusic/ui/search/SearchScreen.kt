@@ -17,16 +17,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.ui.draw.clip
@@ -34,12 +40,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import android.widget.Toast
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -136,6 +148,18 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
         _state.value = _state.value.copy(query = q, error = null)
         scheduleSuggestions()
         scheduleSearch()
+    }
+
+    fun clearQuery() {
+        job?.cancel()
+        sugJob?.cancel()
+        _state.value = _state.value.copy(
+            query = "",
+            sections = emptyList(),
+            suggestions = emptyList(),
+            error = null,
+            loading = false,
+        )
     }
 
     fun onFilter(filter: String) {
@@ -265,23 +289,83 @@ fun SearchScreen(
 ) {
     val state by vm.state.collectAsState()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val pins by container.quickAccess.pins.collectAsState(initial = emptyList())
+    val pinIds = remember(pins) { pins.map { it.id }.toHashSet() }
+    var showIdentify by remember { mutableStateOf(false) }
+    val startVoiceSearch = rememberVoiceSearchLauncher(
+        onResult = { spoken -> vm.commitSearch(spoken) },
+        onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
+    )
 
     Column(Modifier.fillMaxSize()) {
         Text(
             "Recherche",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(16.dp),
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
         )
         OutlinedTextField(
             value = state.query,
             onValueChange = vm::onQuery,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 16.dp)
+                .heightIn(max = 52.dp),
             singleLine = true,
-            placeholder = { Text("Titres, artistes, albums…") },
-            leadingIcon = { Icon(Icons.Default.Search, null) },
+            textStyle = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+            placeholder = {
+                Text(
+                    "Titres, artistes…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            leadingIcon = {
+                Icon(
+                    Icons.Default.Search,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+            },
+            trailingIcon = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (state.query.isNotEmpty()) {
+                        IconButton(
+                            onClick = vm::clearQuery,
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Effacer",
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = startVoiceSearch,
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Mic,
+                            contentDescription = "Dictée",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(
+                        onClick = { showIdentify = true },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.MusicNote,
+                            contentDescription = "Identifier",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            },
             shape = RoundedCornerShape(12.dp),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(
@@ -292,14 +376,22 @@ fun SearchScreen(
             Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             FILTERS.forEach { (id, label) ->
                 FilterChip(
                     selected = state.filter == id,
                     onClick = { vm.onFilter(id) },
-                    label = { Text(label) },
+                    label = {
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontSize = 12.sp,
+                        )
+                    },
+                    modifier = Modifier.heightIn(max = 32.dp),
+                    colors = FilterChipDefaults.filterChipColors(),
                 )
             }
         }
@@ -421,6 +513,12 @@ fun SearchScreen(
                             TrackRow(
                                 track = track,
                                 highlighted = section.title == "Meilleur résultat",
+                                pinned = track.id in pinIds,
+                                onTogglePin = {
+                                    scope.launch {
+                                        container.quickAccess.toggle(track, container.api)
+                                    }
+                                },
                                 onClick = {
                                     val q = state.query.trim()
                                     if (q.length >= 2) {
@@ -459,6 +557,17 @@ fun SearchScreen(
                 }
             }
         }
+    }
+
+    if (showIdentify) {
+        SearchIdentifySheet(
+            container = container,
+            onDismiss = { showIdentify = false },
+            onQuery = { q ->
+                showIdentify = false
+                vm.commitSearch(q)
+            },
+        )
     }
 }
 

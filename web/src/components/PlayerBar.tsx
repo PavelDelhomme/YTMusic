@@ -70,6 +70,7 @@ export function PlayerBar({
     clearPlayError,
     autoRadioLoading,
     queueHint,
+    stopAndClear,
   } = usePlayer();
   const { isLiked, toggleLike } = useLibrary();
   const openActions = useItemActions((s) => s.open);
@@ -90,6 +91,7 @@ export function PlayerBar({
   const volumeWrapRef = useRef<HTMLDivElement | null>(null);
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+  const swipeY0 = useRef<number | null>(null);
 
   const holdPrev = useHoldSeek(-1, () => {
     void prev();
@@ -281,6 +283,26 @@ export function PlayerBar({
       className="fixed bottom-0 left-0 right-0 z-50 border-t border-yt-border bg-[#0a0a0a]/95 backdrop-blur-md"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       onClick={() => expand('queue')}
+      onTouchStart={(e) => {
+        if (expanded) return;
+        swipeY0.current = e.touches[0]?.clientY ?? null;
+      }}
+      onTouchEnd={(e) => {
+        if (expanded) {
+          swipeY0.current = null;
+          return;
+        }
+        const y0 = swipeY0.current;
+        swipeY0.current = null;
+        const y1 = e.changedTouches[0]?.clientY;
+        if (y0 == null || y1 == null) return;
+        // Swipe bas sur barre réduite → tout fermer
+        if (y1 - y0 > 64) {
+          e.preventDefault();
+          stopAndClear();
+          onCollapse?.();
+        }
+      }}
     >
       {/* Seek + temps restant (même rétracté) */}
       <div className="flex items-center gap-1.5 px-2" onClick={stop} onPointerDown={stop}>

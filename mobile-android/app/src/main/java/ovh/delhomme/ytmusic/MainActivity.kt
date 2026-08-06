@@ -231,6 +231,7 @@ fun YtMusicAppContent(
                     ),
                 )
             }
+            ctrl.onClearLocal = { container.localPlayback.clear() }
         }
     }
     DisposableEffect(player) {
@@ -895,6 +896,10 @@ private fun MainTabs(
                             },
                             onSeekBy = { delta -> player.seekBy(delta) },
                             onOpen = onOpenPlayer,
+                            onDismiss = {
+                                onClosePlayer()
+                                player.stopAndClear()
+                            },
                             onSeek = { ratio ->
                                 val dur = playerUi.durationMs
                                 if (dur > 0) player.seek((ratio * dur).toLong())

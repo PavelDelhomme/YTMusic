@@ -11,7 +11,7 @@ trap cleanup INT TERM
 printf '\033[?25l'
 while true; do
   if [[ "$CLEAR" == "1" ]]; then clear; fi
-  echo "YTMusic status-watch · toutes les ${INTERVAL}s · Ctrl+C pour quitter"
+  echo "PLM status-watch · toutes les ${INTERVAL}s · Ctrl+C pour quitter"
   echo "────────────────────────────────────────────────────────"
   make -C "$ROOT" status || true
   sleep "$INTERVAL"

@@ -34,7 +34,7 @@ function installSteps(platform: Platform): { title: string; steps: string[] } {
       return {
         title: 'iPhone / iPad (Safari)',
         steps: [
-          'Ouvre YTMusic dans Safari (pas Chrome).',
+          'Ouvre PLM dans Safari (pas Chrome).',
           'Appuie sur Partager (carré avec flèche).',
           'Choisis « Sur l’écran d’accueil » → Ajouter.',
         ],
@@ -45,7 +45,7 @@ function installSteps(platform: Platform): { title: string; steps: string[] } {
         steps: [
           'Ouvre le menu ⋮ en haut à droite.',
           '« Installer l’application » ou « Ajouter à l’écran d’accueil ».',
-          'Confirme — l’icône YTMusic apparaît sur l’écran d’accueil.',
+          'Confirme — l’icône PLM apparaît sur l’écran d’accueil.',
         ],
       };
     case 'windows':
@@ -53,7 +53,7 @@ function installSteps(platform: Platform): { title: string; steps: string[] } {
         title: 'Windows (Edge / Chrome)',
         steps: [
           'Cherche l’icône ⊕ / « Installer » dans la barre d’adresse.',
-          'Ou menu ⋮ → Applications → « Installer YTMusic ».',
+          'Ou menu ⋮ → Applications → « Installer PLM ».',
           'Edge : … → Applications → Installer ce site en tant qu’application.',
         ],
       };
@@ -62,7 +62,7 @@ function installSteps(platform: Platform): { title: string; steps: string[] } {
         title: 'macOS (Chrome / Edge / Safari)',
         steps: [
           'Chrome/Edge : icône ⊕ dans la barre d’adresse → Installer.',
-          'Ou menu ⋮ → Enregistrer et partager → Installer YTMusic.',
+          'Ou menu ⋮ → Enregistrer et partager → Installer PLM.',
           'Safari : Fichier → Ajouter au Dock (macOS Sonoma+).',
         ],
       };
@@ -71,7 +71,7 @@ function installSteps(platform: Platform): { title: string; steps: string[] } {
         title: 'Linux (Chrome / Chromium / Edge)',
         steps: [
           'Icône ⊕ / Installer dans la barre d’adresse.',
-          'Ou menu ⋮ → Installer YTMusic…',
+          'Ou menu ⋮ → Installer PLM…',
           'L’app apparaît dans ton lanceur d’applications.',
         ],
       };

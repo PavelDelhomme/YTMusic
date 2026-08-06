@@ -1,6 +1,7 @@
 package ovh.delhomme.ytmusic.ui.detail
 
 import android.widget.Toast
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,6 +55,7 @@ import ovh.delhomme.ytmusic.data.FollowArtistBody
 import ovh.delhomme.ytmusic.data.TrackDto
 import ovh.delhomme.ytmusic.data.buildRadioQueue
 import ovh.delhomme.ytmusic.ui.components.MediaCover
+import ovh.delhomme.ytmusic.ui.components.PinnedBadge
 import ovh.delhomme.ytmusic.ui.components.TrackRow
 
 /** Page artiste style YouTube Music : tops, albums, singles, biblio, similaires. */
@@ -70,6 +73,8 @@ fun ArtistDetailScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val pins by container.quickAccess.pins.collectAsState(initial = emptyList())
+    val pinIds = remember(pins) { pins.map { it.id }.toHashSet() }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var name by remember { mutableStateOf("") }
@@ -171,7 +176,25 @@ fun ArtistDetailScreen(
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             cover?.let {
-                                MediaCover(it, 168.dp, circle = true)
+                                Box {
+                                    MediaCover(it, 168.dp, circle = true)
+                                    if (artistId in pinIds) {
+                                        PinnedBadge(
+                                            modifier = Modifier
+                                                .align(Alignment.TopStart)
+                                                .padding(8.dp),
+                                            size = 32.dp,
+                                            onClick = {
+                                                scope.launch {
+                                                    container.quickAccess.toggle(
+                                                        it.copy(id = artistId, type = "artist"),
+                                                        container.api,
+                                                    )
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
                                 Spacer(Modifier.height(16.dp))
                             }
                             Text(
@@ -363,6 +386,10 @@ fun ArtistDetailScreen(
                         itemsIndexed(songs.take(10), key = { i, t -> "song-${t.id}-$i" }) { index, track ->
                             TrackRow(
                                 track = track,
+                                pinned = track.id in pinIds,
+                                onTogglePin = {
+                                    scope.launch { container.quickAccess.toggle(track, container.api) }
+                                },
                                 onClick = { onPlay(songs, index) },
                                 onMore = { onMore(track) },
                                 onOpenArtist = { id, n ->
@@ -380,6 +407,10 @@ fun ArtistDetailScreen(
                             item {
                                 HorizontalShelf(
                                     items = libAlbums,
+                                    pinIds = pinIds,
+                                    onTogglePin = { t ->
+                                        scope.launch { container.quickAccess.toggle(t, container.api) }
+                                    },
                                     onOpen = onOpenDetail,
                                     onPlaySong = { onPlay(listOf(it), 0) },
                                 )
@@ -388,6 +419,10 @@ fun ArtistDetailScreen(
                         itemsIndexed(libTracks.take(8), key = { i, t -> "lib-${t.id}-$i" }) { _, track ->
                             TrackRow(
                                 track = track,
+                                pinned = track.id in pinIds,
+                                onTogglePin = {
+                                    scope.launch { container.quickAccess.toggle(track, container.api) }
+                                },
                                 onClick = { onPlay(libTracks, libTracks.indexOf(track).coerceAtLeast(0)) },
                                 onMore = { onMore(track) },
                             )
@@ -399,6 +434,10 @@ fun ArtistDetailScreen(
                         item {
                             HorizontalShelf(
                                 items = albums,
+                                pinIds = pinIds,
+                                onTogglePin = { t ->
+                                    scope.launch { container.quickAccess.toggle(t, container.api) }
+                                },
                                 onOpen = onOpenDetail,
                                 onPlaySong = { onPlay(listOf(it), 0) },
                             )
@@ -409,6 +448,10 @@ fun ArtistDetailScreen(
                         item {
                             HorizontalShelf(
                                 items = singles,
+                                pinIds = pinIds,
+                                onTogglePin = { t ->
+                                    scope.launch { container.quickAccess.toggle(t, container.api) }
+                                },
                                 onOpen = onOpenDetail,
                                 onPlaySong = { onPlay(listOf(it), 0) },
                             )
@@ -419,6 +462,10 @@ fun ArtistDetailScreen(
                         item {
                             HorizontalShelf(
                                 items = featured,
+                                pinIds = pinIds,
+                                onTogglePin = { t ->
+                                    scope.launch { container.quickAccess.toggle(t, container.api) }
+                                },
                                 onOpen = onOpenDetail,
                                 onPlaySong = { onPlay(listOf(it), 0) },
                             )
@@ -429,6 +476,10 @@ fun ArtistDetailScreen(
                         itemsIndexed(videos.take(8), key = { i, t -> "vid-${t.id}-$i" }) { index, track ->
                             TrackRow(
                                 track = track,
+                                pinned = track.id in pinIds,
+                                onTogglePin = {
+                                    scope.launch { container.quickAccess.toggle(track, container.api) }
+                                },
                                 onClick = {
                                     if (track.isPlayable()) onPlay(videos.filter { it.isPlayable() }, index.coerceAtMost(videos.filter { it.isPlayable() }.lastIndex))
                                     else onOpenDetail(track)
@@ -442,6 +493,10 @@ fun ArtistDetailScreen(
                         item {
                             HorizontalShelf(
                                 items = playlists,
+                                pinIds = pinIds,
+                                onTogglePin = { t ->
+                                    scope.launch { container.quickAccess.toggle(t, container.api) }
+                                },
                                 onOpen = onOpenDetail,
                                 onPlaySong = { onOpenDetail(it) },
                             )
@@ -453,6 +508,10 @@ fun ArtistDetailScreen(
                             HorizontalShelf(
                                 items = similar,
                                 circle = true,
+                                pinIds = pinIds,
+                                onTogglePin = { t ->
+                                    scope.launch { container.quickAccess.toggle(t, container.api) }
+                                },
                                 onOpen = onOpenDetail,
                                 onPlaySong = { onOpenDetail(it) },
                             )
@@ -480,6 +539,8 @@ private fun HorizontalShelf(
     onOpen: (TrackDto) -> Unit,
     onPlaySong: (TrackDto) -> Unit,
     circle: Boolean = false,
+    pinIds: Set<String> = emptySet(),
+    onTogglePin: ((TrackDto) -> Unit)? = null,
 ) {
     Row(
         Modifier
@@ -500,7 +561,18 @@ private fun HorizontalShelf(
                     }
                     .padding(4.dp),
             ) {
-                MediaCover(item, 112.dp, circle = circle || item.isArtist())
+                Box {
+                    MediaCover(item, 112.dp, circle = circle || item.isArtist())
+                    if (item.id in pinIds) {
+                        PinnedBadge(
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(4.dp),
+                            size = 24.dp,
+                            onClick = onTogglePin?.let { { it(item) } },
+                        )
+                    }
+                }
                 Spacer(Modifier.height(6.dp))
                 Text(
                     item.title,

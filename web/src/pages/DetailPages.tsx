@@ -20,6 +20,7 @@ import {
   ChevronRight,
   ArrowLeft,
   MoreVertical,
+  Pin,
 } from 'lucide-react';
 import { BackButton } from '../components/BackButton';
 import { HomeShelfSkeleton } from '../components/HomeShelfSkeleton';
@@ -642,6 +643,25 @@ export function AlbumPage() {
           playing={albumNow.playing}
           size="lg"
         />
+        {isPinned && (
+          <button
+            type="button"
+            title="Retirer de l'accès rapide"
+            aria-label="Retirer de l'accès rapide"
+            onClick={() => {
+              void togglePin({
+                id: data.album.id,
+                title: data.album.title,
+                type: 'album',
+                artists: resolvedArtists.length ? resolvedArtists : data.album.artists,
+                thumbnails: data.album.thumbnails,
+              });
+            }}
+            className="absolute left-3 top-3 z-[2] flex h-9 w-9 items-center justify-center rounded-full bg-yt-red text-white shadow-lg"
+          >
+            <Pin className="h-4 w-4 fill-current" />
+          </button>
+        )}
       </div>
 
       {/* Titre */}

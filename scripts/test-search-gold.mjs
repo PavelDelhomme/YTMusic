@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Batterie gold recherche YTMusic (hits connus + obscurs + RU en latin + EN/FR).
+ * Batterie gold recherche PLM (hits connus + obscurs + RU en latin + EN/FR).
  *
  * Usage:
  *   node --import tsx scripts/test-search-gold.mjs
@@ -90,10 +90,22 @@ const GOLD = [
   // —— RU écrits en latin (translit) ——
   { q: 'monetochka kazhdyy raz', artist: /монет|monet/i },
   { q: 'monetochka kazhdy raz', artist: /монет|monet/i },
-  { q: 'zivert life', artist: /zivert/i },
+  { q: 'zivert life', artist: /zivert|зиверт/i },
   { q: 'instasamka za dengi da', artist: /instasamka|инстасамка/i },
   { q: 'morgenshtern cristal', artist: /morgen|морген/i },
-  { q: 'little big uno', artist: /little\s*big/i },
+  { q: 'little big uno', artist: /little\s*big|лит/i },
+
+  // —— RU en cyrillique ——
+  { q: 'монеточка каждый раз', artist: /монет|monet/i },
+  { q: 'каждый раз', artist: /монет|monet/i },
+  { q: 'монеточка', artist: /монет|monet/i },
+  { q: 'инстасамка за деньги да', artist: /instasamka|инстасамка/i },
+  { q: 'за деньги да', artist: /instasamka|инстасамка/i },
+  { q: 'зиверт', artist: /zivert|зиверт/i },
+  { q: 'зиверт лайф', artist: /zivert|зиверт/i },
+  { q: 'моргенштерн', artist: /morgen|морген/i },
+  { q: 'моргенштерн кристалл', artist: /morgen|морген/i },
+  { q: 'литл биг уно', artist: /little|лит/i },
 
   // —— EN mid / rock ——
   { q: 'radiohead creep', artist: /radiohead/i },
@@ -154,10 +166,14 @@ const EXTRA = [
   { q: 'demi portion poto', artist: /demi/i },
   { q: 'keny arkana la rage', artist: /keny/i },
   { q: 'monetochka каждый раз', artist: /монет|monet/i },
+  { q: 'каждый раз монеточка', artist: /монет|monet/i },
+  { q: 'инстасамка', artist: /instasamka|инста/i },
+  { q: 'за деньги да инстасамка', artist: /instasamka|инста/i },
   { q: 'instasamka za denghi da', artist: /instasamka|инста/i },
   { q: 'morgenshtern cristal moyo', artist: /morgen|морген/i },
   { q: 'littlebig uno', artist: /little/i },
-  { q: 'zivert layf', artist: /zivert/i },
+  { q: 'zivert layf', artist: /zivert|зиверт/i },
+  { q: 'лайф зиверт', artist: /zivert|зиверт/i },
 ];
 
 // Remplir jusqu’à ~200 en variant les queries seed (artiste+titre inversé)
