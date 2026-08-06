@@ -23,7 +23,7 @@ import { useLibrary } from '../store/library';
 import { useSession } from '../store/session';
 import { useItemActions } from '../store/itemActions';
 import { CoverImage } from './CoverImage';
-import { formatRemaining } from '../lib/time';
+import { formatClock, formatRemaining } from '../lib/time';
 import { useHoldSeek } from '../lib/holdSeek';
 import { applySleepPick, SLEEP_TIMER_OPTIONS } from '../lib/sleepTimer';
 import type { NowPlayingTab } from './NowPlaying';
@@ -304,9 +304,9 @@ export function PlayerBar({
         }
       }}
     >
-      {/* Seek + temps restant (même rétracté) */}
+      {/* Seek : temps restant | barre | durée totale */}
       <div className="flex items-center gap-1.5 px-2" onClick={stop} onPointerDown={stop}>
-        <span className="w-9 shrink-0 text-[10px] tabular-nums text-yt-muted">
+        <span className="w-9 shrink-0 text-right text-[10px] tabular-nums text-yt-muted">
           {formatRemaining(displayProgress, effectiveDuration)}
         </span>
         <div
@@ -341,6 +341,9 @@ export function PlayerBar({
             </div>
           </div>
         </div>
+        <span className="w-9 shrink-0 text-left text-[10px] tabular-nums text-yt-muted">
+          {effectiveDuration > 0 ? formatClock(effectiveDuration) : '0:00'}
+        </span>
       </div>
 
       {!isActivePlayer && receiveRemoteSync && activeName && (
@@ -568,6 +571,8 @@ export function PlayerBar({
           </button>
           <span className="ml-2 whitespace-nowrap text-xs tabular-nums text-yt-muted">
             {formatRemaining(displayProgress, effectiveDuration)}
+            <span className="mx-1 text-yt-muted/50">/</span>
+            {effectiveDuration > 0 ? formatClock(effectiveDuration) : '0:00'}
           </span>
         </div>
 
