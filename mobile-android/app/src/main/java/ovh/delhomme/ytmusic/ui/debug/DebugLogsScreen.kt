@@ -194,13 +194,6 @@ fun DebugLogsScreen(
                         }
                     },
                 ) { Text("DEV LAN") }
-                OutlinedButton(
-                    onClick = {
-                        apiUrl = "http://127.0.0.1:8787"
-                        container.setApiBaseOverride(apiUrl)
-                        Toast.makeText(context, "DEV adb reverse", Toast.LENGTH_SHORT).show()
-                    },
-                ) { Text("DEV 127.0.0.1") }
                 Button(
                     onClick = {
                         val u = "https://ytmusic.delhomme.ovh"

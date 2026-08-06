@@ -61,8 +61,20 @@ if [[ -z "${API_BASE_URL:-}" ]]; then
     if [[ -n "${LAN:-}" ]]; then
       API_BASE_URL="http://${LAN}:${PORT_NUM}"
     else
-      API_BASE_URL="http://127.0.0.1:${PORT_NUM}"
+      echo "❌ IP LAN introuvable — définis API_BASE_URL=http://IP:8787 (jamais 127.0.0.1 sur téléphone)" >&2
+      exit 1
     fi
+  fi
+fi
+# Garde-fou : ne jamais publier une APK 127.0.0.1 pour device physique
+if [[ "$API_BASE_URL" == *"127.0.0.1"* || "$API_BASE_URL" == *"localhost"* ]]; then
+  LAN="$(detect_lan_ip || true)"
+  if [[ -n "${LAN:-}" ]]; then
+    API_BASE_URL="http://${LAN}:${PORT:-8787}"
+    echo "==> Rewrite 127.0.0.1 → $API_BASE_URL"
+  else
+    echo "❌ Refus de publier une APK avec API 127.0.0.1" >&2
+    exit 1
   fi
 fi
 API_BASE_URL="${API_BASE_URL%/}"
