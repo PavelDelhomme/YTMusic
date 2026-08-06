@@ -124,11 +124,10 @@ export function resizeThumbUrl(url: string, size = 200): string {
     u = `${base}=s${size}-c-k-c0x00ffffff-no-rj`;
   }
 
-  const vi = u.match(/i\.ytimg\.com\/vi\/([^/]+)\//);
+  // ytimg : uniquement tailles quasi toujours présentes (hq720/maxres/sd → 404 fréquents)
+  const vi = u.match(/i\.ytimg\.com\/vi(?:_webp)?\/([^/]+)\//i);
   if (vi) {
     const id = vi[1];
-    // hq720.jpg 404 souvent → privilégier sd/hq
-    if (size >= 640) return `https://i.ytimg.com/vi/${id}/sddefault.jpg`;
     if (size >= 320) return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
     return `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
   }
@@ -136,17 +135,33 @@ export function resizeThumbUrl(url: string, size = 200): string {
   return u;
 }
 
-/** Proxy Google CDN thumbs to avoid referrer blocks */
+/** true si URL ytimg connue pour 404 souvent */
+function isFragileYtimg(url: string): boolean {
+  return /\/(hq720|maxresdefault|sddefault|maxresdefault_live)\.(jpg|webp)/i.test(url);
+}
+
+/** Proxy : ggpht + ytimg via /api/img (chaîne serveur, jamais 404 navigateur) */
 export function proxiedThumbUrl(url: string, size = 200): string {
   const resized = resizeThumbUrl(url, size);
   if (!resized) return '';
-  if (/i\.ytimg\.com/.test(resized)) return resized;
+  const vi = resized.match(/i\.ytimg\.com\/vi(?:_webp)?\/([^/]+)\//i);
+  if (vi) {
+    return apiUrl(`/api/img?v=${encodeURIComponent(vi[1])}&s=${size}`);
+  }
   if (/googleusercontent|ggpht|yt3\./.test(resized)) {
     return apiUrl(`/api/img?u=${encodeURIComponent(resized)}`);
+  }
+  if (isFragileYtimg(url)) {
+    const id = url.match(/\/vi(?:_webp)?\/([^/]+)\//i)?.[1];
+    if (id) return apiUrl(`/api/img?v=${encodeURIComponent(id)}&s=${size}`);
   }
   return resized;
 }
 
+/**
+ * Candidats cover : 1) thumbs API (ggpht) 2) proxy ytimg multi-fallback.
+ * Pas de maxres/hq720/sd en direct → plus de spam 404 console.
+ */
 export function thumbCandidates(
   track: Track | { thumbnails?: Track['thumbnails']; id?: string },
   size = 200,
@@ -160,25 +175,27 @@ export function thumbCandidates(
     out.push(u);
   };
   const id = (track as Track).id;
-  // IDs vidéo : ytimg d’abord (rapide, fiable) — évite un proxy / CDN lent qui bloque la grande cover
-  if (id && /^[a-zA-Z0-9_-]{11}$/.test(id)) {
-    if (size >= 640) {
-      push(`https://i.ytimg.com/vi/${id}/maxresdefault.jpg`);
-      push(`https://i.ytimg.com/vi/${id}/sddefault.jpg`);
-      push(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`);
-    } else if (size >= 320) {
-      push(`https://i.ytimg.com/vi/${id}/sddefault.jpg`);
-      push(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`);
-      push(`https://i.ytimg.com/vi/${id}/mqdefault.jpg`);
-    } else {
-      push(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`);
-      push(`https://i.ytimg.com/vi/${id}/mqdefault.jpg`);
-    }
-  }
+
+  // Thumbs YouTube Music / Google d’abord (qualité + fiabilité)
   for (const t of list) {
+    if (!t?.url) continue;
+    if (isFragileYtimg(t.url)) continue;
+    if (/i\.ytimg\.com/i.test(t.url)) continue; // géré via ?v=
     push(proxiedThumbUrl(t.url, size));
-    push(resizeThumbUrl(t.url, size));
   }
+
+  // ID vidéo 11 chars → un seul endpoint proxy (essaie hq/mq/default côté serveur)
+  if (id && /^[a-zA-Z0-9_-]{11}$/.test(id)) {
+    push(apiUrl(`/api/img?v=${encodeURIComponent(id)}&s=${size}`));
+  }
+
+  // Secours : ytimg fiables en direct (si proxy KO)
+  if (id && /^[a-zA-Z0-9_-]{11}$/.test(id)) {
+    push(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`);
+    push(`https://i.ytimg.com/vi/${id}/mqdefault.jpg`);
+    push(`https://i.ytimg.com/vi/${id}/default.jpg`);
+  }
+
   return out;
 }
 

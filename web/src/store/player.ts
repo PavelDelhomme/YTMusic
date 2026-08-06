@@ -914,9 +914,11 @@ async function playLocal(track: Track, state: PlayerState, gen: number) {
   let enriched = track;
   if (/^[a-zA-Z0-9_-]{11}$/.test(track.id)) {
     const ytimg = [
-      { url: `https://i.ytimg.com/vi/${track.id}/maxresdefault.jpg`, width: 1280, height: 720 },
-      { url: `https://i.ytimg.com/vi/${track.id}/sddefault.jpg`, width: 640, height: 480 },
-      ...(track.thumbnails || []),
+      { url: `https://i.ytimg.com/vi/${track.id}/hqdefault.jpg`, width: 480, height: 360 },
+      { url: `https://i.ytimg.com/vi/${track.id}/mqdefault.jpg`, width: 320, height: 180 },
+      ...(track.thumbnails || []).filter(
+        (t) => t?.url && !/\/(hq720|maxresdefault|sddefault)\./i.test(t.url),
+      ),
     ];
     enriched = { ...track, thumbnails: ytimg };
     if (gen === playGeneration) {
