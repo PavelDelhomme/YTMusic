@@ -44,7 +44,7 @@ docker_running() {
 }
 
 print_banner() {
-  echo "📋 Logs YTMusic ($1)"
+  echo "📋 Logs PLM ($1)"
   echo "========================"
   echo "⏹  Ctrl+C pour quitter"
   echo "🔧 LOGS_SINCE=${LOGS_SINCE}  LOGS_TAIL=${LOGS_TAIL}"
@@ -77,7 +77,7 @@ dump_archives() {
 follow_docker() {
   local args
   args=$(compose_args)
-  set_term_title "YTMusic Logs"
+  set_term_title "PLM Logs"
   print_banner "Docker"
   # shellcheck disable=SC2086
   if [[ "$MODE" == "tail" ]]; then
@@ -95,7 +95,7 @@ follow_docker() {
 }
 
 follow_docker_by_name() {
-  set_term_title "YTMusic Logs"
+  set_term_title "PLM Logs"
   print_banner "docker logs par nom"
   local names
   names=$(docker ps --format '{{.Names}}' | grep -E '^ytmusic' || true)
@@ -112,12 +112,40 @@ ensure_log_files() {
   done
 }
 
+# invent=1 → ajoute horodatage si absent (suivi live)
+# invent=0 → conserve tel quel (historique fichier)
+stamp_lines() {
+  local invent="${1:-1}"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" =~ ^\[(ytmusic-[a-zA-Z0-9._-]+)\][[:space:]]+(.*) ]]; then
+      local tag="${BASH_REMATCH[1]}"
+      local rest="${BASH_REMATCH[2]}"
+      if [[ "$rest" =~ ^\[[0-9]{4}-[0-9]{2}-[0-9]{2} ]]; then
+        printf '[%s] %s\n' "$tag" "$rest"
+      elif [[ "$invent" == "1" ]]; then
+        printf '[%s] [%s] %s\n' "$tag" "$(date '+%Y-%m-%d %H:%M:%S')" "$rest"
+      else
+        printf '[%s] %s\n' "$tag" "$rest"
+      fi
+    elif [[ "$line" =~ ^\[[0-9]{4}-[0-9]{2}-[0-9]{2} ]]; then
+      printf '%s\n' "$line"
+    elif [[ -z "$line" ]]; then
+      printf '\n'
+    elif [[ "$invent" == "1" ]]; then
+      printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$line"
+    else
+      printf '%s\n' "$line"
+    fi
+  done
+}
+
 follow_local_files() {
   ensure_log_files
-  set_term_title "YTMusic Logs"
+  set_term_title "PLM Logs"
   print_banner "local · multi-fichiers"
   echo "💡 API  → logs/ytmusic-server.log   (make ensure-api / restart-api)"
   echo "💡 Vite → logs/ytmusic-dev.log      (make up / make dev)"
+  echo "🕒 Horodatage local YYYY-MM-DD HH:MM:SS (+ ms côté API Node)"
   echo ""
 
   if [[ "$MODE" == "history" ]]; then
@@ -129,7 +157,10 @@ follow_local_files() {
     base="$(basename "$f")"
     if [[ -s "$f" ]]; then
       echo "──── $base (dernieres ${LOGS_TAIL} lignes) ────"
-      tail -n "${LOGS_TAIL}" "$f" 2>/dev/null | sed "s/^/[$base] /" | bash "$COLOR" || true
+      tail -n "${LOGS_TAIL}" "$f" 2>/dev/null \
+        | sed "s/^/[$base] /" \
+        | stamp_lines 0 \
+        | bash "$COLOR" || true
       echo ""
     fi
   done
@@ -137,14 +168,29 @@ follow_local_files() {
     return 0
   fi
   echo "──── suivi en direct (tail -F) ────"
-  # -F : suit même si le fichier est tronqué / recréé (restart-api / logs-archive)
-  tail -n 0 -F "${LOG_FILES[@]}" 2>&1 | bash "$COLOR"
+  # Prefixe le nom de fichier (tail -F multi) puis horodate si besoin
+  tail -n 0 -F "${LOG_FILES[@]}" 2>&1 \
+    | awk '
+      BEGIN { cur = "log" }
+      /^==> / {
+        if (match($0, /\/([^\/]+\.log)/)) {
+          s = substr($0, RSTART+1, RLENGTH-1)
+          # s = "name.log" after matching "/name.log"
+          n = split(s, parts, "/")
+          cur = parts[n]
+        }
+        next
+      }
+      { print "[" cur "] " $0; fflush() }
+    ' \
+    | stamp_lines 1 \
+    | bash "$COLOR"
 }
 
 follow_watch_docker() {
   local args
   args=$(compose_args)
-  set_term_title "YTMusic Logs"
+  set_term_title "PLM Logs"
   print_banner "watch · reconnexion auto"
   trap 'echo ""; echo "⏹ logs-watch arrêté."; exit 130' INT
   while true; do

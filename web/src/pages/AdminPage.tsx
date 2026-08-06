@@ -291,25 +291,31 @@ export function AdminPage() {
       <section className="mb-6 rounded-2xl border border-amber-500/40 bg-yt-surface p-5">
         <div className="mb-3 flex items-center gap-2">
           <Radar className="h-5 w-5 text-amber-400" />
-          <h3 className="font-display text-lg font-semibold">Cookies YouTube (stream VPS)</h3>
+          <h3 className="font-display text-lg font-semibold">Stream YouTube (sans Premium)</h3>
         </div>
         <p className="mb-3 text-sm text-yt-muted">
-          Sur un VPS, YouTube bloque l’IP datacenter — <strong className="text-white">même avec des cookies
-          Chrome</strong>. Solution fiable : faire passer le stream par ton PC (IP maison).
+          PLM n’utilise <strong className="text-white">pas</strong> le player YouTube officiel →{' '}
+          <strong className="text-white">pas de pubs</strong>, et{' '}
+          <strong className="text-white">YouTube Premium n’est pas requis</strong>. Un compte Google
+          gratuit connecté à youtube.com suffit si tu pousses des cookies (optionnel en local).
+        </p>
+        <p className="mb-3 text-sm text-yt-muted">
+          Sur un VPS, YouTube bloque souvent l’IP datacenter. Solution fiable : relayer le stream par
+          ton PC (IP maison).
         </p>
         <pre className="mb-2 overflow-x-auto rounded-xl border border-yt-border bg-black/40 px-3 py-2 text-xs text-emerald-300">
 bash scripts/link-home-stream.sh
         </pre>
         <p className="mb-3 text-xs text-yt-muted">
           Laisse le PC allumé. Stop : <code className="text-white">bash scripts/link-home-stream.sh stop</code>.
-          Option cookies (souvent insuffisante seule) :
+          Cookies (compte gratuit, pas Premium) :
           <code className="text-white"> bash scripts/push-youtube-cookies.sh</code>
         </p>
         <dl className="mb-3 grid gap-2 text-sm sm:grid-cols-2">
           <div>
             <dt className="text-xs text-yt-muted">État cookies</dt>
             <dd className="font-medium">
-              {status?.youtubeCookies?.configured ? 'Configuré ✓' : 'Absent'}
+              {status?.youtubeCookies?.configured ? 'Configuré ✓' : 'Absent (OK en local)'}
               {status?.youtubeCookies?.source ? ` · ${status.youtubeCookies.source}` : ''}
             </dd>
           </div>
@@ -323,7 +329,7 @@ bash scripts/link-home-stream.sh
           <li>
             <code className="text-white">bash scripts/link-home-stream.sh</code>
           </li>
-          <li>Sinon cookies (fallback) : push-youtube-cookies.sh ou collage ci-dessous</li>
+          <li>Sinon cookies (Google gratuit) : push-youtube-cookies.sh ou collage ci-dessous</li>
         </ol>
         <textarea
           value={ytCookie}
@@ -880,7 +886,7 @@ bash scripts/link-home-stream.sh
         ) : (
           <div className="flex flex-col gap-6 lg:flex-row lg:items-center">
             <div className="flex-1">
-              <h2 className="font-display text-2xl font-semibold">Installe YTMusic (PWA)</h2>
+              <h2 className="font-display text-2xl font-semibold">Installe PLM (PWA)</h2>
               <p className="mt-2 max-w-md text-sm text-yt-muted">
                 Même Wi‑Fi que cet ordinateur. Scanne le QR, ouvre le lien, puis installe en PWA
                 (plein écran, icône, offline).
@@ -979,7 +985,7 @@ bash scripts/link-home-stream.sh
             </li>
             <li>
               <strong className="text-white">Ordinateur</strong> — Chrome/Edge propose « Installer
-              YTMusic » uniquement si pas déjà installé (bannière conditionnelle).
+              PLM » uniquement si pas déjà installé (bannière conditionnelle).
             </li>
             <li>
               <strong className="text-white">Electron</strong> —{' '}

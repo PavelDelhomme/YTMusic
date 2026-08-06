@@ -20,7 +20,7 @@ fi
 
 case "$MODE" in
   status)
-    echo "📊 SQLite YTMusic"
+    echo "📊 SQLite PLM"
     echo "================="
     echo "  path : $DB"
     echo "  size : $(du -h "$DB" | awk '{print $1}')"

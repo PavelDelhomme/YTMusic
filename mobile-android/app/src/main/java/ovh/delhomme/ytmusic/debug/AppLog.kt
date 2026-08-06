@@ -69,7 +69,7 @@ object AppLog {
         val sw = StringWriter()
         t.printStackTrace(PrintWriter(sw))
         val body = buildString {
-            appendLine("=== YTMusic crash ${ts()} fatal=$fatal ===")
+            appendLine("=== PLM crash ${ts()} fatal=$fatal ===")
             appendLine("session=$sessionId")
             appendLine("sdk=${Build.VERSION.SDK_INT} ${Build.MANUFACTURER} ${Build.MODEL}")
             appendLine("app=${BuildConfig.VERSION_NAME} api=${BuildConfig.API_BASE_URL}")
@@ -109,7 +109,7 @@ object AppLog {
 
     fun exportBundle(): String {
         return buildString {
-            appendLine("=== YTMusic debug export ${ts()} ===")
+            appendLine("=== PLM debug export ${ts()} ===")
             appendLine("session=$sessionId")
             appendLine()
             appendLine("--- last crash ---")

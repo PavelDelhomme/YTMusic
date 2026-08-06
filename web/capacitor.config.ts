@@ -12,7 +12,7 @@ const liveUrl = process.env.CAP_SERVER_URL;
 
 const config: CapacitorConfig = {
   appId: 'ovh.delhomme.ytmusic',
-  appName: 'YTMusic',
+  appName: 'PLM',
   webDir: 'dist',
   server: {
     androidScheme: 'https',

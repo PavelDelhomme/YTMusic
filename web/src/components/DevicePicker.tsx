@@ -141,7 +141,7 @@ export function DevicePicker({ open, onClose }: { open: boolean; onClose: () => 
           )}
           {devices.length > 0 && others.length === 0 && (
             <p className="text-xs text-yt-muted">
-              Ouvre YTMusic sur un PC (même compte) pour caster la lecture depuis le téléphone.
+              Ouvre PLM sur un PC (même compte) pour caster la lecture depuis le téléphone.
             </p>
           )}
         </div>

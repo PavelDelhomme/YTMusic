@@ -1,6 +1,6 @@
-# YTMusic
+# PLM — Pue La Merde
 
-Client YouTube Music multi-plateforme : **web**, **API**, **Android Kotlin**, **desktop Electron**.
+Client musique multi-plateforme (PLM) : **web**, **API**, **Android Kotlin**, **desktop Electron**.
 
 ## Structure
 

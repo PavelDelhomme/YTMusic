@@ -1,4 +1,4 @@
-# Système de recommandations YTMusic
+# Système de recommandations PLM
 
 > Objectif : une radio / accueil / explore / similaires **personnels**, sans pubs, avec compte obligatoire et feedback continu.  
 > Stack actuelle : Node/SQLite + youtubei.js. Couches ML avancées (CLAP, FAISS, Transformer) = phases 2–3.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Libère les ports Vite / API YTMusic
+# Libère les ports Vite / API PLM
 # Usage :
 #   scripts/kill-dev.sh           # 5173 + 5174 + 8787
 #   scripts/kill-dev.sh vite-only # 5173 + 5174 (garde l’API)
@@ -42,7 +42,7 @@ case "$MODE" in
   vite-only)
     free_one 5173
     free_one 5174
-    pkill -f "vite.*(YTMusic|web)" 2>/dev/null || true
+    pkill -f "vite.*(PLM|web)" 2>/dev/null || true
     echo "✅ Ports Vite 5173/5174 libérés (API intacte)"
     ;;
   api-only)
@@ -57,7 +57,7 @@ case "$MODE" in
     free_one 8787
     pkill -f "tsx watch src/index.ts" 2>/dev/null || true
     pkill -f "tsx api/src/index.ts" 2>/dev/null || true
-    pkill -f "vite.*(YTMusic|web)" 2>/dev/null || true
+    pkill -f "vite.*(PLM|web)" 2>/dev/null || true
     echo "✅ Ports 5173 / 5174 / 8787 libérés"
     ;;
 esac

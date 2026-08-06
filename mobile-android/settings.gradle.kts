@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "YTMusic"
+rootProject.name = "PLM"
 include(":app")

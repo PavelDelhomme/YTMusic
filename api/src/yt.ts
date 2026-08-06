@@ -1,7 +1,7 @@
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Innertube, UniversalCache, ClientType, YTNodes, Parser, Log } from 'youtubei.js';
-import { resolveYoutubeCookieHeader, youtubeCookiesFingerprint, ytDlpCookieArgs } from './youtubeCookies.js';
+import { resolveYoutubeCookieHeader, youtubeCookiesFingerprint, ytDlpCookieArgs, YTDLP_AUDIO_FORMAT_CANDIDATES } from './youtubeCookies.js';
 
 // youtubei.js loggue massivement des Type mismatch (WatchNext / Message) → pollue make logs
 try {
@@ -37,6 +37,7 @@ import {
   scoreSearchItem,
   shelfBucketFromTitle,
   tokenize,
+  artistNameAliasMatch,
   type SearchPersonalization,
 } from './searchRank.js';
 import {
@@ -49,6 +50,32 @@ import {
 import type { AlbumMeta, ArtistMeta, PlaylistMeta, Shelf, Track } from './types.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+/** Variantes d’ortho pour requêtes artiste courtes (FR / typos fréquentes). */
+function artistSpellingAlternates(query: string): string[] {
+  const q = foldText(query);
+  if (!q || tokenize(query).length > 2) return [];
+  const map: Record<string, string[]> = {
+    suzanne: ['suzane'],
+    suzane: ['suzanne'],
+    kevinn: ['kevin'],
+    amandine: ['amandin'],
+  };
+  const out = new Set<string>();
+  for (const alt of map[q] || []) {
+    if (alt && alt !== q) out.add(alt);
+  }
+  // Doublement / dédoublement d’une consonne médiane (n, s, l, t)
+  if (q.length >= 5 && q.length <= 12) {
+    const m = q.match(/^(.+?)([nsltrp])\2(.+)$/);
+    if (m) out.add(`${m[1]}${m[2]}${m[3]}`);
+    const m2 = q.match(/^(.+?)([nsltrp])([^nsltrp].*)$/);
+    if (m2 && !q.includes(m2[2] + m2[2])) {
+      out.add(`${m2[1]}${m2[2]}${m2[2]}${m2[3]}`);
+    }
+  }
+  return [...out].filter((a) => a !== q).slice(0, 2);
+}
 
 let yt: Innertube | null = null;
 let ytCookieFp: string | null = null;
@@ -83,13 +110,26 @@ type AudioFormat = {
 };
 
 /** Cache URLs googlevideo (évite re-decipher à chaque play / prefetch). */
+const AUDIO_FORMAT_CACHE_VER = 'free-v2';
 const audioFormatCache = new Map<string, AudioFormat>();
 const audioFormatInflight = new Map<string, Promise<AudioFormat>>();
 
+function audioCacheKey(videoId: string) {
+  return `${AUDIO_FORMAT_CACHE_VER}:${videoId}`;
+}
+
 /** Invalide une URL audio cache (ex. 403 googlevideo) pour forcer un nouveau resolve. */
 export function invalidateAudioFormat(videoId: string) {
+  audioFormatCache.delete(audioCacheKey(videoId));
+  audioFormatInflight.delete(audioCacheKey(videoId));
+  // Ancienne clé sans version (sessions hot-reload)
   audioFormatCache.delete(videoId);
   audioFormatInflight.delete(videoId);
+}
+
+export function clearAudioFormatCache() {
+  audioFormatCache.clear();
+  audioFormatInflight.clear();
 }
 
 function parseExpireMs(url: string): number | null {
@@ -547,10 +587,24 @@ export async function search(
   filter?: string,
   opts?: { userId?: string },
 ) {
-  const q = String(query || '').trim();
+  const q = String(query || '').trim().replace(/\s+/g, ' ');
+  const rawFilter = String(filter || 'all').toLowerCase().trim();
+  const filterNorm =
+    !rawFilter || rawFilter === 'all'
+      ? 'all'
+      : rawFilter === 'songs' || rawFilter === 'song'
+        ? 'song'
+        : rawFilter === 'videos' || rawFilter === 'video'
+          ? 'video'
+          : rawFilter === 'albums' || rawFilter === 'album'
+            ? 'album'
+            : rawFilter === 'artists' || rawFilter === 'artist'
+              ? 'artist'
+              : rawFilter === 'playlists' || rawFilter === 'playlist'
+                ? 'playlist'
+                : rawFilter;
   if (!q) return emptyBuckets();
 
-  const filterNorm = filter && filter !== 'all' ? filter : 'all';
   const personalization = opts?.userId ? buildSearchPersonalization(opts.userId) : undefined;
 
   let primary: any;
@@ -559,12 +613,31 @@ export async function search(
   let albumExtra: any = null;
 
   if (filterNorm === 'all') {
+    const spellingAlts = artistSpellingAlternates(q);
     [primary, songExtra, artistExtra, albumExtra] = await Promise.all([
       innertubeSearch(q).catch(() => null),
       innertubeSearch(q, 'song').catch(() => null),
       innertubeSearch(q, 'artist').catch(() => null),
       innertubeSearch(q, 'album').catch(() => null),
     ]);
+    // Orthographe proche (suzanne → suzane) : enrichit le bucket artistes
+    if (spellingAlts.length) {
+      const altArtists = await Promise.all(
+        spellingAlts.slice(0, 2).map((alt) => innertubeSearch(alt, 'artist').catch(() => null)),
+      );
+      for (const extra of altArtists) {
+        if (!extra) continue;
+        const bucket = collectFromResult(extra);
+        if (!artistExtra) artistExtra = extra;
+        else {
+          // merge later via fromArtists — stash on a synthetic collector
+          (artistExtra as any).__plmAltArtists = [
+            ...((artistExtra as any).__plmAltArtists || []),
+            ...bucket.artists,
+          ];
+        }
+      }
+    }
     if (!primary && !songExtra && !artistExtra && !albumExtra) {
       // Dernier essai soft : recherche sans filtre
       primary = await innertubeSearch(q).catch(() => null);
@@ -579,6 +652,7 @@ export async function search(
   const main = primary ? collectFromResult(primary) : emptyBuckets();
   const fromSongs = songExtra ? collectFromResult(songExtra) : emptyBuckets();
   const fromArtists = artistExtra ? collectFromResult(artistExtra) : emptyBuckets();
+  const altArtists = ((artistExtra as any)?.__plmAltArtists || []) as Track[];
   const fromAlbums = albumExtra ? collectFromResult(albumExtra) : emptyBuckets();
 
   // Pas d’injection « query + artiste favori » : ça polluait (Keny sur n’importe quoi).
@@ -588,9 +662,14 @@ export async function search(
     rankByQuery(mergeTracks(fromSongs.songs, main.songs), q, personalization),
     q,
   );
+  // Alt orthographe (suzane) en tête du merge → mieux classé si scores proches
   const artists = dedupeArtists(
     filterByRelevance(
-      rankByQuery(mergeTracks(fromArtists.artists, main.artists), q, personalization),
+      rankByQuery(
+        mergeTracks(altArtists, fromArtists.artists, main.artists),
+        q,
+        personalization,
+      ),
       q,
     ),
     q,
@@ -648,10 +727,30 @@ export async function search(
         hitTrack = { ...hitTrack, type: 'song' };
       }
       songsOut = mergeTracks([hitTrack], songsOut);
-      topOut = hitTrack;
+      // Seed tube : enrichit les titres, mais n’écrase pas un top « fiche artiste »
+      // (ex. requête « stromae » / « suzane » → artiste, pas Papaoutai en meilleure résultat)
+      const topArtistName = foldText(topOut?.title || topOut?.artists?.[0]?.name || '');
+      const keepArtistTop =
+        topOut?.type === 'artist' &&
+        (topArtistName === foldText(q) || artistNameAliasMatch(topArtistName, foldText(q)));
+      if (!keepArtistTop) {
+        topOut = hitTrack;
+      }
     }
   } catch (err) {
     console.warn('[search] hit inject failed', err);
+  }
+
+  // Top = fiche artiste → ses titres devant les homonymes (Cohen « Suzanne » vs Virile / Champagne)
+  if (topOut?.type === 'artist') {
+    const artistName = foldText(topOut.title || topOut.artists?.[0]?.name || '');
+    if (artistName.length >= 2) {
+      // Match exact du nom (pas alias) — évite de booster « SUZANNE » A.R. Rahman pour Suzane
+      const byArtist = songsOut.filter((t) =>
+        (t.artists || []).some((a) => foldText(a.name) === artistName),
+      );
+      if (byArtist.length) songsOut = mergeTracks(byArtist, songsOut);
+    }
   }
 
   songsOut = applyCachedDurations(songsOut);
@@ -873,7 +972,7 @@ async function fallbackTitleArtist(
     const ctrl = AbortSignal.timeout(6000);
     const r = await fetch(oembed, {
       signal: ctrl,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; YTMusic/1.0)' },
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PLM/1.0)' },
     });
     if (r.ok) {
       const j = (await r.json()) as { title?: string; author_name?: string };
@@ -1345,7 +1444,7 @@ function parseLrcBlock(raw: string): { startMs: number; text: string }[] {
 async function fetchLrclibTimed(artist: string, title: string, durationSec?: number) {
   if (!title.trim()) return null;
   const ctrl = AbortSignal.timeout(4500);
-  const headers = { 'User-Agent': 'YTMusic/1.0 (self-hosted)' };
+  const headers = { 'User-Agent': 'PLM/1.0 (self-hosted)' };
 
   const tryGet = async (artistName: string, trackName: string, withDuration: boolean) => {
     if (!trackName.trim()) return null;
@@ -1710,19 +1809,23 @@ export async function getPlaylist(playlistId: string): Promise<{
   return { playlist: meta, tracks };
 }
 
-async function audioFormatViaYtDlp(videoId: string): Promise<AudioFormat> {
+async function ytDlpGetUrl(
+  videoId: string,
+  format: string,
+  cookieArgs: string[],
+): Promise<string> {
   const { spawn } = await import('node:child_process');
   const ytdlp = join(ROOT, 'bin', 'yt-dlp');
-  const url = await new Promise<string>((resolve, reject) => {
+  return new Promise<string>((resolve, reject) => {
     const proc = spawn(
       ytdlp,
       [
         '-f',
-        'bestaudio[ext=m4a]/bestaudio/best',
+        format,
         '-g',
         '--no-playlist',
         '--no-warnings',
-        ...ytDlpCookieArgs(),
+        ...cookieArgs,
         `https://www.youtube.com/watch?v=${videoId}`,
       ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
@@ -1745,56 +1848,119 @@ async function audioFormatViaYtDlp(videoId: string): Promise<AudioFormat> {
       else reject(new Error(err.trim() || `yt-dlp -g exit ${code}`));
     });
   });
-  return {
-    url,
-    mimeType: url.includes('mime=audio%2Fmp4') || url.includes('itag=140') ? 'audio/mp4' : 'audio/webm',
-    expiresAt: parseExpireMs(url) ?? Date.now() + 3 * 60 * 60 * 1000,
-  };
+}
+
+async function audioFormatViaYtDlp(videoId: string): Promise<AudioFormat> {
+  const cookieSets: string[][] = [ytDlpCookieArgs()];
+  // Si un fichier cookies est présent mais pourrit les formats, retenter sans
+  if (cookieSets[0].length) cookieSets.push([]);
+
+  let lastErr: Error | null = null;
+  for (const cookieArgs of cookieSets) {
+    for (const format of YTDLP_AUDIO_FORMAT_CANDIDATES) {
+      try {
+        const url = await ytDlpGetUrl(videoId, format, cookieArgs);
+        const abr = (() => {
+          try {
+            const itag = new URL(url).searchParams.get('itag');
+            if (itag === '141' || itag === '774') return 256_000;
+            if (itag === '140') return 128_000;
+            if (itag === '251') return 160_000;
+            if (itag === '250') return 70_000;
+            if (itag === '249' || itag === '139') return 50_000;
+          } catch {
+            /* ignore */
+          }
+          return undefined;
+        })();
+        return {
+          url,
+          mimeType:
+            url.includes('mime=audio%2Fmp4') || /[?&]itag=(140|141|139)\b/.test(url)
+              ? 'audio/mp4'
+              : 'audio/webm',
+          bitrate: abr,
+          expiresAt: parseExpireMs(url) ?? Date.now() + 3 * 60 * 60 * 1000,
+        };
+      } catch (err) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+        const msg = lastErr.message;
+        // Format absent → essayer le candidat suivant ; sinon aussi
+        if (!/format is not available|Requested format/i.test(msg) && cookieArgs.length === 0) {
+          /* continue */
+        }
+      }
+    }
+  }
+  throw lastErr || new Error('yt-dlp audio URL indisponible');
 }
 
 export async function getAudioFormat(videoId: string): Promise<AudioFormat> {
-  const cached = audioFormatCache.get(videoId);
+  const key = audioCacheKey(videoId);
+  const cached = audioFormatCache.get(key);
   // Marge 90 s avant expire pour éviter une URL déjà morte
   if (cached && cached.expiresAt > Date.now() + 90_000) {
     return cached;
   }
 
-  const pending = audioFormatInflight.get(videoId);
+  const pending = audioFormatInflight.get(key);
   if (pending) return pending;
 
   const job = (async (): Promise<AudioFormat> => {
-    const innertube = await getYT();
-    // Course parallèle IOS/ANDROID/WEB — le 1er qui déchiffre gagne (évite 10–20 s séquentiels).
-    const clients = ['IOS', 'ANDROID', 'WEB'] as const;
-    const tryClient = async (client: (typeof clients)[number]): Promise<AudioFormat> => {
-      const format = await innertube.getStreamingData(videoId, {
-        type: 'audio',
-        quality: 'bestefficiency',
-        client,
-      });
-      const url = await format.decipher(innertube.session.player);
-      if (!url) throw new Error('empty stream url');
-      return {
-        url,
-        mimeType: format.mime_type,
-        bitrate: format.bitrate,
-        contentLength: format.content_length,
-        expiresAt: parseExpireMs(url) ?? Date.now() + 3 * 60 * 60 * 1000,
+    // Mode gratuit (pas de YouTube Premium) :
+    // - sans cookies fichier → yt-dlp d’abord (fiable, ~128–160 kbps, sans pubs côté PLM)
+    // - Innertube ANDROID/IOS ensuite (WEB souvent plus fragile / cookies)
+    const hasCookies = Boolean(resolveYoutubeCookieHeader());
+    const tryInnertube = async (): Promise<AudioFormat | null> => {
+      const innertube = await getYT();
+      const clients = (hasCookies ? (['ANDROID', 'IOS', 'WEB'] as const) : (['ANDROID', 'IOS'] as const));
+      const tryClient = async (client: (typeof clients)[number]): Promise<AudioFormat> => {
+        const format = await innertube.getStreamingData(videoId, {
+          type: 'audio',
+          quality: 'best',
+          client,
+        });
+        const url = await format.decipher(innertube.session.player);
+        if (!url) throw new Error('empty stream url');
+        return {
+          url,
+          mimeType: format.mime_type,
+          bitrate: format.bitrate,
+          contentLength: format.content_length,
+          expiresAt: parseExpireMs(url) ?? Date.now() + 3 * 60 * 60 * 1000,
+        };
       };
+      try {
+        return await Promise.any(clients.map((c) => tryClient(c)));
+      } catch {
+        return null;
+      }
     };
 
     let entry: AudioFormat | null = null;
-    try {
-      entry = await Promise.any(clients.map((c) => tryClient(c)));
-    } catch {
-      /* tous ont échoué → yt-dlp */
+    if (!hasCookies) {
+      try {
+        entry = await audioFormatViaYtDlp(videoId);
+      } catch {
+        entry = await tryInnertube();
+      }
+      if (!entry) entry = await tryInnertube();
+    } else {
+      entry = await tryInnertube();
+      if (!entry) {
+        try {
+          entry = await audioFormatViaYtDlp(videoId);
+        } catch {
+          /* fallthrough */
+        }
+      }
     }
 
     if (!entry) {
       entry = await audioFormatViaYtDlp(videoId);
     }
 
-    audioFormatCache.set(videoId, entry);
+    audioFormatCache.set(key, entry);
     if (audioFormatCache.size > 250) {
       const stale = [...audioFormatCache.entries()]
         .sort((a, b) => a[1].expiresAt - b[1].expiresAt)
@@ -1803,11 +1969,20 @@ export async function getAudioFormat(videoId: string): Promise<AudioFormat> {
     }
     return entry;
   })().finally(() => {
-    audioFormatInflight.delete(videoId);
+    audioFormatInflight.delete(key);
   });
 
-  audioFormatInflight.set(videoId, job);
+  audioFormatInflight.set(key, job);
   return job;
+}
+
+/** Force une URL via yt-dlp (après 403 Innertube / cache pourri). */
+export async function getAudioFormatViaYtDlpOnly(videoId: string): Promise<AudioFormat> {
+  invalidateAudioFormat(videoId);
+  const key = audioCacheKey(videoId);
+  const entry = await audioFormatViaYtDlp(videoId);
+  audioFormatCache.set(key, entry);
+  return entry;
 }
 
 const videoFormatCache = new Map<string, AudioFormat>();

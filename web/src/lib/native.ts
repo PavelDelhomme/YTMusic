@@ -28,7 +28,7 @@ export async function initNativeShell() {
   try {
     const key = 'ytm_device_name';
     if (!localStorage.getItem(key)) {
-      localStorage.setItem(key, 'Android · YTMusic');
+      localStorage.setItem(key, 'Android · PLM');
     }
   } catch {
     /* ignore */

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Archive / rotation des logs locaux YTMusic → logs/archive/
+# Archive / rotation des logs locaux PLM → logs/archive/
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 LOG_DIR="$ROOT/logs"
@@ -16,7 +16,7 @@ FILES=(
   ytmusic-client.log
 )
 
-echo "📦 Archive logs YTMusic → logs/archive/"
+echo "📦 Archive logs PLM → logs/archive/"
 echo "======================================"
 archived=0
 for name in "${FILES[@]}"; do

@@ -308,20 +308,39 @@
       "monetochka каждый раз",
       "kazhdyy raz monetochka",
       "kazhdy raz",
-      "каждый раз"
+      "каждый раз",
+      "монеточка каждый раз",
+      "монеточка",
+      "каждый раз монеточка"
     ]
   },
   {
     "videoId": "tFuhAzCUMl8",
     "title": "Life",
     "artist": "Zivert",
-    "aliases": ["zivert life", "life zivert", "zivert layf"]
+    "aliases": [
+      "zivert life",
+      "life zivert",
+      "zivert layf",
+      "зиверт life",
+      "зиверт лайф",
+      "лайф зиверт",
+      "зиверт"
+    ]
   },
   {
     "videoId": "Xa3nNeLpuZY",
     "title": "ЗА ДЕНЬГИ ДА",
     "artist": "INSTASAMKA",
-    "aliases": ["instasamka za dengi da", "za dengi da", "instasamka za denghi da"]
+    "aliases": [
+      "instasamka za dengi da",
+      "za dengi da",
+      "instasamka za denghi da",
+      "инстасамка за деньги да",
+      "за деньги да",
+      "инстасамка",
+      "за деньги да инстасамка"
+    ]
   },
   {
     "videoId": "MkWSALYYahU",
@@ -331,14 +350,24 @@
       "morgenshtern cristal",
       "morgenshtern cristal moyo",
       "morgenshtern cristal & moyot",
-      "cristal moyot"
+      "cristal moyot",
+      "моргенштерн cristal",
+      "моргенштерн кристалл",
+      "моргенштерн",
+      "кристалл и моёт"
     ]
   },
   {
     "videoId": "ZQTd8_838Oc",
     "title": "UNO",
     "artist": "Little Big",
-    "aliases": ["little big uno", "uno little big", "littlebig uno"]
+    "aliases": [
+      "little big uno",
+      "uno little big",
+      "littlebig uno",
+      "литтл биг uno",
+      "литл биг уно"
+    ]
   },
   {
     "videoId": "Kx7B-XvmFtE",

@@ -1,4 +1,4 @@
-# DNS & accès YTMusic (delhomme.ovh)
+# DNS & accès PLM (delhomme.ovh)
 
 ## Objectif
 
@@ -62,7 +62,7 @@ make update-apps   # rappel MAJ
 1. Ouvre `https://ytmusic.delhomme.ovh` (ou `http://localhost:5173` en local)
 2. Bannière « Installer » → **Installer maintenant** (si Chrome/Edge propose)
    ou **Comment installer** (guide selon l’OS)
-3. L’icône **YTMusic** (disque rouge + note) apparaît
+3. L’icône **PLM** (disque rouge + note) apparaît
 
 ### Android
 
