@@ -304,9 +304,11 @@ fun NowPlayingScreen(
         player.skipPrevOrRestart(forcePrevious = true)
     }
 
-    val dismissScroll = remember(queueInteractive, dismissPx) {
+    val dismissScroll = remember(queueInteractive, dismissPx, showLyrics) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // Paroles : scroll libre, pas de dismiss du lecteur
+                if (showLyrics) return Offset.Zero
                 // File ouverte / en transition → pas de dismiss du lecteur
                 if (queueProgress.value > 0.02f) return Offset.Zero
                 if (available.y < 0f && dragOffset > 0f) {
@@ -323,6 +325,7 @@ fun NowPlayingScreen(
                 available: Offset,
                 source: NestedScrollSource,
             ): Offset {
+                if (showLyrics) return Offset.Zero
                 if (queueProgress.value > 0.02f) return Offset.Zero
                 if (available.y > 0f) {
                     dragOffset += available.y
@@ -332,6 +335,10 @@ fun NowPlayingScreen(
             }
 
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                if (showLyrics) {
+                    dragOffset = 0f
+                    return Velocity.Zero
+                }
                 if (queueProgress.value > 0.02f) {
                     dragOffset = 0f
                     return Velocity.Zero
@@ -567,30 +574,33 @@ fun NowPlayingScreen(
                             Column(
                                 Modifier
                                     .fillMaxWidth()
-                                    .nowPlayingMediaGestures(
-                                        key = track.id,
-                                        onDismissDelta = { delta ->
-                                            if (queueProgress.value > 0.02f) {
-                                                onQueueDrag(delta)
-                                            } else {
-                                                dragOffset = (dragOffset + delta).coerceAtLeast(0f)
-                                            }
-                                        },
-                                        onDismissEnd = {
-                                            if (queueProgress.value > 0.02f) settleQueue(0f)
-                                            else settleOrClose()
-                                        },
-                                        onHorizontalDelta = { dx ->
-                                            mediaSlideX = (mediaSlideX + dx).coerceIn(-120f, 120f)
-                                        },
-                                        onHorizontalEnd = { totalX ->
-                                            when {
-                                                totalX < -72f -> skipNextFromSwipe()
-                                                totalX > 72f -> skipPrevFromSwipe()
-                                                else -> mediaSlideX = 0f
-                                            }
-                                        },
-                                        onHorizontalCancel = { mediaSlideX = 0f },
+                                    .then(
+                                        if (showLyrics) Modifier
+                                        else Modifier.nowPlayingMediaGestures(
+                                            key = track.id,
+                                            onDismissDelta = { delta ->
+                                                if (queueProgress.value > 0.02f) {
+                                                    onQueueDrag(delta)
+                                                } else {
+                                                    dragOffset = (dragOffset + delta).coerceAtLeast(0f)
+                                                }
+                                            },
+                                            onDismissEnd = {
+                                                if (queueProgress.value > 0.02f) settleQueue(0f)
+                                                else settleOrClose()
+                                            },
+                                            onHorizontalDelta = { dx ->
+                                                mediaSlideX = (mediaSlideX + dx).coerceIn(-120f, 120f)
+                                            },
+                                            onHorizontalEnd = { totalX ->
+                                                when {
+                                                    totalX < -72f -> skipNextFromSwipe()
+                                                    totalX > 72f -> skipPrevFromSwipe()
+                                                    else -> mediaSlideX = 0f
+                                                }
+                                            },
+                                            onHorizontalCancel = { mediaSlideX = 0f },
+                                        ),
                                     ),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
@@ -1864,7 +1874,7 @@ private fun InlineSyncedLyrics(
     // Lead ~250 ms : ligne allumée juste avant le chant (karaoke)
     val leadMs = 250L
     val active = if (timed.isEmpty()) -1
-    else timed.indexOfLast { it.startMs <= positionMs + leadMs }.coerceAtLeast(0)
+    else timed.indexOfLast { it.startMsLong() <= positionMs + leadMs }.coerceAtLeast(0)
     val listState = rememberLazyListState()
     LaunchedEffect(active) {
         if (active < 0) return@LaunchedEffect
@@ -1888,6 +1898,7 @@ private fun InlineSyncedLyrics(
                     state = listState,
                     contentPadding = PaddingValues(vertical = 20.dp),
                     modifier = Modifier.fillMaxSize(),
+                    userScrollEnabled = true,
                 ) {
                     itemsIndexed(timed) { i, line ->
                         val isActive = i == active
@@ -1907,7 +1918,7 @@ private fun InlineSyncedLyrics(
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onSeek(line.startMs.coerceAtLeast(0L)) }
+                                .clickable { onSeek(line.startMsLong()) }
                                 .padding(vertical = if (isActive) 14.dp else 7.dp)
                                 .graphicsLayer {
                                     scaleX = if (isActive) 1.06f else 1f
@@ -1955,7 +1966,7 @@ private fun parseLrcLines(raw: String?): List<TimedLyricLine> {
         }
         val text = m.groupValues[4].trim()
         if (text.isEmpty()) continue
-        out += TimedLyricLine(startMs = (min * 60 + sec) * 1000L + fracMs, text = text)
+        out += TimedLyricLine(startMs = ((min * 60 + sec) * 1000L + fracMs).toDouble(), text = text)
     }
     return out
 }

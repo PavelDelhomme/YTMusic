@@ -60,10 +60,15 @@ export async function downloadAndCache(track: Track) {
   return blob;
 }
 
-export async function resolvePlayUrl(trackId: string): Promise<string> {
-  const cached = await getCachedAudio(trackId);
-  if (cached) return URL.createObjectURL(cached);
+/** Stream proxy same-origin (sync) — pour lancer play() sans await (geste utilisateur). */
+export function streamProxyUrl(trackId: string): string {
   const token = getToken();
   const q = token ? `?access_token=${encodeURIComponent(token)}` : '';
   return apiUrl(`/api/stream/${trackId}${q}`);
+}
+
+export async function resolvePlayUrl(trackId: string): Promise<string> {
+  const cached = await getCachedAudio(trackId);
+  if (cached) return URL.createObjectURL(cached);
+  return streamProxyUrl(trackId);
 }

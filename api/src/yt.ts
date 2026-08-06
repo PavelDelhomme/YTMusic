@@ -79,6 +79,12 @@ type AudioFormat = {
 const audioFormatCache = new Map<string, AudioFormat>();
 const audioFormatInflight = new Map<string, Promise<AudioFormat>>();
 
+/** Invalide une URL audio cache (ex. 403 googlevideo) pour forcer un nouveau resolve. */
+export function invalidateAudioFormat(videoId: string) {
+  audioFormatCache.delete(videoId);
+  audioFormatInflight.delete(videoId);
+}
+
 function parseExpireMs(url: string): number | null {
   try {
     const exp = new URL(url).searchParams.get('expire');
