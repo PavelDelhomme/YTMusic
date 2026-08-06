@@ -46,6 +46,7 @@ import kotlinx.coroutines.launch
 import ovh.delhomme.ytmusic.BuildConfig
 import ovh.delhomme.ytmusic.data.AppContainer
 import ovh.delhomme.ytmusic.debug.AppLog
+import ovh.delhomme.ytmusic.debug.PerfSnapshot
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,7 +57,7 @@ fun DebugLogsScreen(
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
-    var tab by remember { mutableStateOf(0) } // 0 crash, 1 log
+    var tab by remember { mutableStateOf(0) } // 0 crash, 1 log, 2 perf
     var content by remember { mutableStateOf("") }
     var apiUrl by remember { mutableStateOf(container.resolvedApiBase()) }
     var probeMsg by remember { mutableStateOf<String?>(null) }
@@ -65,11 +66,19 @@ fun DebugLogsScreen(
     fun reload() {
         content = when (tab) {
             0 -> AppLog.lastCrashText()
+            2 -> PerfSnapshot.capture(context)
             else -> AppLog.recentLogText()
         }
     }
 
-    LaunchedEffect(tab) { reload() }
+    LaunchedEffect(tab) {
+        reload()
+        if (tab != 2) return@LaunchedEffect
+        while (true) {
+            kotlinx.coroutines.delay(5_000)
+            content = PerfSnapshot.capture(context)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -227,13 +236,12 @@ fun DebugLogsScreen(
             )
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (tab == 0) {
-                    Button(onClick = { tab = 0 }) { Text("Crash") }
-                    OutlinedButton(onClick = { tab = 1 }) { Text("Journal") }
-                } else {
-                    OutlinedButton(onClick = { tab = 0 }) { Text("Crash") }
-                    Button(onClick = { tab = 1 }) { Text("Journal") }
-                }
+                if (tab == 0) Button(onClick = { tab = 0 }) { Text("Crash") }
+                else OutlinedButton(onClick = { tab = 0 }) { Text("Crash") }
+                if (tab == 1) Button(onClick = { tab = 1 }) { Text("Journal") }
+                else OutlinedButton(onClick = { tab = 1 }) { Text("Journal") }
+                if (tab == 2) Button(onClick = { tab = 2 }) { Text("Perf") }
+                else OutlinedButton(onClick = { tab = 2 }) { Text("Perf") }
             }
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
