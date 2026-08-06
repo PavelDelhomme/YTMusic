@@ -1,5 +1,5 @@
 import type { Track } from './types.js';
-import { isPlausibleArtistEntity } from './mappers.js';
+import { isJunkArtistName, isPlausibleArtistEntity } from './mappers.js';
 
 /** Normalise pour comparaison : minuscules, sans accents, ponctuation allégée. */
 export function foldText(s: string): string {
@@ -44,6 +44,43 @@ function tokenCoverage(hayTokens: Set<string>, queryTokens: string[]): number {
   return hit / queryTokens.length;
 }
 
+/** Chaînes / titres bruit : réactions, lyrics, karaoke, podcasts… */
+export function isLowQualitySearchHit(track: Track): boolean {
+  const title = foldText(track.title);
+  const artists = (track.artists || []).map((a) => String(a.name || '').trim()).filter(Boolean);
+  const artistFold = foldText(artists.join(' '));
+
+  if (artists.some((n) => isJunkArtistName(n))) return true;
+  if (/\b(episode|podcast|reacts?|reaction|first time reaction)\b/.test(title)) return true;
+  if (/\b(medley\s+reaction|mv\s+reaction|song\s+reaction)\b/.test(title)) return true;
+  if (/\b(lyrics?|karaoke|soundlyrics|lyric\s*video)\b/.test(artistFold)) return true;
+  if (/\b(lyrics?\s*(video|channel)|karaoke|sound\s*lyrics)\b/.test(title)) return true;
+  // Artiste = date seule (si non filtrée amont)
+  if (artists.some((n) => /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(n) && /\d{4}/.test(n))) {
+    return true;
+  }
+  return false;
+}
+
+function artistMatchesSpan(artistNames: string[], span: string): boolean {
+  const s = foldText(span);
+  if (!s) return false;
+  const spanTokens = tokenize(s);
+  return artistNames.some((n) => {
+    const f = foldText(n);
+    if (!f) return false;
+    // Un seul token : égalité stricte du nom d’artiste (évite « internet » ∈ « Internet du Village »)
+    if (spanTokens.length === 1) return f === s;
+    return f === s || startsWithWord(f, s) || includesWord(f, s);
+  });
+}
+
+function titleMatchesSpan(title: string, span: string): boolean {
+  const s = foldText(span);
+  if (!s) return false;
+  return title === s || startsWithWord(title, s) || includesWord(title, s);
+}
+
 /**
  * Score de pertinence d’un résultat vs la requête utilisateur.
  * Plus le score est haut, plus le résultat doit remonter.
@@ -53,7 +90,9 @@ export function scoreSearchItem(track: Track, query: string): number {
   if (!q) return 0;
   const qTokens = tokenize(query);
   const title = foldText(track.title);
-  const artistNames = (track.artists || []).map((a) => a.name).filter(Boolean);
+  const artistNames = (track.artists || [])
+    .map((a) => a.name)
+    .filter((n): n is string => Boolean(n) && !isJunkArtistName(String(n)));
   const artists = foldText(artistNames.join(' '));
   const album = foldText(track.album?.name || '');
   const titleTokens = new Set(tokenize(track.title));
@@ -69,8 +108,17 @@ export function scoreSearchItem(track: Track, query: string): number {
   else if (includesWord(title, q)) score += 640;
   else if (q.length >= 4 && title.includes(q)) score += 280;
 
+  // « Titre : épisode podcast » / « Titre - long clickbait » au-delà de la requête
+  if (title !== q && (startsWithWord(title, q) || includesWord(title, q))) {
+    const extra = title.length - q.length;
+    if (extra >= 10) score -= Math.min(280, 40 + extra * 4);
+    if (/[:|•]/.test(String(track.title || '')) && extra >= 6) score -= 220;
+  }
+
   // Tous les tokens de la query dans le titre
-  if (qTokens.length > 1 && qTokens.every((t) => titleTokens.has(t) || includesWord(title, t))) score += 420;
+  const allTokensInTitle =
+    qTokens.length > 1 && qTokens.every((t) => titleTokens.has(t) || includesWord(title, t));
+  if (allTokensInTitle) score += 420;
   score += tokenCoverage(titleTokens, qTokens) * 280;
 
   // —— Artiste ——
@@ -80,47 +128,101 @@ export function scoreSearchItem(track: Track, query: string): number {
   else if (startsWithWord(artists, q) || includesWord(artists, q)) score += 700;
   score += tokenCoverage(artistTokens, qTokens) * (type === 'artist' ? 120 : 220);
 
-  // —— Titre + artiste (ex. "Poto Demi Portion" ou "Demi Portion Poto") ——
+  // Combien de tokens query matchent vraiment le champ artiste (pas seulement le titre « Artist - Song »)
+  let artistTokenHits = 0;
+  for (const t of qTokens) {
+    if (t.length < 2) continue;
+    if (artistNames.some((n) => foldText(n) === t || startsWithWord(foldText(n), t))) {
+      artistTokenHits += 1;
+    }
+  }
+
+  // —— Titre + artiste (ex. "Poto Demi Portion" ou "pentatonix daft punk") ——
+  let splitMatch = false;
   if (qTokens.length >= 2) {
     for (let i = 1; i < qTokens.length; i++) {
       const left = qTokens.slice(0, i).join(' ');
       const right = qTokens.slice(i).join(' ');
-      const titleLeft =
-        title === left || startsWithWord(title, left) || includesWord(title, left);
-      const titleRight =
-        title === right || startsWithWord(title, right) || includesWord(title, right);
-      const artistLeft =
-        artists.includes(left) || artistNames.some((n) => foldText(n).includes(left));
-      const artistRight =
-        artists.includes(right) || artistNames.some((n) => foldText(n).includes(right));
-      if (titleLeft && artistRight) score += 950;
-      if (titleRight && artistLeft) score += 920;
+      const titleLeft = titleMatchesSpan(title, left);
+      const titleRight = titleMatchesSpan(title, right);
+      const artistLeft = artistMatchesSpan(artistNames, left);
+      const artistRight = artistMatchesSpan(artistNames, right);
+      // Match « artiste + titre » propre (ex. artiste Pentatonix, titre Daft Punk)
+      if (titleLeft && artistRight) {
+        score += 1250;
+        splitMatch = true;
+      }
+      if (titleRight && artistLeft) {
+        score += 1220;
+        splitMatch = true;
+      }
     }
+  }
+
+  // Titre descriptif « ARTISTE - TITRE » sur une chaîne tierce (lyrics/reaction) :
+  // tous les tokens dans le titre mais aucun dans le vrai champ artiste → fortement pénalisé
+  if (allTokensInTitle && artistTokenHits === 0 && qTokens.length >= 2 && !splitMatch) {
+    score -= 720;
+  } else if (allTokensInTitle && artistTokenHits === 0 && qTokens.length >= 2) {
+    score -= 280;
   }
 
   // —— Album ——
   if (album && (album === q || includesWord(album, q) || (q.length >= 4 && album.includes(q)))) {
     score += 180;
   }
+  // Album catalogue distinct du titre (ex. Discovery) > single homonyme de cover
+  if (type === 'song' && album && title) {
+    if (album === title || album === q) score -= 90;
+    else if (title === q || foldText(track.title) === q) score += 200;
+    else score += 70;
+  }
 
   // Couverture globale des tokens
   score += tokenCoverage(allTokens, qTokens) * 160;
 
-  // Bonus type selon l’intention probable
-  if (type === 'song') score += 50;
+  // Bonus type selon l’intention probable — titres musicaux d’abord
+  if (type === 'song') score += 120;
   else if (type === 'artist') {
     // Chaîne perso (@handle / Profile) nommée comme un titre → pas un artiste
     if (!isPlausibleArtistEntity(track)) score -= 900;
     else if (artists === q || title === q) score += 80;
     else score += 10;
-  } else if (type === 'album') score += 20;
-  else if (type === 'video') score -= 40;
-  else if (type === 'playlist') score -= 50;
+  } else if (type === 'album') score += 40;
+  else if (type === 'video') score -= 180;
+  else if (type === 'playlist') score -= 80;
 
   // Titre court exact (ex. « Poto »)
   if (qTokens.length === 1 && title === q && (type === 'song' || type === 'video' || type === 'unknown')) {
     score += 280;
     if (type === 'song') score += 40;
+  }
+
+  // Bruit : réactions, lyrics, Episode/podcast
+  if (isLowQualitySearchHit(track)) {
+    score -= type === 'song' || type === 'video' ? 900 : 400;
+  }
+
+  // Remix / cover / karaoke : derrière l’original
+  if (/\b(remix|bootleg|mashup|nightcore|sped up|slowed|karaoke)\b/.test(title)) {
+    score -= 700;
+  }
+  if (/\b(cover|guitar cover|drum cover|piano cover)\b/.test(title) && artistTokenHits === 0) {
+    score -= 260;
+  }
+  // « (Adele) Hello » / « Artist - Title » par un autre artiste
+  if (
+    qTokens.length >= 2 &&
+    artistTokenHits === 0 &&
+    /\([^)]{2,}\)|\s-\s/.test(String(track.title || '')) &&
+    allTokensInTitle
+  ) {
+    score -= 400;
+  }
+
+  // « Various Artists » / compilations : derrière l’artiste nommé dans la query
+  if (artistNames.some((n) => /^(various artists|varios|artistes vari[eé]s)$/i.test(n.trim()))) {
+    score -= 350;
   }
 
   return score;
@@ -258,19 +360,25 @@ export function filterByRelevance<T extends Track>(
     item,
     index,
     s: scoreSearchItem(item, query),
+    junk: isLowQualitySearchHit(item),
   }));
-  const good = scored.filter((x) => x.s >= minScore);
+  // Préfère les hits non-junk ; ne garde le junk que s’il n’y a presque rien d’autre
+  const clean = scored.filter((x) => !x.junk && x.s >= minScore);
+  const good = clean.length >= 1 ? clean : scored.filter((x) => x.s >= minScore);
   if (good.length >= 2) return good.map((x) => x.item);
   if (good.length === 1) {
     const near = scored
-      .filter((x) => x.s < minScore && x.s >= Math.floor(minScore * 0.55))
+      .filter((x) => !x.junk && x.s < minScore && x.s >= Math.floor(minScore * 0.55))
       .slice(0, 4);
     return [...good, ...near]
       .sort((a, b) => b.s - a.s || a.index - b.index)
       .map((x) => x.item);
   }
   // Rien de pertinent : top 6 par score (évite page vide), jamais un dump brut
-  return [...scored].sort((a, b) => b.s - a.s || a.index - b.index).slice(0, 6).map((x) => x.item);
+  return [...scored]
+    .sort((a, b) => Number(a.junk) - Number(b.junk) || b.s - a.s || a.index - b.index)
+    .slice(0, 6)
+    .map((x) => x.item);
 }
 
 /** Choisit le meilleur « top result » parmi les buckets déjà rankés. */
@@ -287,30 +395,54 @@ export function pickTopResult(
   personalization?: SearchPersonalization,
 ): Track | null {
   // Top YT artiste bidon (chaîne @handle = titre de chanson) → ignorer
+  const ytTopRaw = buckets.topResult;
   const ytTop =
-    buckets.topResult &&
-    (buckets.topResult.type !== 'artist' || isPlausibleArtistEntity(buckets.topResult))
-      ? buckets.topResult
+    ytTopRaw &&
+    (ytTopRaw.type !== 'artist' || isPlausibleArtistEntity(ytTopRaw)) &&
+    !isLowQualitySearchHit(ytTopRaw)
+      ? ytTopRaw
       : null;
+
+  const cleanSongs = buckets.songs.filter((t) => !isLowQualitySearchHit(t));
+  const cleanVideos = buckets.videos.filter((t) => !isLowQualitySearchHit(t));
 
   const candidates: Track[] = [];
   if (ytTop) candidates.push(ytTop);
-  candidates.push(...buckets.songs.slice(0, 8));
+  candidates.push(...cleanSongs.slice(0, 10));
   candidates.push(...buckets.artists.filter(isPlausibleArtistEntity).slice(0, 4));
   candidates.push(...buckets.albums.slice(0, 3));
-  candidates.push(...buckets.videos.slice(0, 3));
+  // Vidéos en dernier recours — après les titres
+  candidates.push(...cleanVideos.slice(0, 2));
 
+  if (!candidates.length) {
+    // Fallback si tout était junk
+    candidates.push(...buckets.songs.slice(0, 5), ...buckets.videos.slice(0, 3));
+  }
   if (!candidates.length) return null;
 
   const q = foldText(query);
-  const exactSongs = buckets.songs.filter((t) => foldText(t.title) === q);
+  const exactSongs = cleanSongs.filter((t) => {
+    if (foldText(t.title) !== q) return false;
+    const raw = String(t.title || '');
+    // « Daft Punk - Get Lucky » / « (Adele) Hello » se foldent en la query sans être le titre catalogue
+    if (/\s[-–—]\s/.test(raw) || /[()]/.test(raw)) return false;
+    return true;
+  });
   // Titre exact trouvé → prioriser le morceau (pas une fausse fiche artiste homonyme)
   if (exactSongs.length >= 1) {
-    const bestSong = rankByQuery(exactSongs, query, personalization)[0];
-    if (bestSong && scoreSearchItem(bestSong, query) >= 200) {
-      return bestSong;
+    const bestExact = rankByQuery(exactSongs, query, personalization)[0];
+    if (bestExact && scoreSearchItem(bestExact, query) >= 200) {
+      return bestExact;
     }
   }
+
+  // Si un titre musical matche bien (split artiste+titre), il gagne toujours sur une vidéo
+  const bestSong = cleanSongs[0]
+    ? rankByQuery(cleanSongs.slice(0, 8), query, personalization)[0]
+    : null;
+  const bestSongScore = bestSong
+    ? scoreSearchItem(bestSong, query) + personalizeBoost(bestSong, personalization, query)
+    : -Infinity;
 
   const ranked = rankByQuery(uniqById(candidates), query, personalization);
   const best = ranked[0];
@@ -318,16 +450,28 @@ export function pickTopResult(
   const bestRel = scoreSearchItem(best, query);
   const bestScore = bestRel + personalizeBoost(best, personalization, query);
 
+  if (bestSong && bestSongScore >= 600) {
+    // Ne pas laisser une vidéo / lyrics channel battre un vrai titre
+    if (best.type === 'video' || isLowQualitySearchHit(best) || bestScore <= bestSongScore + 80) {
+      return bestSong;
+    }
+  }
+
   // Top YT n’est accepté que s’il matche aussi lexicalement la requête
   if (ytTop) {
     const ytRel = scoreSearchItem(ytTop, query);
     const ytScore = ytRel + personalizeBoost(ytTop, personalization, query);
     // Ne jamais renvoyer un top YT hors-sujet (ex. Keny) si un autre candidat matche mieux
-    if (ytRel < 180) {
+    if (ytRel < 180 || isLowQualitySearchHit(ytTop)) {
       return bestRel >= 120 ? best : null;
     }
+    // Vidéo top YT vs titre musical : privilégier le titre
+    if (ytTop.type === 'video' && bestSong && bestSongScore >= ytScore - 40) {
+      return bestSong;
+    }
     if (bestScore >= ytScore + 40) return best;
-    if (ytRel >= 400 && ytRel >= bestRel - 20) return ytTop;
+    if (ytRel >= 400 && ytRel >= bestRel - 20 && ytTop.type !== 'video') return ytTop;
+    if (ytRel >= 400 && ytRel >= bestRel - 20 && !bestSong) return ytTop;
   }
 
   return bestRel >= 120 ? best : null;
