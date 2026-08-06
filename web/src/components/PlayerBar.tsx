@@ -24,6 +24,7 @@ import { useSession } from '../store/session';
 import { useItemActions } from '../store/itemActions';
 import { CoverImage } from './CoverImage';
 import { formatRemaining } from '../lib/time';
+import { useHoldSeek } from '../lib/holdSeek';
 import type { NowPlayingTab } from './NowPlaying';
 
 /** Empêche le clic de remonter jusqu’au footer (qui ouvre le Now Playing). */
@@ -87,6 +88,13 @@ export function PlayerBar({
   const volumeWrapRef = useRef<HTMLDivElement | null>(null);
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+
+  const holdPrev = useHoldSeek(-1, () => {
+    void prev();
+  });
+  const holdNext = useHoldSeek(1, () => {
+    void next();
+  });
 
   // Si le volume change hors UI (↑/↓ clavier), désactive le mute local
   useEffect(() => {
@@ -399,14 +407,18 @@ export function PlayerBar({
           </button>
           <button
             type="button"
-            onClick={(e) => {
-              stop(e);
-              void next();
-            }}
+            onPointerDown={holdNext.onPointerDown}
+            onPointerUp={holdNext.onPointerUp}
+            onPointerCancel={holdNext.onPointerCancel}
+            onContextMenu={holdNext.onContextMenu}
             disabled={autoRadioLoading}
-            className="flex h-10 w-10 items-center justify-center rounded-full text-white disabled:opacity-50"
+            className="flex h-10 w-10 items-center justify-center rounded-full text-white disabled:opacity-50 touch-none select-none"
             aria-label="Titre suivant"
-            title={autoRadioLoading ? 'Chargement des suggestions…' : undefined}
+            title={
+              autoRadioLoading
+                ? 'Chargement des suggestions…'
+                : 'Clic : suivant · Appui long : avancer dans le titre'
+            }
           >
             <SkipForward className="h-5 w-5 fill-white" />
           </button>
@@ -418,12 +430,13 @@ export function PlayerBar({
         <div className="flex shrink-0 items-center gap-1 sm:gap-1.5" onClick={stop} onPointerDown={stop}>
           <button
             type="button"
-            onClick={(e) => {
-              stop(e);
-              void prev();
-            }}
-            className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10"
+            onPointerDown={holdPrev.onPointerDown}
+            onPointerUp={holdPrev.onPointerUp}
+            onPointerCancel={holdPrev.onPointerCancel}
+            onContextMenu={holdPrev.onContextMenu}
+            className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10 touch-none select-none"
             aria-label="Titre précédent"
+            title="Clic : précédent · Appui long : reculer dans le titre"
           >
             <SkipBack className="h-6 w-6 fill-white" />
           </button>
@@ -441,14 +454,18 @@ export function PlayerBar({
           </button>
           <button
             type="button"
-            onClick={(e) => {
-              stop(e);
-              void next();
-            }}
+            onPointerDown={holdNext.onPointerDown}
+            onPointerUp={holdNext.onPointerUp}
+            onPointerCancel={holdNext.onPointerCancel}
+            onContextMenu={holdNext.onContextMenu}
             disabled={autoRadioLoading}
-            className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10 disabled:opacity-50"
+            className="flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10 disabled:opacity-50 touch-none select-none"
             aria-label="Titre suivant"
-            title={autoRadioLoading ? 'Chargement des suggestions…' : undefined}
+            title={
+              autoRadioLoading
+                ? 'Chargement des suggestions…'
+                : 'Clic : suivant · Appui long : avancer dans le titre'
+            }
           >
             <SkipForward className="h-6 w-6 fill-white" />
           </button>
