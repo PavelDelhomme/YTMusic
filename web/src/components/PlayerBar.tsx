@@ -174,6 +174,27 @@ export function PlayerBar({
     };
   }, [current, isActivePlayer, activeName]);
 
+  // Molette sur la zone volume : ±5 % par cran (passive:false pour bloquer le scroll page)
+  // Doit rester AVANT tout return conditionnel (Rules of Hooks).
+  useEffect(() => {
+    const el = volumeWrapRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      if (delta === 0) return;
+      const step = 0.05;
+      const cur = mutedRef.current ? 0 : usePlayer.getState().volume;
+      const next = Math.max(0, Math.min(1, Math.round((cur + (delta < 0 ? step : -step)) * 100) / 100));
+      setVolume(next);
+      setMuted(next === 0);
+      if (next > 0) prevVol.current = next;
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [setVolume]);
+
   if (!current) {
     if (compactEmpty) {
       return (
@@ -226,26 +247,6 @@ export function PlayerBar({
       setMuted(true);
     }
   };
-
-  // Molette sur la zone volume : ±5 % par cran (passive:false pour bloquer le scroll page)
-  useEffect(() => {
-    const el = volumeWrapRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
-      if (delta === 0) return;
-      const step = 0.05;
-      const cur = mutedRef.current ? 0 : usePlayer.getState().volume;
-      const next = Math.max(0, Math.min(1, Math.round((cur + (delta < 0 ? step : -step)) * 100) / 100));
-      setVolume(next);
-      setMuted(next === 0);
-      if (next > 0) prevVol.current = next;
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [setVolume]);
 
   const listenHere = (e: SyntheticEvent) => {
     stop(e);

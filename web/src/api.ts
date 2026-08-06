@@ -127,9 +127,10 @@ export function resizeThumbUrl(url: string, size = 200): string {
   const vi = u.match(/i\.ytimg\.com\/vi\/([^/]+)\//);
   if (vi) {
     const id = vi[1];
-    if (size >= 640) return `https://i.ytimg.com/vi/${id}/hq720.jpg`;
-    if (size >= 320) return `https://i.ytimg.com/vi/${id}/sddefault.jpg`;
-    return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+    // hq720.jpg 404 souvent → privilégier sd/hq
+    if (size >= 640) return `https://i.ytimg.com/vi/${id}/sddefault.jpg`;
+    if (size >= 320) return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+    return `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
   }
 
   return u;
@@ -163,12 +164,12 @@ export function thumbCandidates(
   if (id && /^[a-zA-Z0-9_-]{11}$/.test(id)) {
     if (size >= 640) {
       push(`https://i.ytimg.com/vi/${id}/maxresdefault.jpg`);
-      push(`https://i.ytimg.com/vi/${id}/hq720.jpg`);
-      push(`https://i.ytimg.com/vi/${id}/sddefault.jpg`);
-    } else if (size >= 320) {
-      push(`https://i.ytimg.com/vi/${id}/hq720.jpg`);
       push(`https://i.ytimg.com/vi/${id}/sddefault.jpg`);
       push(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`);
+    } else if (size >= 320) {
+      push(`https://i.ytimg.com/vi/${id}/sddefault.jpg`);
+      push(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`);
+      push(`https://i.ytimg.com/vi/${id}/mqdefault.jpg`);
     } else {
       push(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`);
       push(`https://i.ytimg.com/vi/${id}/mqdefault.jpg`);

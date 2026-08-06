@@ -238,8 +238,8 @@ export function ExplorePage() {
       )}
 
       {!loading &&
-        ytShelves.map((shelf) => (
-          <ShelfRow key={`yt-${shelf.title}`} title={shelf.title} items={shelf.items} />
+        ytShelves.map((shelf, i) => (
+          <ShelfRow key={`yt-${i}-${shelf.title}`} title={shelf.title} items={shelf.items} />
         ))}
 
       {!loading && !ytShelves.length && !radioShelves.length && !pendingRadios.length && !error && (
