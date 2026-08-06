@@ -77,6 +77,7 @@ fun LibraryScreen(
     val scope = rememberCoroutineScope()
     val filterStore = remember { LibraryFilterStore(context) }
     val hidden by filterStore.hiddenIds.collectAsState(initial = LibraryFilter.defaultHidden)
+    val offlineRev by container.offlineStore.revision.collectAsState()
 
     var lib by remember { mutableStateOf<LibraryResponse?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -135,6 +136,21 @@ fun LibraryScreen(
                 LibraryFilter.pendingSelect = null
             }
             reloadLibrary(force = false, showSpinner = true)
+        }
+    }
+
+    // Sync live des DL locaux → liste / filtre Téléchargés sans pull-to-refresh
+    LaunchedEffect(offlineRev) {
+        val local = container.offlineStore.listTracks()
+        downloadMeta = downloadMeta + local.associateBy { it.id }
+        val ids = local.map { it.id }
+        val cur = lib
+        if (cur != null) {
+            lib = cur.copy(downloaded = (cur.downloaded + ids).distinct())
+        } else if (ids.isNotEmpty()) {
+            lib = LibraryResponse(downloaded = ids)
+            error = null
+            loading = false
         }
     }
 
@@ -263,7 +279,7 @@ fun LibraryScreen(
                     }
                 }
 
-                val content = remember(data, selected, downloadMeta) {
+                val content = remember(data, selected, downloadMeta, offlineRev) {
                     buildLibraryContent(data, selected, downloadMeta)
                 }
                 when {
