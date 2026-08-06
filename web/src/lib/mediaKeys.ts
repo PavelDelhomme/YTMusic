@@ -104,15 +104,12 @@ export function wireMediaSession() {
     if (typeof details.seekTime === 'number') usePlayer.getState().seek(details.seekTime);
   });
   setMediaHandler('seekbackward', (details) => {
-    const p = usePlayer.getState();
     const off = details.seekOffset ?? 10;
-    p.seek(Math.max(0, p.progress - off));
+    usePlayer.getState().seekBy(-off);
   });
   setMediaHandler('seekforward', (details) => {
-    const p = usePlayer.getState();
     const off = details.seekOffset ?? 10;
-    const max = p.duration > 0 ? p.duration : p.progress + off;
-    p.seek(Math.min(max, p.progress + off));
+    usePlayer.getState().seekBy(off);
   });
 }
 
