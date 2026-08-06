@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import { artistNames } from '../api';
 import { usePlayer } from '../store/player';
+import { useItemActions } from '../store/itemActions';
 import { TrackRow } from './TrackRow';
 import { SaveQueueSheet } from './SaveQueueSheet';
 import { SyncedLyrics } from './NowPlaying';
-import { ListMusic, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles, X } from 'lucide-react';
+import { ListMusic, MoreVertical, Radio, Repeat, Repeat1, Save, Shuffle, Sparkles, X } from 'lucide-react';
 
 type PanelTab = 'queue' | 'similar';
 
@@ -33,6 +35,7 @@ export function QueuePanel() {
   const autoRadioLoading = usePlayer((s) => s.autoRadioLoading);
   const relatedError = usePlayer((s) => s.relatedError);
   const play = usePlayer((s) => s.play);
+  const openActions = useItemActions((s) => s.open);
   const [saveOpen, setSaveOpen] = useState(false);
   const [panelTab, setPanelTab] = useState<PanelTab>('queue');
 
@@ -78,10 +81,35 @@ export function QueuePanel() {
   return (
     <aside className="fixed bottom-[88px] right-0 top-0 z-30 flex w-full max-w-xl flex-col border-l border-yt-border bg-yt-surface shadow-2xl md:static md:bottom-auto md:z-10 md:max-w-lg lg:max-w-xl">
       <div className="flex items-center justify-between gap-2 border-b border-yt-border px-4 py-3">
-        <h3 className="min-w-0 truncate font-display text-base font-semibold">
-          {showLyrics ? 'Paroles' : panelTab === 'similar' ? 'Similaires' : "File d'attente"}
-        </h3>
+        <div className="min-w-0 flex-1">
+          {showLyrics ? (
+            <>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-yt-muted">Paroles</p>
+              <h3 className="truncate font-display text-base font-semibold leading-tight" title={current?.title}>
+                {current?.title || 'Paroles'}
+              </h3>
+              {current && (
+                <p className="truncate text-xs text-yt-muted">{artistNames(current)}</p>
+              )}
+            </>
+          ) : (
+            <h3 className="min-w-0 truncate font-display text-base font-semibold">
+              {panelTab === 'similar' ? 'Similaires' : "File d'attente"}
+            </h3>
+          )}
+        </div>
         <div className="flex shrink-0 items-center gap-1">
+          {showLyrics && current && (
+            <button
+              type="button"
+              onClick={() => openActions(current, { queueIndex })}
+              className="flex h-8 w-8 items-center justify-center rounded-full text-yt-muted hover:bg-yt-hover hover:text-white"
+              title="Plus d'options"
+              aria-label="Plus d'options"
+            >
+              <MoreVertical className="h-4 w-4" />
+            </button>
+          )}
           {!showLyrics && panelTab === 'queue' && (
             <>
               <button
@@ -135,6 +163,8 @@ export function QueuePanel() {
             type="button"
             onClick={() => (showLyrics ? void toggleLyrics() : toggleQueue())}
             className="rounded-full p-1.5 text-yt-muted hover:bg-yt-hover hover:text-white"
+            title={showLyrics ? 'Fermer les paroles' : 'Fermer'}
+            aria-label={showLyrics ? 'Fermer les paroles' : 'Fermer'}
           >
             <X className="h-4 w-4" />
           </button>
