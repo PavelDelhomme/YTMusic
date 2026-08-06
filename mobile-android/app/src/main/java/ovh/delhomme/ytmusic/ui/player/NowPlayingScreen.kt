@@ -203,9 +203,13 @@ fun NowPlayingScreen(
     // Remplit « À suivre » — ne PAS clear/rebuild à chaque ouverture du plein écran
     // (sinon setMediaItems+prepare → coupe l’audio). Clear seulement si le seed change.
     var lastAutoplaySeed by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(ui.track?.id, ui.autoplaySuggestions) {
+    LaunchedEffect(ui.track?.id, ui.autoplaySuggestions, ui.sourceKind, ui.userQueueEnd, ui.queueIndex) {
         if (!ui.autoplaySuggestions) return@LaunchedEffect
         val seed = ui.track?.id ?: return@LaunchedEffect
+        val remainingUser = (ui.userQueueEnd - ui.queueIndex - 1).coerceAtLeast(0)
+        if (ovh.delhomme.ytmusic.data.isPrecomputedMixSource(ui.sourceKind, remainingUser)) {
+            return@LaunchedEffect
+        }
         val seedChanged = lastAutoplaySeed != null && lastAutoplaySeed != seed
         lastAutoplaySeed = seed
         if (seedChanged) {
@@ -822,7 +826,7 @@ fun NowPlayingScreen(
                                             MixIcon, "Mix", SeekRed, showLabel = false,
                                         ) {
                                             scope.launch {
-                                                val mix = buildRadioQueue(container.api, "track", track.id, track)
+                                                val mix = buildRadioQueue(container.api, "track", track.id, track, mixCache = container.mixCache)
                                                 if (mix.isNotEmpty()) {
                                                     player.playRadioOrEnqueue(mix, "Mix")
                                                     Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
@@ -989,7 +993,7 @@ fun NowPlayingScreen(
                             onStartMix = {
                                 val t = ui.track ?: return@QueueSectionHeader
                                 scope.launch {
-                                    val mix = buildRadioQueue(container.api, "track", t.id, t)
+                                    val mix = buildRadioQueue(container.api, "track", t.id, t, mixCache = container.mixCache)
                                     if (mix.isNotEmpty()) {
                                         player.playRadioOrEnqueue(mix, "Mix")
                                         Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
@@ -1016,7 +1020,7 @@ fun NowPlayingScreen(
                             onMore = onMore?.let { { it(item) } },
                             onMix = {
                                 scope.launch {
-                                    val mix = buildRadioQueue(container.api, "track", item.id, item)
+                                    val mix = buildRadioQueue(container.api, "track", item.id, item, mixCache = container.mixCache)
                                     if (mix.isNotEmpty()) {
                                         player.playRadioOrEnqueue(mix, "Mix")
                                         Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
@@ -1066,7 +1070,7 @@ fun NowPlayingScreen(
                                 onMore = onMore?.let { { it(item) } },
                                 onMix = {
                                     scope.launch {
-                                        val mix = buildRadioQueue(container.api, "track", item.id, item)
+                                        val mix = buildRadioQueue(container.api, "track", item.id, item, mixCache = container.mixCache)
                                         if (mix.isNotEmpty()) {
                                             player.playRadioOrEnqueue(mix, "Mix")
                                             Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
@@ -1099,7 +1103,7 @@ fun NowPlayingScreen(
                         onStartMix = {
                             val t = ui.track ?: return@QueueExpandedBody
                             scope.launch {
-                                val mix = buildRadioQueue(container.api, "track", t.id, t)
+                                val mix = buildRadioQueue(container.api, "track", t.id, t, mixCache = container.mixCache)
                                 if (mix.isNotEmpty()) {
                                     player.playRadioOrEnqueue(mix, "Mix")
                                     Toast.makeText(context, "Mix ajouté à la file", Toast.LENGTH_SHORT).show()
@@ -1413,7 +1417,7 @@ private fun QueueExpandedBody(
     val scope = rememberCoroutineScope()
     val startMixFor: (TrackDto) -> Unit = { track ->
         scope.launch {
-            val mix = buildRadioQueue(container.api, "track", track.id, track)
+            val mix = buildRadioQueue(container.api, "track", track.id, track, mixCache = container.mixCache)
             if (mix.isNotEmpty()) {
                 player.playRadioOrEnqueue(mix, "Mix")
             }

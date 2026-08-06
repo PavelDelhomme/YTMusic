@@ -129,6 +129,7 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
     ) {
         viewModelScope.launch {
             val title = _state.value.radios.find { it.id == categoryId }?.title ?: "Mix"
+            val cacheKey = container.mixCache.keyCategory(categoryId)
             // Preview déjà en mémoire → feedback immédiat, puis file complète
             val preview = _state.value.radioPreviews[categoryId]
                 .orEmpty()
@@ -138,11 +139,29 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
             } else {
                 _state.value = _state.value.copy(radioLoadingId = categoryId)
             }
+            val cached = container.mixCache.get(cacheKey)
+            if (cached != null && cached.isNotEmpty()) {
+                onQueue(cached, title)
+                // Rafraîchit en arrière-plan
+                runCatching {
+                    container.ensureFreshToken()
+                    val mix = container.api.recoRadio(categoryId)
+                    val tracks = mix.tracks.filter { it.isPlayable() }
+                    if (tracks.isNotEmpty()) {
+                        container.mixCache.put(cacheKey, tracks, mix.generatedAt ?: System.currentTimeMillis())
+                    }
+                }
+                _state.value = _state.value.copy(radioLoadingId = null)
+                return@launch
+            }
             runCatching {
                 container.ensureFreshToken()
                 val mix = container.api.recoRadio(categoryId)
                 val tracks = mix.tracks.filter { it.isPlayable() }
-                if (tracks.isNotEmpty()) onQueue(tracks, title)
+                if (tracks.isNotEmpty()) {
+                    container.mixCache.put(cacheKey, tracks, mix.generatedAt ?: System.currentTimeMillis())
+                    onQueue(tracks, title)
+                }
             }
             _state.value = _state.value.copy(radioLoadingId = null)
         }
