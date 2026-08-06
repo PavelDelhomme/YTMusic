@@ -238,6 +238,11 @@ class PlayerController(
         val c = player() ?: return
         val queue = PlaybackService.Holder.queue.toMutableList()
         val existing = queue.map { it.id }.toHashSet()
+        // Titres déjà passés dans la file (avant l’index) → pas de remise en « À suivre »
+        val curIdx = c.currentMediaItemIndex.coerceAtLeast(0)
+        for (i in 0 until curIdx.coerceAtMost(queue.size)) {
+            existing.add(queue[i].id)
+        }
         val toAdd = extra.filter { it.id !in existing }.take(80)
         if (toAdd.isEmpty()) return
         if (userQueueEnd <= 0) userQueueEnd = (_state.value.queueIndex + 1).coerceAtMost(queue.size)
