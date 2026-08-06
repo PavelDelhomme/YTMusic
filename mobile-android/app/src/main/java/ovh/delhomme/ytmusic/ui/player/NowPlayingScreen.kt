@@ -133,6 +133,35 @@ private val SeekRed = Color(0xFFFF0033)
 private val PlayerFg = Color(0xFFF5F5F5)
 private val PlayerMuted = Color(0xFFCFCFCF)
 
+@Composable
+private fun MediaModeSwitch(
+    video: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(Color(0xFF1D1D1D))
+            .padding(2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        listOf(false to "Titre", true to "Vidéo").forEach { (isVideo, label) ->
+            val active = video == isVideo
+            Text(
+                label,
+                color = if (active) PlayerFg else PlayerMuted,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(if (active) Color.White.copy(alpha = 0.15f) else Color.Transparent)
+                    .clickable { onChange(isVideo) }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun NowPlayingScreen(
@@ -470,6 +499,12 @@ fun NowPlayingScreen(
                             )
                         }
                         Spacer(Modifier.weight(1f))
+                        // Switch Titre | Vidéo (centre, entre replier et ⋮)
+                        MediaModeSwitch(
+                            video = SessionMediaMode.video,
+                            onChange = { SessionMediaMode.video = it },
+                        )
+                        Spacer(Modifier.weight(1f))
                         NowPlayingChrome.topBarActions.forEach { slot ->
                             if (!slot.enabled) return@forEach
                             when (slot.id) {
@@ -573,16 +608,29 @@ fun NowPlayingScreen(
                                             .background(Color.Black.copy(alpha = 0.42f)),
                                     )
                                 } else {
-                                    AsyncImage(
-                                        model = track.coverUrl(800),
-                                        contentDescription = track.title,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(260.dp)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .clickable { showLyrics = true },
-                                    )
+                                    if (SessionMediaMode.video) {
+                                        SyncedVideoSurface(
+                                            streamUrl = container.videoStreamUrl(track.id),
+                                            positionMs = ui.positionMs,
+                                            playing = ui.playing,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(260.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .clickable { showLyrics = true },
+                                        )
+                                    } else {
+                                        AsyncImage(
+                                            model = track.coverUrl(800),
+                                            contentDescription = track.title,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(260.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .clickable { showLyrics = true },
+                                        )
+                                    }
                                     Spacer(Modifier.height(18.dp))
                                     Text(
                                         track.title,

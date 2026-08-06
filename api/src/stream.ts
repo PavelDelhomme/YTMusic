@@ -44,7 +44,9 @@ async function proxyStreamToHome(
   homeBase: string,
   videoId: string,
 ) {
-  const url = `${homeBase}/api/stream/${videoId}`;
+  const wantVideo = String(req.query.type || req.query.media || '') === 'video';
+  const q = wantVideo ? '?type=video' : '';
+  const url = `${homeBase}/api/stream/${videoId}${q}`;
   const headers: Record<string, string> = {
     'X-YTM-Stream-Relay': '1',
   };
@@ -67,7 +69,7 @@ async function proxyStreamToHome(
   res.status(upstream.status);
   const ct = upstream.headers.get('content-type');
   if (ct) res.setHeader('Content-Type', ct);
-  else res.setHeader('Content-Type', 'audio/mp4');
+  else res.setHeader('Content-Type', wantVideo ? 'video/mp4' : 'audio/mp4');
   const cr = upstream.headers.get('content-range');
   if (cr) res.setHeader('Content-Range', cr);
   const cl = upstream.headers.get('content-length');
@@ -244,30 +246,34 @@ export async function handleStream(req: Request, res: Response) {
     res.status(400).json({ error: 'ID invalide' });
     return;
   }
+  const wantVideo = String(req.query.type || req.query.media || '') === 'video';
 
-  const cached = cachePath(videoId);
-  if (existsSync(cached)) {
-    const size = statSync(cached).size;
-    const range = req.headers.range;
-    if (range) {
-      const m = /bytes=(\d+)-(\d*)/.exec(range);
-      const start = m ? Number(m[1]) : 0;
-      const end = m && m[2] ? Number(m[2]) : size - 1;
-      res.status(206);
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('Content-Length', end - start + 1);
+  // Cache disque = audio only — ne pas servir .m4a pour ?type=video
+  if (!wantVideo) {
+    const cached = cachePath(videoId);
+    if (existsSync(cached)) {
+      const size = statSync(cached).size;
+      const range = req.headers.range;
+      if (range) {
+        const m = /bytes=(\d+)-(\d*)/.exec(range);
+        const start = m ? Number(m[1]) : 0;
+        const end = m && m[2] ? Number(m[2]) : size - 1;
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Content-Length', end - start + 1);
+        res.setHeader('Content-Type', 'audio/mp4');
+        const { createReadStream } = await import('node:fs');
+        createReadStream(cached, { start, end }).pipe(res);
+        return;
+      }
       res.setHeader('Content-Type', 'audio/mp4');
+      res.setHeader('Content-Length', size);
+      res.setHeader('Accept-Ranges', 'bytes');
       const { createReadStream } = await import('node:fs');
-      createReadStream(cached, { start, end }).pipe(res);
+      createReadStream(cached).pipe(res);
       return;
     }
-    res.setHeader('Content-Type', 'audio/mp4');
-    res.setHeader('Content-Length', size);
-    res.setHeader('Accept-Ranges', 'bytes');
-    const { createReadStream } = await import('node:fs');
-    createReadStream(cached).pipe(res);
-    return;
   }
 
   // VPS → PC maison (IP résidentielle) : STREAM_UPSTREAM ou data/stream-upstream.url
@@ -284,7 +290,7 @@ export async function handleStream(req: Request, res: Response) {
   }
 
   try {
-    const format = await getAudioFormat(videoId);
+    const format = wantVideo ? await getVideoFormat(videoId) : await getAudioFormat(videoId);
     if (format.url) {
       // Clients natifs (Android ExoPlayer) : 302 direct googlevideo = plus rapide.
       // Navigateur web : proxy (CORS / Workbox).
@@ -298,7 +304,7 @@ export async function handleStream(req: Request, res: Response) {
       });
       // Ne pas propager 403/502 googlevideo brut → fallbacks Innertube / yt-dlp
       if (upstream.status >= 400) {
-        throw new Error(`upstream audio ${upstream.status}`);
+        throw new Error(`upstream ${wantVideo ? 'video' : 'audio'} ${upstream.status}`);
       }
       if (!upstream.body) {
         throw new Error('upstream sans corps');
@@ -309,7 +315,7 @@ export async function handleStream(req: Request, res: Response) {
       const reader = upstream.body.getReader();
       const first = await reader.read();
       if (first.done || !first.value?.byteLength) {
-        throw new Error('upstream audio vide');
+        throw new Error('upstream vide');
       }
       if (res.headersSent) return;
       res.status(upstream.status);
@@ -317,7 +323,7 @@ export async function handleStream(req: Request, res: Response) {
       const cr = upstream.headers.get('content-range');
       const ar = upstream.headers.get('accept-ranges');
       if (ct) res.setHeader('Content-Type', ct);
-      else res.setHeader('Content-Type', 'audio/mp4');
+      else res.setHeader('Content-Type', wantVideo ? 'video/mp4' : 'audio/mp4');
       if (cr) res.setHeader('Content-Range', cr);
       if (ar) res.setHeader('Accept-Ranges', ar);
       res.setHeader('Cache-Control', 'public, max-age=1800');
@@ -339,6 +345,17 @@ export async function handleStream(req: Request, res: Response) {
   } catch (err) {
     if (endIfHeadersSent(res)) return;
     console.warn('[stream] format/proxy KO:', (err as Error).message?.slice?.(0, 160) || err);
+  }
+
+  // Fallbacks audio-only (Innertube download / yt-dlp) — pas adaptés à la vidéo
+  if (wantVideo) {
+    if (!res.headersSent) {
+      res.status(502).json({
+        error: 'Impossible de streamer la vidéo',
+        hint: 'Format progressif indisponible pour ce titre',
+      });
+    }
+    return;
   }
 
   try {
