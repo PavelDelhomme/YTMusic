@@ -27,6 +27,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, type Track } from '../api';
 import { downloadAndCache, listCachedIds } from '../lib/offlineCache';
+import { applySleepPick, SLEEP_TIMER_OPTIONS } from '../lib/sleepTimer';
 import { formatTrackDuration } from '../lib/time';
 import { useItemActions } from '../store/itemActions';
 import { useLibrary } from '../store/library';
@@ -616,30 +617,19 @@ export function ItemActionsSheet({ onOpenEqualizer }: { onOpenEqualizer?: () => 
           <Row
             icon={<Moon className="h-4 w-4" />}
             label="Mise en veille"
-            sub={sleepLabel || '5 / 15 / 30 min, 1 h, fin de chanson'}
+            sub={sleepLabel || '5 / 15 / 30 min · 1 h · fin chanson / file'}
             onClick={() => setShowSleep((v) => !v)}
           />
           {showSleep && (
             <div className="border-t border-white/10 px-2 py-1">
-              {(
-                [
-                  [5 * 60_000, '5 minutes'],
-                  [15 * 60_000, '15 minutes'],
-                  [30 * 60_000, '30 minutes'],
-                  [60 * 60_000, '1 heure'],
-                  [-1, 'Fin de la chanson'],
-                  [0, 'Annuler'],
-                ] as const
-              ).map(([ms, label]) => (
+              {SLEEP_TIMER_OPTIONS.map((pick) => (
                 <Row
-                  key={label}
+                  key={pick.label}
                   icon={<Moon className="h-4 w-4" />}
-                  label={label}
+                  label={pick.label}
                   onClick={() =>
                     after(() => {
-                      if (ms === 0) setSleepTimer(null, null);
-                      else if (ms === -1) setSleepTimer('end', 'Fin de la chanson');
-                      else setSleepTimer(ms, label);
+                      applySleepPick(pick, setSleepTimer);
                     })
                   }
                 />
