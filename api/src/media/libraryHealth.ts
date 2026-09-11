@@ -13,7 +13,8 @@
  * le lot des titres jamais vérifiés, et passe en priorité.
  *
  * Le balayage tourne en cycles : quand plus rien n'est à vérifier, un bilan
- * part par mail et le cycle suivant démarre à l'expiration des délais de
+ * peut partir par mail (au plus 1 / 24 h, et seulement si le cycle a vraiment
+ * travaillé). Le cycle suivant démarre à l'expiration des délais de
  * revérification, le catalogue YouTube ne cessant pas d'évoluer.
  */
 import { existsSync, statSync } from 'node:fs';
@@ -44,6 +45,18 @@ const RECHECK_OK_MS = Number(process.env.LIBRARY_HEALTH_RECHECK_OK_MS || 7 * 24 
 /** Un titre sans remplaçant est retenté plus tôt, le catalogue bouge. */
 const RETRY_DEAD_MS = Number(process.env.LIBRARY_HEALTH_RETRY_DEAD_MS || 3 * 24 * 3_600_000);
 const REPORT_TO = process.env.LIBRARY_HEALTH_REPORT_TO || 'dev@delhomme.ovh';
+/** Au plus un mail de bilan par intervalle (défaut 24 h) — évite le spam si cycles vides/brefs. */
+const REPORT_MIN_INTERVAL_MS = Number(
+  process.env.LIBRARY_HEALTH_REPORT_MIN_MS || 24 * 60 * 60_000,
+);
+/** N’envoie un mail que si le cycle a vraiment travaillé (défaut ≥ 50 titres). */
+const REPORT_MIN_DONE = Number(process.env.LIBRARY_HEALTH_REPORT_MIN_DONE || 50);
+/**
+ * File vide depuis au moins ce délai avant de clôturer un cycle.
+ * Sinon la vague de re-vérif (1 titre / quelques secondes après 7 j) crée
+ * des micro-cycles en continu.
+ */
+const EMPTY_GRACE_MS = Number(process.env.LIBRARY_HEALTH_EMPTY_GRACE_MS || 30 * 60_000);
 
 /** `pending` : vidéo morte constatée, remplaçant pas encore cherché. */
 type State = 'ok' | 'replaced' | 'dead' | 'pending';
@@ -51,7 +64,11 @@ type State = 'ok' | 'replaced' | 'dead' | 'pending';
 let schemaReady = false;
 let timer: NodeJS.Timeout | null = null;
 let running = false;
-const stats = { checked: 0, ok: 0, replaced: 0, dead: 0, pending: 0, startedAt: 0 };
+/** Après un cycle vide / bilan : ne pas rappeler finishCycle tant qu’on n’a pas revérifié un titre. */
+let cycleIdleClosed = false;
+/** Première fois où la file due+pending est vide (0 = pas vide). */
+let emptySinceMs = 0;
+const stats = { checked: 0, ok: 0, replaced: 0, dead: 0, pending: 0, startedAt: 0, reportsSent: 0, reportsSkipped: 0 };
 
 function ensureSchema() {
   if (schemaReady) return;
@@ -78,6 +95,11 @@ function ensureSchema() {
   // Repère à zéro : le premier bilan couvre aussi ce qui a été vérifié avant
   // l'apparition de cette table.
   db.prepare('INSERT OR IGNORE INTO track_health_cycle (id, cycle_no, started_at) VALUES (1, 1, 0)').run();
+  // Colonne ajoutée après coup — cooldown mail persisté (redémarrages).
+  const cols = db.prepare('PRAGMA table_info(track_health_cycle)').all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'last_report_at')) {
+    db.exec('ALTER TABLE track_health_cycle ADD COLUMN last_report_at INTEGER NOT NULL DEFAULT 0');
+  }
   schemaReady = true;
 }
 
@@ -89,11 +111,17 @@ function markHealth(trackId: string, state: State) {
   ).run(trackId, state, Date.now());
 }
 
-function currentCycle(): { cycle_no: number; started_at: number } {
+function currentCycle(): { cycle_no: number; started_at: number; last_report_at: number } {
   ensureSchema();
-  return db.prepare('SELECT cycle_no, started_at FROM track_health_cycle WHERE id = 1').get() as {
+  const row = db.prepare('SELECT cycle_no, started_at, last_report_at FROM track_health_cycle WHERE id = 1').get() as {
     cycle_no: number;
     started_at: number;
+    last_report_at?: number;
+  };
+  return {
+    cycle_no: row.cycle_no,
+    started_at: row.started_at,
+    last_report_at: Number(row.last_report_at || 0),
   };
 }
 
@@ -278,19 +306,43 @@ export function buildCycleReport(): CycleReport | null {
 }
 
 /**
- * Bilan de fin de cycle, envoyé une seule fois : le repère de cycle repart de
- * maintenant juste après, donc le cycle suivant reste muet tant qu'il n'a rien
- * vérifié.
+ * Bilan de fin de cycle. Le repère avance toujours (évite de recompter les
+ * mêmes titres), mais le mail est plafonné : ≥ REPORT_MIN_DONE titres et au
+ * plus un envoi par REPORT_MIN_INTERVAL_MS (24 h par défaut).
  */
 async function finishCycle() {
+  if (cycleIdleClosed) return;
+  // Ferme l’idle tout de suite : même si le mail est omis / le rapport vide,
+  // on ne rappelle plus finishCycle toutes les 5 s.
+  cycleIdleClosed = true;
+
   const report = buildCycleReport();
   if (!report) return;
+
   const cycle = currentCycle();
-  db.prepare('UPDATE track_health_cycle SET cycle_no = ?, started_at = ? WHERE id = 1').run(
-    cycle.cycle_no + 1,
-    Date.now(),
-  );
+  const now = Date.now();
+  const sinceReport = now - (cycle.last_report_at || 0);
+  const allowMail =
+    Boolean(REPORT_TO) &&
+    report.done >= REPORT_MIN_DONE &&
+    sinceReport >= REPORT_MIN_INTERVAL_MS;
+
+  db.prepare(
+    'UPDATE track_health_cycle SET cycle_no = ?, started_at = ?, last_report_at = ? WHERE id = 1',
+  ).run(cycle.cycle_no + 1, now, allowMail ? now : cycle.last_report_at || 0);
+
+  if (!allowMail) {
+    stats.reportsSkipped++;
+    console.log(
+      `[health] cycle nº${cycle.cycle_no} terminé (done=${report.done}) — mail omis ` +
+        `(minDone=${REPORT_MIN_DONE}, cooldown=${Math.round(REPORT_MIN_INTERVAL_MS / 3600000)}h, ` +
+        `sinceReport=${Math.round(sinceReport / 60000)}min)`,
+    );
+    return;
+  }
+
   await sendMail({ to: REPORT_TO, subject: report.subject, html: report.html, text: report.text });
+  stats.reportsSent++;
   console.log(`[health] cycle nº${cycle.cycle_no} terminé, bilan envoyé à ${REPORT_TO}`);
 }
 
@@ -304,6 +356,8 @@ async function tick() {
     if (msSinceLastStream() >= IDLE_REQUIRED_MS) {
       const pending = nextPendingId();
       if (pending) {
+        emptySinceMs = 0;
+        cycleIdleClosed = false;
         const state = await resolvePending(pending);
         markHealth(pending, state);
         stats[state]++;
@@ -315,11 +369,21 @@ async function tick() {
     for (let i = 0; i < FREE_BATCH; i++) {
       const id = nextTrackId();
       if (!id) {
-        // Plus rien à vérifier : le cycle est bouclé. Reste éventuellement des
-        // remplaçants à chercher, qui attendent une accalmie.
-        if (!nextPendingId()) await finishCycle();
+        // Plus rien à vérifier pour l’instant. Attendre EMPTY_GRACE_MS avant de
+        // clôturer : la re-vérif à 7 j drippe 1 titre / 5–20 s et ne doit pas
+        // déclencher un « cycle terminé » à chaque trou.
+        if (!nextPendingId()) {
+          if (!emptySinceMs) emptySinceMs = Date.now();
+          if (Date.now() - emptySinceMs >= EMPTY_GRACE_MS) {
+            await finishCycle();
+          }
+        } else {
+          emptySinceMs = 0;
+        }
         return;
       }
+      emptySinceMs = 0;
+      cycleIdleClosed = false;
       const { state, network } = await probeOne(id);
       markHealth(id, state);
       stats.checked++;
@@ -356,12 +420,18 @@ export function libraryHealthStatus() {
     enabled: process.env.LIBRARY_HEALTH_SCAN !== '0',
     tickMs: TICK_MS,
     reportTo: REPORT_TO,
+    reportMinIntervalHours: Math.round(REPORT_MIN_INTERVAL_MS / 3_600_000),
+    reportMinDone: REPORT_MIN_DONE,
     recheckOkDays: Math.round(RECHECK_OK_MS / 86_400_000),
     retryDeadDays: Math.round(RETRY_DEAD_MS / 86_400_000),
     cycle: cycle.cycle_no,
     cycleStartedAt: new Date(cycle.started_at).toISOString(),
+    lastReportAt: cycle.last_report_at ? new Date(cycle.last_report_at).toISOString() : null,
+    cycleIdleClosed,
     trackTotal: total,
     sessionChecked: stats.checked,
+    reportsSent: stats.reportsSent,
+    reportsSkipped: stats.reportsSkipped,
     byState: Object.fromEntries(rows.map((r) => [r.state, r.n])),
     remaining: dueCount(),
   };
